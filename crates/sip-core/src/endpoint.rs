@@ -338,61 +338,64 @@ impl Endpoint {
             }
         };
 
-        if let Some(handler) = self.transactions().get_tsx_handler(&tsx_key) {
-            let tsx_message = TsxMessage {
-                line: message.line,
-                base_headers,
-                headers: message.headers,
-                body: message.body,
-            };
+        match self.transactions().get_tsx_handler(&tsx_key) {
+            Some(handler) => {
+                let tsx_message = TsxMessage {
+                    line: message.line,
+                    base_headers,
+                    headers: message.headers,
+                    body: message.body,
+                };
 
-            log::debug!("delegating message to transaction {}", tsx_key);
+                log::debug!("delegating message to transaction {}", tsx_key);
 
-            if handler.send(tsx_message).is_err() {
-                log::error!("transaction vanished without unregistering");
+                if handler.send(tsx_message).is_err() {
+                    log::error!("transaction vanished without unregistering");
 
-                self.transactions().remove_transaction(&tsx_key);
-            }
-        } else {
-            let line = match message.line {
-                MessageLine::Request(line) => line,
-                _ => {
-                    log::warn!("the received message is an orphaned response");
-                    return;
-                }
-            };
-
-            let incoming = IncomingRequest {
-                tp_info: message.tp_info,
-                line,
-                base_headers,
-                headers: message.headers,
-                body: message.body,
-                tsx_key,
-            };
-
-            let mut request = Some(incoming);
-
-            for layer in self.inner.layer.iter() {
-                let span = tracing::info_span!("receive", layer = %layer.name());
-
-                layer
-                    .receive(&self, MayTake::new(&mut request))
-                    .instrument(span)
-                    .await;
-
-                if request.is_none() {
-                    return;
+                    self.transactions().remove_transaction(&tsx_key);
                 }
             }
+            None => {
+                let line = match message.line {
+                    MessageLine::Request(line) => line,
+                    _ => {
+                        log::warn!("the received message is an orphaned response");
+                        return;
+                    }
+                };
 
-            log::debug!("No layer handled the request");
+                let incoming = IncomingRequest {
+                    tp_info: message.tp_info,
+                    line,
+                    base_headers,
+                    headers: message.headers,
+                    body: message.body,
+                    tsx_key,
+                };
 
-            // Safe unwrap. Loop checks every iteration if request is none
-            let request = request.unwrap();
+                let mut request = Some(incoming);
 
-            if let Err(e) = self.handle_unwanted_request(request).await {
-                log::error!("Failed to respond to unhandled incoming request, {:?}", e);
+                for layer in self.inner.layer.iter() {
+                    let span = tracing::info_span!("receive", layer = %layer.name());
+
+                    layer
+                        .receive(&self, MayTake::new(&mut request))
+                        .instrument(span)
+                        .await;
+
+                    if request.is_none() {
+                        return;
+                    }
+                }
+
+                log::debug!("No layer handled the request");
+
+                // Safe unwrap. Loop checks every iteration if request is none
+                let request = request.unwrap();
+
+                if let Err(e) = self.handle_unwanted_request(request).await {
+                    log::error!("Failed to respond to unhandled incoming request, {:?}", e);
+                }
             }
         }
     }

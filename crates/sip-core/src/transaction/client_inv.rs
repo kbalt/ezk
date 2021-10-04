@@ -78,10 +78,9 @@ impl ClientInvTsx {
 
     #[tracing::instrument(name = "tsx_inv_receive", level = "debug", skip(self))]
     pub async fn receive(&mut self) -> Result<Option<TsxResponse>> {
-        let inner = if let Some(inner) = &mut self.inner {
-            inner
-        } else {
-            return Ok(None);
+        let inner = match &mut self.inner {
+            Some(inner) => inner,
+            None => return Ok(None),
         };
 
         match self.state {
