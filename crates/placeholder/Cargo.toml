@@ -1,0 +1,12 @@
+[package]
+name = "ezk"
+version = "0.0.0"
+edition = "2018"
+authors = ["Konstantin Baltruschat <konstantin.baltruschat@gmail.com>"]
+description = "placeholder for future crate"
+repository = "https://github.com/kbalt/ezk"
+license = "MIT"
+categories = []
+keywords = []
+
+[dependencies]

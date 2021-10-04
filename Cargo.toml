@@ -1,0 +1,12 @@
+[workspace]
+
+members = [
+    "crates/sdp-types",
+    "crates/sip-core",
+    "crates/sip-types",
+    "crates/sip-ua",
+    "examples",
+
+    # Placeholder for the ezk-crate
+    "crates/placeholder",
+]

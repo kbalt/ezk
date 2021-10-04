@@ -1,0 +1,19 @@
+[package]
+name = "ezk-sdp-types"
+version = "0.1.0"
+edition = "2018"
+authors = ["Konstantin Baltruschat <konstantin.baltruschat@gmail.com>"]
+description = "SDP types providing parsing & serialization"
+repository = "https://github.com/kbalt/ezk"
+license = "MIT"
+categories = ["network-programming", "multimedia"]
+keywords = ["sdp"]
+
+[dependencies]
+internal = { package = "ezk-internal", path = "../internal" }
+
+bytesstr = "1"
+nom = { version = "7", default-features = false, features = ["alloc"] }
+bytes = "1"
+anyhow = "1"
+thiserror = "1"

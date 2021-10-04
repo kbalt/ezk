@@ -1,0 +1,23 @@
+[package]
+name = "ezk-sip-types"
+version = "0.1.0"
+edition = "2018"
+authors = ["Konstantin Baltruschat <konstantin.baltruschat@gmail.com>"]
+description = "SIP types providing parsing & serialization"
+repository = "https://github.com/kbalt/ezk"
+license = "MIT"
+categories = ["network-programming", "multimedia"]
+keywords = ["sip"]
+
+[dependencies]
+internal = { package = "ezk-internal", path = "../internal" }
+
+bytesstr = "1"
+downcast-rs = "1.2.0"
+memchr = "2"
+percent-encoding = "2"
+bytes = "1"
+anyhow = "1"
+lazy_static = "1"
+thiserror = "1"
+nom = { version = "7", default-features = false, features = ["alloc"] }
