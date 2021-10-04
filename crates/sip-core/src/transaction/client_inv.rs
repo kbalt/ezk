@@ -18,6 +18,12 @@ struct ClientInvTsxInner {
     request: OutgoingRequest,
 }
 
+/// Client INVITE transaction. Used to receives responses to a INVITE request.
+///
+/// Dropping it prematurely may result in an invalid transaction and it cannot be guaranteed
+/// that the peer has received the request, as the transaction is also responsible
+/// for retransmitting the original request until a response is received or the
+/// timeout is triggered.
 // TODO REMOVE TIMEOUT WHEN a provisional response has been received
 #[must_use]
 #[derive(Debug)]
@@ -37,6 +43,7 @@ enum State {
 }
 
 impl ClientInvTsx {
+    /// Internal: Used by [Endpoint::send_invite]
     #[tracing::instrument(
         name = "tsx_inv_send",
         level = "debug",
@@ -76,6 +83,14 @@ impl ClientInvTsx {
         })
     }
 
+    /// Receive one or more responses.
+    ///
+    /// The return type differs from [`ClientTsx::receive`](super::ClientTsx::receive)
+    /// as this transaction can return multiple final responses (2XX in this case), due
+    /// to INVITE forking. Only once `None` is returned, due to the timeout, is the
+    /// INVITE transaction terminated and will no longer be able to receive any responses.
+    ///
+    /// This behavior SHOULD only apply if an INVITE is sent outside a dialog.
     #[tracing::instrument(name = "tsx_inv_receive", level = "debug", skip(self))]
     pub async fn receive(&mut self) -> Result<Option<TsxResponse>> {
         let inner = match &mut self.inner {

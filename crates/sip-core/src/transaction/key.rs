@@ -12,6 +12,9 @@ use std::fmt;
 
 static EMPTY: BytesStr = BytesStr::empty();
 
+/// Transaction key, used to match a message to an ongoing transaction
+///
+/// Can be generated new or created from an incoming message.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct TsxKey(Repr);
 
@@ -138,6 +141,7 @@ impl TsxKey {
         Ok(TsxKey(repr))
     }
 
+    /// Create a [`TsxKey`] from the line and headers of any message
     #[inline]
     pub fn from_message_parts(
         line: &MessageLine,

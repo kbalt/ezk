@@ -164,20 +164,12 @@ impl Session {
         state.set_terminated();
 
         let request = self.dialog.create_request(Method::BYE);
+        let transaction = self.endpoint.send_request(request).await?;
+        let response = transaction.receive_final().await?;
 
-        let mut transaction = self.endpoint.send_request(request).await?;
-
-        loop {
-            let response = transaction.receive().await?;
-
-            // Discard provisional responses
-            if response.line.code.kind() == CodeKind::Provisional {
-                continue;
-            }
-
-            // Any non-1XX response is ok,
-            // ignore response as we don't really care
-            return Ok(());
+        match response.line.code.kind() {
+            CodeKind::Success => Ok(()),
+            _ => Err(Error::new(response.line.code)),
         }
     }
 

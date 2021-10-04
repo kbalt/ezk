@@ -8,12 +8,20 @@ use std::io;
 use std::time::Instant;
 use tokio::time::timeout_at;
 
+/// Server INVITE transaction. Used to respond to the incoming request.
+///
+/// Note that the correct functions must be used to send different kinds
+/// of responses, as provisional, success and error responses all need
+/// different handling.
+///
+/// Dropping the transaction prematurely can lead to weird/unexpected behavior.
 #[derive(Debug)]
 pub struct ServerInvTsx {
     registration: TsxRegistration,
 }
 
 impl ServerInvTsx {
+    /// Internal: Used by [Endpoint::create_server_inv_tsx]
     pub(crate) fn new(endpoint: Endpoint, request: &IncomingRequest) -> Self {
         assert_eq!(
             request.line.method,
@@ -27,6 +35,10 @@ impl ServerInvTsx {
         Self { registration }
     }
 
+    /// Respond with a provisional response (1XX)
+    ///
+    /// # Panics
+    /// Panics if the given response is not a provisional response
     pub async fn respond_provisional(&mut self, response: &mut OutgoingResponse) -> Result<()> {
         assert_eq!(response.msg.line.code.kind(), CodeKind::Provisional);
 
@@ -38,6 +50,15 @@ impl ServerInvTsx {
         Ok(())
     }
 
+    /// Respond with a success response (2XX)
+    ///
+    /// # Returns
+    /// The [`Accepted`] struct represents the `Accepted` state of the transactions.
+    /// TU is responsible for retransmits of the final success response since TU is the
+    /// one receiving the ACK request and not the transaction.
+    ///
+    /// # Panics
+    /// Panics if the given response is not a success response
     pub async fn respond_success(self, mut response: OutgoingResponse) -> Result<Accepted> {
         assert_eq!(response.msg.line.code.kind(), CodeKind::Success);
 
@@ -52,6 +73,10 @@ impl ServerInvTsx {
         })
     }
 
+    /// Respond with a failure response (3XX-6XX)
+    ///
+    /// # Panics
+    /// Panics if the given response is not a error response
     pub async fn respond_failure(mut self, mut response: OutgoingResponse) -> Result<()> {
         assert!(!matches!(
             response.msg.line.code.kind(),
@@ -116,6 +141,8 @@ impl ServerInvTsx {
     }
 }
 
+/// Represents the `Accepted` state of a transaction. Its used to retransmit the
+/// final success response to eventually receive the ACK request from the peer.
 #[must_use]
 pub struct Accepted {
     registration: TsxRegistration,
@@ -123,6 +150,7 @@ pub struct Accepted {
 }
 
 impl Accepted {
+    /// Retransmit the final response
     pub async fn retransmit(&mut self) -> io::Result<()> {
         self.registration
             .endpoint

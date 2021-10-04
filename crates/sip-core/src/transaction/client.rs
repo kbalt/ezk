@@ -14,6 +14,12 @@ struct ClientTsxInner {
     request: OutgoingRequest,
 }
 
+/// Client non-INVITE transaction. Used to receive responses to a sent request.
+///
+/// Dropping it prematurely may result in an invalid transaction and it cannot be guaranteed
+/// that the peer has received the request, as the transaction is also responsible
+/// for retransmitting the original request until a response is received or the
+/// timeout is triggered.
 #[must_use]
 #[derive(Debug)]
 pub struct ClientTsx {
@@ -31,6 +37,7 @@ enum State {
 }
 
 impl ClientTsx {
+    /// Internal: Used by [Endpoint::send_request]
     pub(crate) async fn send(endpoint: Endpoint, request: Request) -> Result<Self> {
         let method = request.line.method.clone();
 
@@ -66,6 +73,13 @@ impl ClientTsx {
         })
     }
 
+    /// Receive one or more responses
+    ///
+    /// Must be called until a final response or error is returned.
+    ///
+    /// # Panics
+    /// After receiving the final response this function will panic if called again.
+    /// This is due to it needing to move out some internal state to a new task.
     pub async fn receive(&mut self) -> Result<TsxResponse> {
         let inner = if let Some(inner) = &mut self.inner {
             inner
@@ -106,6 +120,8 @@ impl ClientTsx {
         }
     }
 
+    /// Calls [`ClientTsx::receive`] and discards all provisional responses
+    /// until it receives the final one, returning it.
     pub async fn receive_final(mut self) -> Result<TsxResponse> {
         loop {
             let response = self.receive().await?;

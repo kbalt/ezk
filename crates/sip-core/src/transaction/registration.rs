@@ -5,7 +5,9 @@ use crate::Endpoint;
 use sip_types::msg::MessageLine;
 use tokio::sync::mpsc;
 
-/// transaction registration inside an endpoint
+/// Internal: Used by every transaction impl to
+/// register itself inside an endpoint and receive
+/// transactional messages from it
 #[derive(Debug)]
 pub struct TsxRegistration {
     pub endpoint: Endpoint,
@@ -43,16 +45,18 @@ impl TsxRegistration {
                     line: MessageLine::Request(_),
                     ..
                 } => {
-                    // TODO warn
+                    // TODO warn?
                     continue;
                 }
                 TsxMessage {
+                    tp_info,
                     line: MessageLine::Response(line),
                     base_headers,
                     headers,
                     body,
                 } => {
                     return TsxResponse {
+                        tp_info,
                         line,
                         base_headers,
                         headers,

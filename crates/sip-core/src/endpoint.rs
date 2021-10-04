@@ -341,6 +341,7 @@ impl Endpoint {
         match self.transactions().get_tsx_handler(&tsx_key) {
             Some(handler) => {
                 let tsx_message = TsxMessage {
+                    tp_info: message.tp_info,
                     line: message.line,
                     base_headers,
                     headers: message.headers,

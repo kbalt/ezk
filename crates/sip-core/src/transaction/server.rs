@@ -6,12 +6,19 @@ use sip_types::{CodeKind, Method};
 use std::time::Instant;
 use tokio::time::timeout_at;
 
+/// Server transaction. Used to respond to the incoming request.
+///
+/// Note that the correct functions must be used to send different kinds
+/// of responses, as provisional and final responses need different handling.
+///
+/// Dropping the transaction prematurely can lead to weird/unexpected behavior.
 #[derive(Debug)]
 pub struct ServerTsx {
     registration: TsxRegistration,
 }
 
 impl ServerTsx {
+    /// Internal: Used by [Endpoint::create_server_tsx]
     pub(crate) fn new(endpoint: Endpoint, request: &IncomingRequest) -> Self {
         assert!(
             !matches!(request.line.method, Method::INVITE | Method::ACK),
@@ -24,6 +31,10 @@ impl ServerTsx {
         Self { registration }
     }
 
+    /// Respond with a provisional response (1XX)
+    ///
+    /// # Panics
+    /// Panics if the given response is not a provisional response
     pub async fn respond_provisional(&mut self, response: &mut OutgoingResponse) -> Result<()> {
         assert_eq!(response.msg.line.code.kind(), CodeKind::Provisional);
 
@@ -35,6 +46,10 @@ impl ServerTsx {
         Ok(())
     }
 
+    /// Respond with a final response (2XX-6XX)
+    ///
+    /// # Panics
+    /// Panics if the given response is not a final response
     pub async fn respond(mut self, mut response: OutgoingResponse) -> Result<()> {
         assert_ne!(response.msg.line.code.kind(), CodeKind::Provisional);
 

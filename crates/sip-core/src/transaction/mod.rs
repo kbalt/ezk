@@ -1,3 +1,5 @@
+use crate::transport::MessageTpInfo;
+use crate::BaseHeaders;
 use bytes::Bytes;
 use bytesstr::BytesStr;
 use parking_lot::RwLock;
@@ -30,8 +32,6 @@ pub use key::TsxKey;
 pub use server::ServerTsx;
 pub use server_inv::{Accepted, ServerInvTsx};
 
-use crate::BaseHeaders;
-
 #[derive(Default)]
 pub(crate) struct Transactions {
     map: RwLock<HashMap<TsxKey, UnboundedSender<TsxMessage>>>,
@@ -51,9 +51,11 @@ impl Transactions {
     }
 }
 
-/// Message response received inside a transaction
+/// Response received inside a transaction
 #[derive(Debug)]
 pub struct TsxResponse {
+    pub tp_info: MessageTpInfo,
+
     pub line: StatusLine,
     pub base_headers: BaseHeaders,
     pub headers: Headers,
@@ -63,6 +65,8 @@ pub struct TsxResponse {
 /// Message received inside a transaction context
 #[derive(Debug)]
 pub struct TsxMessage {
+    pub tp_info: MessageTpInfo,
+
     pub line: MessageLine,
     pub base_headers: BaseHeaders,
     pub headers: Headers,

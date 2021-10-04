@@ -1,3 +1,10 @@
+//! Core part of the EZK SIP Stack
+//!
+//! Implementing transport and transaction abstractions it can be used to
+//! build any kind of stateful SIP Application
+//!
+//! [__Examples__](https://github.com/kbalt/ezk/tree/main/examples) can be found here
+
 use bytes::Bytes;
 use downcast_rs::{impl_downcast, Downcast};
 use sip_types::header::typed::{CSeq, CallID, From, To, Via};
@@ -23,6 +30,7 @@ pub use endpoint::LayerKey;
 pub use error::{Error, Result, WithStatus};
 pub use may_take::MayTake;
 
+/// Basic Response
 #[derive(Debug)]
 pub struct Response {
     pub line: StatusLine,
