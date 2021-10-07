@@ -14,7 +14,7 @@ use tokio::time::sleep;
 /// Custom layer which we use to accept incoming invites
 struct InviteAcceptLayer {
     dialog_layer: LayerKey<DialogLayer>,
-    acceptor_layer: LayerKey<InviteLayer>,
+    invite_layer: LayerKey<InviteLayer>,
 }
 
 #[async_trait::async_trait]
@@ -36,7 +36,7 @@ impl Layer for InviteAcceptLayer {
         let acceptor = Acceptor::new(
             endpoint.clone(),
             self.dialog_layer,
-            self.acceptor_layer,
+            self.invite_layer,
             invite,
             contact,
         )
@@ -76,11 +76,11 @@ async fn main() -> Result<()> {
     let mut builder = Endpoint::builder();
 
     let dialog_layer = builder.add_layer(DialogLayer::default());
-    let acceptor_layer = builder.add_layer(InviteLayer::default());
+    let invite_layer = builder.add_layer(InviteLayer::default());
 
     builder.add_layer(InviteAcceptLayer {
         dialog_layer,
-        acceptor_layer,
+        invite_layer,
     });
 
     Udp::spawn(&mut builder, "127.0.0.1:5060").await?;

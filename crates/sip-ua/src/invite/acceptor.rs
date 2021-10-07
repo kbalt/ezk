@@ -285,4 +285,12 @@ impl Acceptor {
             Err(Error::new(Code::REQUEST_TERMINATED))
         }
     }
+
+    pub async fn respond_failure(self, response: OutgoingResponse) -> Result<()> {
+        if let Some((_, transaction, _)) = self.inner.state.lock().await.set_cancelled() {
+            transaction.respond_failure(response).await
+        } else {
+            Err(Error::new(Code::REQUEST_TERMINATED))
+        }
+    }
 }
