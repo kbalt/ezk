@@ -501,13 +501,10 @@ pub(crate) struct TransportsBuilder {
 }
 
 impl TransportsBuilder {
-    pub fn insert_unmanaged<T>(&mut self, transport: T)
-    where
-        T: Transport,
-    {
+    pub fn insert_unmanaged(&mut self, transport: TpHandle) {
         assert_eq!(transport.direction(), Direction::None);
 
-        self.unmanaged.push(TpHandle::new(transport));
+        self.unmanaged.push(transport);
     }
 
     pub fn insert_factory(&mut self, factory: Arc<dyn Factory>) {

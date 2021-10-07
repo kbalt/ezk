@@ -1,11 +1,20 @@
 [workspace]
 
 members = [
-    "crates/sdp-types",
+    # SIP
     "crates/sip-core",
     "crates/sip-types",
     "crates/sip-ua",
     "crates/sip-auth",
+
+    # SDP
+    "crates/sdp-types",
+
+    # STUN
+    "crates/stun-types",
+    "crates/stun",
+
+    # Other
     "examples",
 
     # Placeholder for the ezk-crate

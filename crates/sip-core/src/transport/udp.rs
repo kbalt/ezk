@@ -45,9 +45,13 @@ impl Udp {
 
         let inner = Arc::new(Inner { bound, socket });
 
-        tokio::spawn(receive_task(builder.subscribe(), inner.clone()));
+        let handle = TpHandle::new(Udp {
+            inner: inner.clone(),
+        });
 
-        builder.add_unmanaged_transport(Udp { inner });
+        tokio::spawn(receive_task(builder.subscribe(), inner, handle.clone()));
+
+        builder.add_unmanaged_transport(handle);
 
         Ok(())
     }
@@ -95,7 +99,11 @@ impl Transport for Udp {
     }
 }
 
-async fn receive_task(mut endpoint: broadcast::Receiver<Endpoint>, inner: Arc<Inner>) {
+async fn receive_task(
+    mut endpoint: broadcast::Receiver<Endpoint>,
+    inner: Arc<Inner>,
+    handle: TpHandle,
+) {
     let endpoint = match endpoint.recv().await.ok() {
         Some(endpoint) => endpoint,
         None => return,
@@ -106,7 +114,7 @@ async fn receive_task(mut endpoint: broadcast::Receiver<Endpoint>, inner: Arc<In
     loop {
         let result = inner.socket.recv_from(&mut buffer).await;
 
-        if let Err(e) = handle_msg(&endpoint, &inner, result, &buffer).await {
+        if let Err(e) = handle_msg(&endpoint, &handle, result, &buffer).await {
             log::error!("UDP recv error {:?}", e);
         }
     }
@@ -114,7 +122,7 @@ async fn receive_task(mut endpoint: broadcast::Receiver<Endpoint>, inner: Arc<In
 
 async fn handle_msg(
     endpoint: &Endpoint,
-    inner: &Arc<Inner>,
+    handle: &TpHandle,
     result: io::Result<(usize, SocketAddr)>,
     bytes: &[u8],
 ) -> Result<()> {
@@ -188,17 +196,7 @@ async fn handle_msg(
 
     let line = message_line.status(Code::BAD_REQUEST)?;
 
-    let msg = ReceivedMessage::new(
-        remote,
-        buf,
-        // TODO avoid creating a new handle on each message
-        TpHandle::new(Udp {
-            inner: inner.clone(),
-        }),
-        line,
-        headers,
-        body,
-    );
+    let msg = ReceivedMessage::new(remote, buf, handle.clone(), line, headers, body);
 
     endpoint.receive(msg);
 

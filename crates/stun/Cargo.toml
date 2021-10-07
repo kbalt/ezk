@@ -1,0 +1,13 @@
+[package]
+name = "ezk-stun"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+tokio = { version = "1", features = ["net", "macros", "rt"] }
+bytes = "1"
+bytesstr = "1"
+hmac = "0.11"
+stun-types = { path = "../stun-types", package = "ezk-stun-types" }
+parking_lot = "0.11"
+async-trait = "0.1"

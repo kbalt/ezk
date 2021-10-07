@@ -517,10 +517,7 @@ impl EndpointBuilder {
     }
 
     /// Add an unmanaged transport to the endpoint which will never vanish or break (e.g. UDP)
-    pub fn add_unmanaged_transport<T>(&mut self, transport: T) -> &mut Self
-    where
-        T: Transport,
-    {
+    pub fn add_unmanaged_transport(&mut self, transport: TpHandle) -> &mut Self {
         self.transports.insert_unmanaged(transport);
         self
     }

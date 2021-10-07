@@ -1,0 +1,18 @@
+[package]
+name = "ezk-stun-types"
+version = "0.1.0"
+edition = "2018"
+
+
+[dependencies]
+byteorder = "1.4"
+rand = "0.8"
+bitfield = "0.13"
+bytes = "1"
+bytesstr = "1"
+hmac = "0.11"
+sha-1 = "0.9"
+sha2 = "0.9"
+crc = "2"
+thiserror = "1"
+md5 = "0.7"
