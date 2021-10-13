@@ -1,8 +1,8 @@
 use crate::{slash_num, TaggedAddress};
 use bytes::Bytes;
+use internal::IResult;
 use nom::combinator::opt;
 use nom::sequence::pair;
-use nom::IResult;
 use std::fmt;
 
 /// Connection field
@@ -21,33 +21,31 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn parse(src: &Bytes) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
-        move |i| {
-            let (i, address) = TaggedAddress::parse(src)(i)?;
+    pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
+        let (i, address) = TaggedAddress::parse(src)(i)?;
 
-            match &address {
-                TaggedAddress::IP4(_) | TaggedAddress::IP4FQDN(_) => {
-                    let (i, ttl) = opt(pair(slash_num, opt(slash_num)))(i)?;
+        match &address {
+            TaggedAddress::IP4(_) | TaggedAddress::IP4FQDN(_) => {
+                let (i, ttl) = opt(pair(slash_num, opt(slash_num)))(i)?;
 
-                    let (ttl, num) = match ttl {
-                        None => (None, None),
-                        Some((ttl, num)) => (Some(ttl), num),
-                    };
+                let (ttl, num) = match ttl {
+                    None => (None, None),
+                    Some((ttl, num)) => (Some(ttl), num),
+                };
 
-                    Ok((i, Connection { address, ttl, num }))
-                }
-                TaggedAddress::IP6(_) | TaggedAddress::IP6FQDN(_) => {
-                    let (i, num) = opt(slash_num)(i)?;
+                Ok((i, Connection { address, ttl, num }))
+            }
+            TaggedAddress::IP6(_) | TaggedAddress::IP6FQDN(_) => {
+                let (i, num) = opt(slash_num)(i)?;
 
-                    Ok((
-                        i,
-                        Connection {
-                            address,
-                            ttl: None,
-                            num,
-                        },
-                    ))
-                }
+                Ok((
+                    i,
+                    Connection {
+                        address,
+                        ttl: None,
+                        num,
+                    },
+                ))
             }
         }
     }
@@ -88,7 +86,7 @@ mod test {
     fn connection() {
         let input = BytesStr::from_static("IN IP4 192.168.123.222");
 
-        let (rem, connection) = Connection::parse(input.as_ref())(&input).unwrap();
+        let (rem, connection) = Connection::parse(input.as_ref(), &input).unwrap();
 
         assert!(rem.is_empty());
 
@@ -101,7 +99,7 @@ mod test {
     fn connection_ttl() {
         let input = BytesStr::from_static("IN IP4 192.168.123.222/127");
 
-        let (rem, connection) = Connection::parse(input.as_ref())(&input).unwrap();
+        let (rem, connection) = Connection::parse(input.as_ref(), &input).unwrap();
 
         assert!(rem.is_empty());
 
@@ -116,7 +114,7 @@ mod test {
     fn connection_ttl_num() {
         let input = BytesStr::from_static("IN IP4 192.168.123.222/127/3");
 
-        let (rem, connection) = Connection::parse(input.as_ref())(&input).unwrap();
+        let (rem, connection) = Connection::parse(input.as_ref(), &input).unwrap();
 
         assert!(rem.is_empty());
 

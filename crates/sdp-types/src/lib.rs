@@ -1,11 +1,11 @@
 use bytes::Bytes;
 use bytesstr::BytesStr;
+use internal::IResult;
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_while};
 use nom::character::complete::{char, digit1};
 use nom::combinator::{map, map_res};
 use nom::sequence::preceded;
-use nom::IResult;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;

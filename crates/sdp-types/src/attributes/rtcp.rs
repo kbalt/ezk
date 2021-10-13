@@ -2,12 +2,11 @@
 
 use crate::TaggedAddress;
 use bytes::Bytes;
-use internal::ws;
+use internal::{ws, IResult};
 use nom::bytes::complete::tag;
 use nom::character::complete::digit1;
 use nom::combinator::{map, map_res, opt};
 use nom::sequence::{preceded, tuple};
-use nom::IResult;
 use std::fmt;
 use std::str::FromStr;
 
@@ -27,30 +26,28 @@ pub struct RtcpAttr {
 }
 
 impl RtcpAttr {
-    pub fn parse(src: &Bytes) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
-        move |i| {
-            preceded(
-                tag("rtcp:"),
-                map(
-                    tuple((
-                        // port
-                        map_res(digit1, FromStr::from_str),
-                        // optional tagged address
-                        opt(ws((TaggedAddress::parse(src),))),
-                    )),
-                    |(port, address)| RtcpAttr {
-                        port,
-                        address: address.map(|t| t.0),
-                    },
-                ),
-            )(i)
-        }
+    pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
+        preceded(
+            tag("rtcp:"),
+            map(
+                tuple((
+                    // port
+                    map_res(digit1, FromStr::from_str),
+                    // optional tagged address
+                    opt(ws((TaggedAddress::parse(src),))),
+                )),
+                |(port, address)| RtcpAttr {
+                    port,
+                    address: address.map(|t| t.0),
+                },
+            ),
+        )(i)
     }
 }
 
 impl fmt::Display for RtcpAttr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "rtcp:{}", self.port)?;
+        write!(f, "a=rtcp:{}", self.port)?;
 
         if let Some(address) = &self.address {
             write!(f, " {}", address)?;
@@ -70,7 +67,7 @@ mod test {
     fn rtcp() {
         let input = BytesStr::from_static("rtcp:4444");
 
-        let (rem, rtcp) = RtcpAttr::parse(input.as_ref())(&input).unwrap();
+        let (rem, rtcp) = RtcpAttr::parse(input.as_ref(), &input).unwrap();
 
         assert!(rem.is_empty());
 
@@ -82,7 +79,7 @@ mod test {
     fn rtcp_address() {
         let input = BytesStr::from_static("rtcp:4444 IN IP4 192.168.123.222");
 
-        let (rem, rtcp) = RtcpAttr::parse(input.as_ref())(&input).unwrap();
+        let (rem, rtcp) = RtcpAttr::parse(input.as_ref(), &input).unwrap();
 
         assert!(rem.is_empty());
 
@@ -99,7 +96,7 @@ mod test {
             address: None,
         };
 
-        assert_eq!(rtcp.to_string(), "rtcp:4444");
+        assert_eq!(rtcp.to_string(), "a=rtcp:4444");
     }
 
     #[test]
@@ -109,6 +106,6 @@ mod test {
             address: Some(TaggedAddress::IP4(Ipv4Addr::new(192, 168, 123, 222))),
         };
 
-        assert_eq!(rtcp.to_string(), "rtcp:4444 IN IP4 192.168.123.222");
+        assert_eq!(rtcp.to_string(), "a=rtcp:4444 IN IP4 192.168.123.222");
     }
 }

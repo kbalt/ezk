@@ -12,11 +12,12 @@ use crate::origin::Origin;
 use crate::time::Time;
 use anyhow::Context;
 use bytesstr::BytesStr;
-use std::fmt;
+use internal::{Finish, ParseError};
+use std::fmt::{self, Debug, Display};
 
 pub trait ParseBuilder: Default {
     type Message;
-    type Error;
+    type Error: Debug + Display;
 
     fn finish(self) -> Result<Self::Message, Self::Error>;
 
@@ -274,7 +275,7 @@ pub struct MediaScope {
 
 impl fmt::Display for MediaScope {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}{}", self.desc, self.direction)?;
+        write!(f, "{}\r\n", self.desc)?;
 
         if let Some(conn) = &self.connection {
             write!(f, "{}\r\n", conn)?;
@@ -283,6 +284,8 @@ impl fmt::Display for MediaScope {
         for bw in &self.bandwidth {
             write!(f, "{}\r\n", bw)?;
         }
+
+        write!(f, "{}\r\n", self.direction)?;
 
         if let Some(rtcp) = &self.rtcp_attr {
             write!(f, "{}\r\n", rtcp)?;
@@ -353,23 +356,17 @@ pub struct Message {
     pub media_scopes: Vec<MediaScope>,
 }
 
-#[derive(Debug)]
-pub enum ParseError<E> {
-    Nom(nom::error::ErrorKind),
+#[derive(Debug, thiserror::Error)]
+pub enum Error<E: Debug + Display> {
+    #[error(transparent)]
+    ParseError(#[from] ParseError),
+    #[error("message is incomplete")]
     Incomplete,
+    #[error("{0}")]
     Builder(E),
 }
 
-impl<E> From<nom::Err<nom::error::Error<&str>>> for ParseError<E> {
-    fn from(err: nom::Err<nom::error::Error<&str>>) -> Self {
-        match err {
-            nom::Err::Incomplete(_) => Self::Incomplete,
-            nom::Err::Error(e) | nom::Err::Failure(e) => Self::Nom(e.code),
-        }
-    }
-}
-
-pub fn parse<B: ParseBuilder>(src: &BytesStr) -> Result<B::Message, ParseError<B::Error>> {
+pub fn parse<B: ParseBuilder>(src: &BytesStr) -> Result<B::Message, Error<B::Error>> {
     let lines = src
         .split(|c| matches!(c, '\n' | '\r'))
         .filter(|line| !line.is_empty());
@@ -377,7 +374,7 @@ pub fn parse<B: ParseBuilder>(src: &BytesStr) -> Result<B::Message, ParseError<B
     let mut builder = B::default();
 
     for complete_line in lines {
-        let line = complete_line.get(2..).ok_or(ParseError::Incomplete)?;
+        let line = complete_line.get(2..).ok_or(Error::Incomplete)?;
 
         match complete_line.as_bytes() {
             [b'v', b'=', b'0'] => {
@@ -385,72 +382,67 @@ pub fn parse<B: ParseBuilder>(src: &BytesStr) -> Result<B::Message, ParseError<B
             }
             [b's', b'=', ..] => {
                 let name = BytesStr::from_parse(src.as_ref(), line);
-                builder.set_name(name).map_err(ParseError::Builder)?;
+                builder.set_name(name).map_err(Error::Builder)?;
             }
             [b'o', b'=', ..] => {
-                let (_, origin) = Origin::parse(src.as_ref())(line)?;
-                builder.set_origin(origin).map_err(ParseError::Builder)?;
+                let (_, origin) = Origin::parse(src.as_ref(), line).finish()?;
+                builder.set_origin(origin).map_err(Error::Builder)?;
             }
             [b't', b'=', ..] => {
-                let (_, time) = Time::parse(line)?;
-                builder.set_time(time).map_err(ParseError::Builder)?;
+                let (_, time) = Time::parse(line).finish()?;
+                builder.set_time(time).map_err(Error::Builder)?;
             }
             [b'c', b'=', ..] => {
-                let (_, connection) = Connection::parse(src.as_ref())(line)?;
-                builder
-                    .set_connection(connection)
-                    .map_err(ParseError::Builder)?;
+                let (_, connection) = Connection::parse(src.as_ref(), line).finish()?;
+                builder.set_connection(connection).map_err(Error::Builder)?;
             }
             [b'b', b'=', ..] => {
-                let (_, bandwidth) = Bandwidth::parse(src.as_ref())(line)?;
-                builder
-                    .add_bandwidth(bandwidth)
-                    .map_err(ParseError::Builder)?;
+                let (_, bandwidth) = Bandwidth::parse(src.as_ref(), line).finish()?;
+                builder.add_bandwidth(bandwidth).map_err(Error::Builder)?;
             }
             [b'm', b'=', ..] => {
-                let (_, desc) = MediaDescription::parse(src.as_ref())(line)?;
-                builder.begin_media(desc).map_err(ParseError::Builder)?;
+                let (_, desc) = MediaDescription::parse(src.as_ref(), line).finish()?;
+                builder.begin_media(desc).map_err(Error::Builder)?;
             }
             [b'a', b'=', ..] => {
                 if let Some((attr, attr_v)) = line.split_once(':') {
                     match attr {
                         "rtpmap" => {
-                            let (_, rtpmap) = RtpMap::parse(src.as_ref())(line)?;
-                            builder.add_rtpmap(rtpmap).map_err(ParseError::Builder)?;
+                            let (_, rtpmap) = RtpMap::parse(src.as_ref(), line).finish()?;
+                            builder.add_rtpmap(rtpmap).map_err(Error::Builder)?;
                         }
                         "fmtp" => {
-                            let (_, fmtp) = Fmtp::parse(src.as_ref())(line)?;
-                            builder.add_fmtp(fmtp).map_err(ParseError::Builder)?;
+                            let (_, fmtp) = Fmtp::parse(src.as_ref(), line).finish()?;
+                            builder.add_fmtp(fmtp).map_err(Error::Builder)?;
                         }
                         "rtcp" => {
-                            let (_, rtcp_attr) = RtcpAttr::parse(src.as_ref())(line)?;
-                            builder.add_rtcp(rtcp_attr).map_err(ParseError::Builder)?;
+                            let (_, rtcp_attr) = RtcpAttr::parse(src.as_ref(), line).finish()?;
+                            builder.add_rtcp(rtcp_attr).map_err(Error::Builder)?;
                         }
                         "ice-lite" => {
-                            builder.set_ice_lite(true).map_err(ParseError::Builder)?;
+                            builder.set_ice_lite(true).map_err(Error::Builder)?;
                         }
                         "ice-options" => {
-                            let (_, options) = ice::Options::parse(src.as_ref())(attr_v)?;
-                            builder
-                                .set_ice_options(options)
-                                .map_err(ParseError::Builder)?;
+                            let (_, options) =
+                                ice::Options::parse(src.as_ref(), attr_v).finish()?;
+                            builder.set_ice_options(options).map_err(Error::Builder)?;
                         }
                         "ice-ufrag" => {
                             let (_, ice_ufrag) =
-                                ice::UsernameFragment::parse(src.as_ref())(attr_v)?;
-                            builder
-                                .set_ice_ufrag(ice_ufrag)
-                                .map_err(ParseError::Builder)?;
+                                ice::UsernameFragment::parse(src.as_ref(), attr_v).finish()?;
+                            builder.set_ice_ufrag(ice_ufrag).map_err(Error::Builder)?;
                         }
                         "ice-pwd" => {
-                            let (_, ice_pwd) = ice::Password::parse(src.as_ref())(attr_v)?;
-                            builder.set_ice_pwd(ice_pwd).map_err(ParseError::Builder)?;
+                            let (_, ice_pwd) =
+                                ice::Password::parse(src.as_ref(), attr_v).finish()?;
+                            builder.set_ice_pwd(ice_pwd).map_err(Error::Builder)?;
                         }
                         "candidate" => {
-                            let (_, ice_candidate) = Candidate::parse(src.as_ref())(attr_v)?;
+                            let (_, ice_candidate) =
+                                Candidate::parse(src.as_ref(), attr_v).finish()?;
                             builder
                                 .add_ice_candidate(ice_candidate)
-                                .map_err(ParseError::Builder)?;
+                                .map_err(Error::Builder)?;
                         }
                         _ => {
                             let attr = UnknownAttribute {
@@ -458,9 +450,7 @@ pub fn parse<B: ParseBuilder>(src: &BytesStr) -> Result<B::Message, ParseError<B
                                 value: Some(src.slice_ref(attr_v)),
                             };
 
-                            builder
-                                .add_unknown_attr(attr)
-                                .map_err(ParseError::Builder)?;
+                            builder.add_unknown_attr(attr).map_err(Error::Builder)?;
                         }
                     }
                 } else {
@@ -468,35 +458,33 @@ pub fn parse<B: ParseBuilder>(src: &BytesStr) -> Result<B::Message, ParseError<B
                         "sendrecv" => {
                             builder
                                 .set_direction(Direction::SendRecv)
-                                .map_err(ParseError::Builder)?;
+                                .map_err(Error::Builder)?;
                         }
                         "recvonly" => {
                             builder
                                 .set_direction(Direction::RecvOnly)
-                                .map_err(ParseError::Builder)?;
+                                .map_err(Error::Builder)?;
                         }
                         "sendonly" => {
                             builder
                                 .set_direction(Direction::SendOnly)
-                                .map_err(ParseError::Builder)?;
+                                .map_err(Error::Builder)?;
                         }
                         "inactive" => {
                             builder
                                 .set_direction(Direction::Inactive)
-                                .map_err(ParseError::Builder)?;
+                                .map_err(Error::Builder)?;
                         }
                         "end-of-candidates" => builder
                             .set_ice_end_of_candidates(true)
-                            .map_err(ParseError::Builder)?,
+                            .map_err(Error::Builder)?,
                         _ => {
                             let attr = UnknownAttribute {
                                 name: src.slice_ref(line),
                                 value: None,
                             };
 
-                            builder
-                                .add_unknown_attr(attr)
-                                .map_err(ParseError::Builder)?;
+                            builder.add_unknown_attr(attr).map_err(Error::Builder)?;
                         }
                     }
                 }
@@ -505,7 +493,7 @@ pub fn parse<B: ParseBuilder>(src: &BytesStr) -> Result<B::Message, ParseError<B
         }
     }
 
-    builder.finish().map_err(ParseError::Builder)
+    builder.finish().map_err(Error::Builder)
 }
 
 impl fmt::Display for Message {
@@ -514,12 +502,10 @@ impl fmt::Display for Message {
             f,
             "\
 v=0\r\n\
+{}\r\n\
 s={}\r\n\
-{}\r\n\
-{}\r\n\
-{}\r\n\
 ",
-            self.name, self.origin, self.time, self.direction
+            self.origin, self.name
         )?;
 
         if let Some(conn) = &self.connection {
@@ -530,7 +516,7 @@ s={}\r\n\
             write!(f, "{}\r\n", bw)?;
         }
 
-        self.ice_options.fmt(f)?;
+        write!(f, "{}\r\n{}", self.time, self.ice_options)?;
 
         if self.ice_lite {
             f.write_str("a=ice-lite\r\n")?;
@@ -549,7 +535,7 @@ s={}\r\n\
         }
 
         for media_scope in &self.media_scopes {
-            media_scope.fmt(f)?;
+            write!(f, "{}", media_scope)?;
         }
 
         Ok(())

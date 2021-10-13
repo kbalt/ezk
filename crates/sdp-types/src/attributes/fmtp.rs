@@ -2,12 +2,11 @@
 
 use bytes::Bytes;
 use bytesstr::BytesStr;
-use internal::ws;
+use internal::{ws, IResult};
 use nom::bytes::complete::tag;
 use nom::character::complete::digit1;
 use nom::combinator::{map, map_res};
 use nom::sequence::preceded;
-use nom::IResult;
 use std::fmt;
 use std::str::FromStr;
 
@@ -26,29 +25,27 @@ pub struct Fmtp {
 }
 
 impl Fmtp {
-    pub fn parse(src: &Bytes) -> impl FnMut(&str) -> IResult<&str, Self> + '_ {
-        move |i| {
-            map(
-                preceded(
-                    tag("fmtp:"),
-                    ws((
-                        // format & remaining into params
-                        map_res(digit1, FromStr::from_str),
-                        |remaining| Ok(("", remaining)),
-                    )),
-                ),
-                |(format, params)| Fmtp {
-                    format,
-                    params: BytesStr::from_parse(src, params),
-                },
-            )(i)
-        }
+    pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
+        map(
+            preceded(
+                tag("fmtp:"),
+                ws((
+                    // format & remaining into params
+                    map_res(digit1, FromStr::from_str),
+                    |remaining| Ok(("", remaining)),
+                )),
+            ),
+            |(format, params)| Fmtp {
+                format,
+                params: BytesStr::from_parse(src, params),
+            },
+        )(i)
     }
 }
 
 impl fmt::Display for Fmtp {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "fmtp:{} {}", self.format, self.params)
+        write!(f, "a=fmtp:{} {}", self.format, self.params)
     }
 }
 
@@ -60,7 +57,7 @@ mod test {
     fn fmtp() {
         let input = BytesStr::from_static("fmtp:111 some=param");
 
-        let (rem, fmtp) = Fmtp::parse(input.as_ref())(&input).unwrap();
+        let (rem, fmtp) = Fmtp::parse(input.as_ref(), &input).unwrap();
 
         assert!(rem.is_empty());
 
@@ -75,6 +72,6 @@ mod test {
             params: "some=param".into(),
         };
 
-        assert_eq!(fmtp.to_string(), "fmtp:111 some=param");
+        assert_eq!(fmtp.to_string(), "a=fmtp:111 some=param");
     }
 }

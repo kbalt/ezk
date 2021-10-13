@@ -2,12 +2,11 @@
 
 use bytes::Bytes;
 use bytesstr::BytesStr;
-use internal::ws;
+use internal::{ws, IResult};
 use nom::bytes::complete::{tag, take_while};
 use nom::character::complete::digit1;
 use nom::combinator::{map, map_res, opt};
 use nom::sequence::{preceded, terminated, tuple};
-use nom::IResult;
 use std::fmt;
 use std::str::FromStr;
 
@@ -32,37 +31,35 @@ pub struct RtpMap {
 }
 
 impl RtpMap {
-    pub fn parse(src: &Bytes) -> impl FnMut(&str) -> IResult<&str, Self> + '_ {
-        move |i| {
-            preceded(
-                tag("rtpmap:"),
-                map(
-                    tuple((
-                        // payload num
-                        map_res(digit1, FromStr::from_str),
-                        // encoding
-                        ws((terminated(
-                            map(take_while(|c| c != '/'), |slice| {
-                                BytesStr::from_parse(src, slice)
-                            }),
-                            tag("/"),
-                        ),)),
-                        // clock rate
-                        map_res(digit1, FromStr::from_str),
-                        // optional params
-                        opt(preceded(tag("/"), |rem| {
-                            Ok(("", BytesStr::from_parse(src, rem)))
-                        })),
-                    )),
-                    |(payload, (encoding,), clock_rate, params)| RtpMap {
-                        payload,
-                        encoding,
-                        clock_rate,
-                        params,
-                    },
-                ),
-            )(i)
-        }
+    pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
+        preceded(
+            tag("rtpmap:"),
+            map(
+                tuple((
+                    // payload num
+                    map_res(digit1, FromStr::from_str),
+                    // encoding
+                    ws((terminated(
+                        map(take_while(|c| c != '/'), |slice| {
+                            BytesStr::from_parse(src, slice)
+                        }),
+                        tag("/"),
+                    ),)),
+                    // clock rate
+                    map_res(digit1, FromStr::from_str),
+                    // optional params
+                    opt(preceded(tag("/"), |rem| {
+                        Ok(("", BytesStr::from_parse(src, rem)))
+                    })),
+                )),
+                |(payload, (encoding,), clock_rate, params)| RtpMap {
+                    payload,
+                    encoding,
+                    clock_rate,
+                    params,
+                },
+            ),
+        )(i)
     }
 }
 
@@ -70,7 +67,7 @@ impl fmt::Display for RtpMap {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "rtpmap:{} {}/{}",
+            "a=rtpmap:{} {}/{}",
             self.payload, self.encoding, self.clock_rate
         )?;
 
@@ -90,7 +87,7 @@ mod test {
     fn rtpmap() {
         let input = BytesStr::from_static("rtpmap:0 PCMU/8000");
 
-        let (rem, rtpmap) = RtpMap::parse(input.as_ref())(&input).unwrap();
+        let (rem, rtpmap) = RtpMap::parse(input.as_ref(), &input).unwrap();
 
         assert!(rem.is_empty());
 
@@ -104,7 +101,7 @@ mod test {
     fn rtpmap_params() {
         let input = BytesStr::from_static("rtpmap:0 PCMU/8000/1");
 
-        let (rem, rtpmap) = RtpMap::parse(input.as_ref())(&input).unwrap();
+        let (rem, rtpmap) = RtpMap::parse(input.as_ref(), &input).unwrap();
 
         assert!(rem.is_empty());
 
@@ -123,7 +120,7 @@ mod test {
             params: None,
         };
 
-        assert_eq!(rtpmap.to_string(), "rtpmap:0 PCMU/8000");
+        assert_eq!(rtpmap.to_string(), "a=rtpmap:0 PCMU/8000");
     }
 
     #[test]
@@ -135,6 +132,6 @@ mod test {
             params: Some("1".into()),
         };
 
-        assert_eq!(rtpmap.to_string(), "rtpmap:0 PCMU/8000/1");
+        assert_eq!(rtpmap.to_string(), "a=rtpmap:0 PCMU/8000/1");
     }
 }

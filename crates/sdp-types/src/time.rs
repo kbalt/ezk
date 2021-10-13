@@ -1,8 +1,8 @@
 use internal::ws;
+use internal::IResult;
 use nom::character::complete::digit1;
 use nom::combinator::map;
 use nom::combinator::map_res;
-use nom::IResult;
 use std::fmt;
 use std::str::FromStr;
 

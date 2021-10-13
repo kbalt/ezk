@@ -1,17 +1,16 @@
 use crate::{not_whitespace, slash_num};
 use bytes::Bytes;
 use bytesstr::BytesStr;
-use internal::ws;
+use internal::{ws, IResult};
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_while1};
 use nom::character::complete::digit1;
 use nom::combinator::{map, map_res, opt};
 use nom::multi::many0;
-use nom::IResult;
 use std::fmt;
 use std::str::FromStr;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MediaType {
     Audio,
     Video,
@@ -99,31 +98,29 @@ pub struct MediaDescription {
 }
 
 impl MediaDescription {
-    pub fn parse(src: &Bytes) -> impl FnMut(&str) -> IResult<&str, Self> + '_ {
-        move |i| {
-            map(
-                ws((
-                    MediaType::parse,
-                    map_res(digit1, FromStr::from_str),
-                    opt(slash_num),
-                    TransportProtocol::parse(src),
-                    many0(map(ws((map_res(digit1, FromStr::from_str),)), |t| t.0)),
-                )),
-                |(media, port, ports_num, proto, fmts)| MediaDescription {
-                    media_type: media,
-                    port,
-                    ports_num,
-                    proto,
-                    fmts,
-                },
-            )(i)
-        }
+    pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
+        map(
+            ws((
+                MediaType::parse,
+                map_res(digit1, FromStr::from_str),
+                opt(slash_num),
+                TransportProtocol::parse(src),
+                many0(map(ws((map_res(digit1, FromStr::from_str),)), |t| t.0)),
+            )),
+            |(media, port, ports_num, proto, fmts)| MediaDescription {
+                media_type: media,
+                port,
+                ports_num,
+                proto,
+                fmts,
+            },
+        )(i)
     }
 }
 
 impl fmt::Display for MediaDescription {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "m={} ", self.media_type)?;
+        write!(f, "m={}", self.media_type)?;
 
         if let Some(ports_num) = &self.ports_num {
             write!(f, " {}/{} ", self.port, ports_num)?;
@@ -137,7 +134,7 @@ impl fmt::Display for MediaDescription {
             write!(f, " {}", fmt)?;
         }
 
-        f.write_str("\r\n")
+        Ok(())
     }
 }
 
@@ -150,7 +147,7 @@ mod test {
     fn media() {
         let input = BytesStr::from_static("audio 49170 RTP/AVP 0");
 
-        let (rem, media) = MediaDescription::parse(input.as_ref())(&input).unwrap();
+        let (rem, media) = MediaDescription::parse(input.as_ref(), &input).unwrap();
 
         assert_eq!(media.media_type, MediaType::Audio);
         assert_eq!(media.port, 49170);
