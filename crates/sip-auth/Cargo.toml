@@ -1,0 +1,22 @@
+[package]
+name = "ezk-sip-auth"
+version = "0.1.0"
+edition = "2018"
+authors = [
+    "Konstantin Baltruschat <konstantin.baltruschat@gmail.com>",
+    "Mervs <marvinankert@gmail.com>",
+]
+description = "SIP auth crate to authenticate requests"
+repository = "https://github.com/kbalt/ezk"
+license = "MIT"
+categories = ["network-programming", "multimedia"]
+keywords = ["sip", "auth"]
+
+[dependencies]
+sip-types = { package = "ezk-sip-types", path = "../sip-types" }
+bytesstr = "1"
+md5 = "0.7"
+sha2 = "0.9"
+uuid = { version = "0.8", features = ["v4"] }
+thiserror = "1"
+log = "0.4"

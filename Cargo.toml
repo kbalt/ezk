@@ -5,6 +5,7 @@ members = [
     "crates/sip-core",
     "crates/sip-types",
     "crates/sip-ua",
+    "crates/sip-auth",
     "examples",
 
     # Placeholder for the ezk-crate

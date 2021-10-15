@@ -2,7 +2,7 @@ use crate::header::headers::OneOrMore;
 use crate::header::{ExtendValues, HeaderParse};
 use crate::parse::{parse_quoted, token, whitespace, ParseCtx};
 use crate::print::{AppendCtx, Print, PrintCtx};
-use anyhow::Context;
+use anyhow::{bail, Context};
 use bytesstr::BytesStr;
 use internal::IResult;
 use internal::{ws, ParseError};
@@ -12,17 +12,19 @@ use nom::combinator::{map, map_res};
 use nom::multi::many0;
 use nom::sequence::{preceded, tuple};
 use nom::Finish;
+use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use std::borrow::Cow;
 use std::fmt::{self, Display, Write};
 
-// TODO: auth info
+// TODO: auth info header (https://datatracker.ietf.org/doc/html/rfc2617#section-3.2.3)
 
 /// Param contained inside [Auth].
 ///
 /// Has some special printing rules. Might not be hardcoded in the future.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AuthParam {
-    name: BytesStr,
-    value: BytesStr,
+    pub name: BytesStr,
+    pub value: BytesStr,
 }
 
 impl fmt::Display for AuthParam {
@@ -93,15 +95,17 @@ impl Print for AuthChallenge {
 
 #[derive(Debug, Clone)]
 pub struct DigestChallenge {
-    realm: BytesStr,
-    domain: Option<BytesStr>, // TODO: this may be a vec. See (https://datatracker.ietf.org/doc/html/rfc2617#section-3.2.1, https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/WWW-Authenticate)
-    nonce: BytesStr,
-    opaque: Option<BytesStr>,
-    stale: bool,
-    algorithm: Algorithm,
-    qop: Option<Vec<QopOption>>,
+    pub realm: BytesStr,
+    pub domain: Option<BytesStr>, // TODO: this may be a vec. See (https://datatracker.ietf.org/doc/html/rfc2617#section-3.2.1, https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/WWW-Authenticate)
+    pub nonce: BytesStr,
+    pub opaque: Option<BytesStr>,
+    pub stale: bool,
+    pub algorithm: Algorithm,
+    pub qop: Vec<QopOption>,
+    pub userhash: bool,
+    // TODO: add charset? https://datatracker.ietf.org/doc/html/rfc7616#section-4
     /// Remaining fields
-    other: Vec<AuthParam>,
+    pub other: Vec<AuthParam>,
 }
 
 impl DigestChallenge {
@@ -112,7 +116,8 @@ impl DigestChallenge {
         let mut opaque = None;
         let mut stale = false;
         let mut algorithm = Algorithm::MD5;
-        let mut qop = None;
+        let mut qop = vec![];
+        let mut userhash = false;
         let mut other = vec![];
 
         for param in params {
@@ -123,16 +128,14 @@ impl DigestChallenge {
                 "opaque" => opaque = Some(param.value),
                 "stale" => stale = param.value.eq_ignore_ascii_case("true"),
                 "algorithm" => algorithm = Algorithm::from(param.value),
-                "qop" => {
-                    qop = Some(
-                        param
-                            .value
-                            .split(',')
-                            .into_iter()
-                            .map(|v| QopOption::from(param.value.slice_ref(v.trim())))
-                            .collect(),
-                    )
-                }
+                "qop" => qop.extend(
+                    param
+                        .value
+                        .split(',')
+                        .into_iter()
+                        .map(|v| QopOption::from(param.value.slice_ref(v.trim()))),
+                ),
+                "userhash" => userhash = param.value.eq_ignore_ascii_case("true"),
                 _ => other.push(param),
             }
         }
@@ -145,6 +148,7 @@ impl DigestChallenge {
             stale,
             algorithm,
             qop,
+            userhash,
             other,
         })
     }
@@ -174,18 +178,20 @@ impl Print for DigestChallenge {
             write!(f, ", algorithm={}", self.algorithm)?;
         }
 
-        if let Some(qop_options) = &self.qop {
-            let mut iter = qop_options.iter();
+        let mut qop_iter = self.qop.iter();
 
-            if let Some(first) = iter.next() {
-                write!(f, r#", qop="{}"#, first)?;
+        if let Some(first) = qop_iter.next() {
+            write!(f, r#", qop="{}"#, first)?;
 
-                for qop_option in iter {
-                    write!(f, ",{}", qop_option)?;
-                }
-
-                f.write_char('"')?;
+            for qop_option in qop_iter {
+                write!(f, ",{}", qop_option)?;
             }
+
+            f.write_char('"')?;
+        }
+
+        if self.userhash {
+            f.write_str(", userhash=true")?;
         }
 
         for param in &self.other {
@@ -238,23 +244,76 @@ impl Print for AuthResponse {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum Username {
+    Username(BytesStr),
+    UsernameNonASCII(BytesStr),
+}
+
+const CHARSET: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'!')
+    .remove(b'#')
+    .remove(b'$')
+    .remove(b'&')
+    .remove(b'+')
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'^')
+    .remove(b'_')
+    .remove(b'`')
+    .remove(b'|')
+    .remove(b'~');
+
+impl Username {
+    /// Create a new [`Username`]
+    ///
+    /// Determines the variant and encodes non ascii usernames with utf8 percentage encoding.
+    pub fn new(username: BytesStr) -> Self {
+        let maybe_encoded = utf8_percent_encode(username.as_str(), CHARSET).into();
+
+        match maybe_encoded {
+            Cow::Borrowed(username) => Username::Username(username.into()),
+            Cow::Owned(encoded) => {
+                let username_encoded = format!("UTF-8''{}", encoded).into();
+
+                Username::UsernameNonASCII(username_encoded)
+            }
+        }
+    }
+}
+
+impl Display for Username {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Username::Username(username) => {
+                write!(f, r#"username="{}""#, username)
+            }
+            Username::UsernameNonASCII(username_non_ascii) => {
+                write!(f, r#"username*={}"#, username_non_ascii)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DigestResponse {
-    username: BytesStr,
-    realm: BytesStr,
-    nonce: BytesStr,
-    uri: BytesStr,
-    response: BytesStr,
-    algorithm: Algorithm,
-    opaque: Option<BytesStr>,
-    qop_response: Option<QopResponse>,
+    pub username: Username,
+    pub realm: BytesStr,
+    pub nonce: BytesStr,
+    pub uri: BytesStr,
+    pub response: BytesStr,
+    pub algorithm: Algorithm,
+    pub opaque: Option<BytesStr>,
+    pub qop_response: Option<QopResponse>,
+    pub userhash: bool,
     /// Remaining fields
-    other: Vec<AuthParam>,
+    pub other: Vec<AuthParam>,
 }
 
 impl DigestResponse {
     pub(crate) fn from_auth_params(params: Vec<AuthParam>) -> anyhow::Result<Self> {
         let mut username = None;
+        let mut username_non_ascii = None;
         let mut realm = None;
         let mut nonce = None;
         let mut uri = None;
@@ -267,11 +326,14 @@ impl DigestResponse {
         let mut cnonce = None;
         let mut nc = None;
 
+        let mut userhash = false;
+
         let mut other = vec![];
 
         for param in params {
             match param.name.as_ref() {
                 "username" => username = Some(param.value),
+                "username*" => username_non_ascii = Some(param.value),
                 "realm" => realm = Some(param.value),
                 "nonce" => nonce = Some(param.value),
                 "uri" => uri = Some(param.value),
@@ -281,6 +343,7 @@ impl DigestResponse {
                 "qop" => qop = Some(QopOption::from(param.value)),
                 "cnonce" => cnonce = Some(param.value),
                 "nc" => nc = Some(u32::from_str_radix(param.value.as_ref(), 16)),
+                "userhash" => userhash = param.value.eq_ignore_ascii_case("true"),
                 _ => other.push(param),
             }
         }
@@ -297,8 +360,24 @@ impl DigestResponse {
             None
         };
 
+        if username.is_some() && username_non_ascii.is_some() {
+            bail!("Received both, 'username' and 'username*' in authorization header");
+        }
+
+        let username = if let Some(username) = username {
+            Username::Username(username)
+        } else if let Some(username_non_ascii) = username_non_ascii {
+            if userhash {
+                bail!("Received 'userhash=true' and 'username*' in authorization header");
+            }
+
+            Username::UsernameNonASCII(username_non_ascii)
+        } else {
+            bail!("Missing username in authorization header");
+        };
+
         Ok(Self {
-            username: username.context("Missing username in authorization header")?,
+            username,
             realm: realm.context("Missing realm in authorization header")?,
             nonce: nonce.context("Missing nonce in authorization header")?,
             uri: uri.context("Missing uri in authorization header")?,
@@ -306,6 +385,7 @@ impl DigestResponse {
             algorithm,
             opaque,
             qop_response,
+            userhash,
             other,
         })
     }
@@ -315,7 +395,7 @@ impl Print for DigestResponse {
     fn print(&self, f: &mut fmt::Formatter<'_>, _ctx: PrintCtx<'_>) -> fmt::Result {
         write!(
             f,
-            r#"Digest username="{}", realm="{}", nonce="{}", uri="{}", response="{}""#,
+            r#"Digest {}, realm="{}", nonce="{}", uri="{}", response="{}""#,
             self.username, self.realm, self.nonce, self.uri, self.response
         )?;
 
@@ -335,6 +415,10 @@ impl Print for DigestResponse {
             )?;
         }
 
+        if self.userhash {
+            f.write_str(", userhash=true")?;
+        }
+
         for param in &self.other {
             write!(f, ", {}", param)?;
         }
@@ -344,17 +428,17 @@ impl Print for DigestResponse {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct QopResponse {
-    qop: QopOption,
-    cnonce: BytesStr,
-    nc: u32,
+pub struct QopResponse {
+    pub qop: QopOption,
+    pub cnonce: BytesStr,
+    pub nc: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum QopOption {
+pub enum QopOption {
     Auth,
     AuthInt,
-    Token(BytesStr),
+    Other(BytesStr),
 }
 
 impl From<BytesStr> for QopOption {
@@ -362,7 +446,7 @@ impl From<BytesStr> for QopOption {
         match value.as_ref() {
             "auth" => Self::Auth,
             "auth-int" => Self::AuthInt,
-            token => Self::Token(value.slice_ref(token)),
+            token => Self::Other(value.slice_ref(token)),
         }
     }
 }
@@ -372,7 +456,7 @@ impl Display for QopOption {
         match self {
             QopOption::Auth => f.write_str("auth"),
             QopOption::AuthInt => f.write_str("auth-int"),
-            QopOption::Token(token) => f.write_str(token),
+            QopOption::Other(token) => f.write_str(token),
         }
     }
 }
@@ -380,7 +464,11 @@ impl Display for QopOption {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Algorithm {
     MD5,
-    SHA1,
+    MD5Sess,
+    SHA256,
+    SHA256Sess,
+    SHA512256,
+    SHA512256Sess,
     Other(BytesStr),
 }
 
@@ -388,8 +476,16 @@ impl From<BytesStr> for Algorithm {
     fn from(value: BytesStr) -> Self {
         if value.eq_ignore_ascii_case("MD5") {
             Algorithm::MD5
-        } else if value.eq_ignore_ascii_case("SHA1") {
-            Algorithm::SHA1
+        } else if value.eq_ignore_ascii_case("MD5-sess") {
+            Algorithm::MD5Sess
+        } else if value.eq_ignore_ascii_case("SHA-256") {
+            Algorithm::SHA256
+        } else if value.eq_ignore_ascii_case("SHA-256-sess") {
+            Algorithm::SHA256Sess
+        } else if value.eq_ignore_ascii_case("SHA-512-256") {
+            Algorithm::SHA512256
+        } else if value.eq_ignore_ascii_case("SHA-512-256-sess") {
+            Algorithm::SHA512256Sess
         } else {
             Algorithm::Other(value)
         }
@@ -400,7 +496,11 @@ impl fmt::Display for Algorithm {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Algorithm::MD5 => f.write_str("MD5"),
-            Algorithm::SHA1 => f.write_str("SHA1"),
+            Algorithm::MD5Sess => f.write_str("MD5-sess"),
+            Algorithm::SHA256 => f.write_str("SHA-256"),
+            Algorithm::SHA256Sess => f.write_str("SHA-256-sess"),
+            Algorithm::SHA512256 => f.write_str("SHA-512-256"),
+            Algorithm::SHA512256Sess => f.write_str("SHA-512-256-sess"),
             Algorithm::Other(other) => f.write_str(other),
         }
     }
@@ -479,6 +579,7 @@ mod test {
                 stale,
                 algorithm,
                 qop,
+                userhash,
                 other,
             }) => {
                 assert_eq!(realm, "example.com");
@@ -487,7 +588,8 @@ mod test {
                 assert_eq!(opaque, None);
                 assert_eq!(stale, false);
                 assert_eq!(algorithm, Algorithm::MD5);
-                assert_eq!(qop, None);
+                assert_eq!(qop, vec![]);
+                assert_eq!(userhash, false);
                 assert!(other.is_empty())
             }
             _ => panic!(),
@@ -505,7 +607,8 @@ mod test {
             opaque: None,
             stale: false,
             algorithm: Algorithm::MD5,
-            qop: None,
+            qop: vec![],
+            userhash: false,
             other: vec![],
         });
 
@@ -517,7 +620,7 @@ mod test {
     #[test]
     fn all_fields_digest_challenge() {
         let input = BytesStr::from_static(
-            r#"Digest realm="example.com", domain="TODO", nonce="abc123", opaque="opaque_value", stale=true, algorithm=SHA1, qop="auth,auth-int,a_token", another-field="some_extension""#,
+            r#"Digest realm="example.com", domain="TODO", nonce="abc123", opaque="opaque_value", stale=true, algorithm=SHA-256, qop="auth,auth-int,a_token", another-field="some_extension""#,
         );
 
         let (rem, auth) = AuthChallenge::parse(ParseCtx::default(&input), &input).unwrap();
@@ -531,6 +634,7 @@ mod test {
                 stale,
                 algorithm,
                 qop,
+                userhash,
                 other,
             }) => {
                 assert_eq!(realm, "example.com");
@@ -538,16 +642,16 @@ mod test {
                 assert_eq!(nonce, "abc123");
                 assert_eq!(opaque, Some(BytesStr::from_static("opaque_value")));
                 assert_eq!(stale, true);
-                assert_eq!(algorithm, Algorithm::SHA1);
+                assert_eq!(algorithm, Algorithm::SHA256);
                 assert_eq!(
                     qop,
-                    Some(vec![
+                    vec![
                         QopOption::Auth,
                         QopOption::AuthInt,
-                        QopOption::Token(BytesStr::from_static("a_token"))
-                    ])
+                        QopOption::Other(BytesStr::from_static("a_token"))
+                    ]
                 );
-
+                assert_eq!(userhash, false);
                 assert_eq!(other.len(), 1);
                 assert_eq!(
                     other[0],
@@ -571,19 +675,20 @@ mod test {
             nonce: BytesStr::from_static("abc123"),
             opaque: Some(BytesStr::from_static("opaque_value")),
             stale: true,
-            algorithm: Algorithm::SHA1,
-            qop: Some(vec![
+            algorithm: Algorithm::SHA256,
+            qop: vec![
                 QopOption::Auth,
                 QopOption::AuthInt,
-                QopOption::Token(BytesStr::from_static("a_token")),
-            ]),
+                QopOption::Other(BytesStr::from_static("a_token")),
+            ],
+            userhash: false,
             other: vec![AuthParam {
                 name: BytesStr::from_static("another-field"),
                 value: BytesStr::from_static("some_extension"),
             }],
         });
 
-        let expected = r#"Digest realm="example.com", nonce="abc123", domain="TODO", opaque="opaque_value", stale=true, algorithm=SHA1, qop="auth,auth-int,a_token", another-field="some_extension""#;
+        let expected = r#"Digest realm="example.com", nonce="abc123", domain="TODO", opaque="opaque_value", stale=true, algorithm=SHA-256, qop="auth,auth-int,a_token", another-field="some_extension""#;
 
         assert_eq!(expected, challenge.default_print_ctx().to_string());
     }
@@ -594,7 +699,7 @@ mod test {
         headers.insert(Name::WWW_AUTHENTICATE, "Digest realm=\"example.com\", nonce=\"abc123\", Digest realm=\"example.org\", nonce=\"123abc\", OAuth some-field=\"oauth_field\"");
         headers.insert(
             Name::WWW_AUTHENTICATE,
-            "Digest realm=\"example.net\", nonce=\"xyz987\", algorithm=\"SHA1\"",
+            "Digest realm=\"example.net\", nonce=\"xyz987\", algorithm=\"SHA-256\"",
         );
 
         let www_vec = headers
@@ -610,6 +715,7 @@ mod test {
                 stale,
                 algorithm,
                 qop,
+                userhash,
                 other,
             }) => {
                 assert_eq!(realm, "example.com");
@@ -618,7 +724,8 @@ mod test {
                 assert_eq!(nonce, "abc123");
                 assert_eq!(opaque, &None);
                 assert_eq!(stale, &false);
-                assert_eq!(qop, &None);
+                assert_eq!(qop, &vec![]);
+                assert_eq!(userhash, &false);
                 assert!(other.is_empty());
             }
             _ => panic!(),
@@ -633,6 +740,7 @@ mod test {
                 stale,
                 algorithm,
                 qop,
+                userhash,
                 other,
             }) => {
                 assert_eq!(realm, "example.org");
@@ -641,7 +749,8 @@ mod test {
                 assert_eq!(nonce, "123abc");
                 assert_eq!(opaque, &None);
                 assert_eq!(stale, &false);
-                assert_eq!(qop, &None);
+                assert_eq!(qop, &vec![]);
+                assert_eq!(userhash, &false);
                 assert!(other.is_empty());
             }
             _ => panic!(),
@@ -665,6 +774,7 @@ mod test {
                 stale,
                 algorithm,
                 qop,
+                userhash,
                 other,
             }) => {
                 assert_eq!(realm, "example.net");
@@ -672,8 +782,9 @@ mod test {
                 assert_eq!(nonce, "xyz987");
                 assert_eq!(opaque, &None);
                 assert_eq!(stale, &false);
-                assert_eq!(algorithm, &Algorithm::SHA1);
-                assert_eq!(qop, &None);
+                assert_eq!(algorithm, &Algorithm::SHA256);
+                assert_eq!(qop, &vec![]);
+                assert_eq!(userhash, &false);
                 assert!(other.is_empty());
             }
             _ => panic!(),
@@ -697,6 +808,7 @@ mod test {
                 stale,
                 algorithm,
                 qop,
+                userhash,
                 other,
             }) => {
                 assert_eq!(realm, "example.com");
@@ -707,12 +819,13 @@ mod test {
                 assert_eq!(stale, false);
                 assert_eq!(
                     qop,
-                    Some(vec![
+                    vec![
                         QopOption::Auth,
                         QopOption::AuthInt,
-                        QopOption::Token(BytesStr::from_static("AuTh-Int")),
-                    ])
+                        QopOption::Other(BytesStr::from_static("AuTh-Int")),
+                    ]
                 );
+                assert_eq!(userhash, false);
                 assert!(other.is_empty());
             }
             _ => panic!(),
@@ -741,9 +854,10 @@ mod test {
                 algorithm,
                 opaque,
                 qop_response,
+                userhash,
                 other,
             }) => {
-                assert_eq!(username, "alice");
+                assert_eq!(username, Username::Username("alice".into()));
                 assert_eq!(realm, "example.com");
                 assert_eq!(nonce, "abc123");
                 assert_eq!(uri, "sip:bob@example.com");
@@ -751,6 +865,7 @@ mod test {
                 assert_eq!(algorithm, Algorithm::MD5);
                 assert_eq!(opaque, None);
                 assert_eq!(qop_response, None);
+                assert_eq!(userhash, false);
                 assert!(other.is_empty());
             }
             AuthResponse::Other(_) => panic!(),
@@ -760,7 +875,7 @@ mod test {
     #[test]
     fn print_simple_digest_response() {
         let digest = AuthResponse::Digest(DigestResponse {
-            username: BytesStr::from_static("alice"),
+            username: Username::new("alice".into()),
             realm: BytesStr::from_static("example.com"),
             nonce: BytesStr::from_static("abc123"),
             uri: BytesStr::from_static("sip:bob@example.com"),
@@ -768,6 +883,7 @@ mod test {
             algorithm: Algorithm::MD5,
             opaque: None,
             qop_response: None,
+            userhash: false,
             other: vec![],
         });
 
@@ -779,7 +895,7 @@ mod test {
     #[test]
     fn parse_all_fields_digest_response() {
         let input = BytesStr::from_static(
-            r#"Digest username="alice", realm="example.com", nonce="abc123", uri="sip:bob@example.com", response="00000000000000000000000000000000", algorithm=SHA1, opaque="opaque_value", qop="auth", cnonce="def456", nc=00000001, another-field="some_extension""#,
+            r#"Digest username="alice", realm="example.com", nonce="abc123", uri="sip:bob@example.com", response="00000000000000000000000000000000", algorithm=SHA-256, opaque="opaque_value", qop="auth", cnonce="def456", nc=00000001, another-field="some_extension""#,
         );
 
         let (rem, auth) = AuthResponse::parse(ParseCtx::default(&input), &input).unwrap();
@@ -794,14 +910,15 @@ mod test {
                 algorithm,
                 opaque,
                 qop_response,
+                userhash,
                 other,
             }) => {
-                assert_eq!(username, "alice");
+                assert_eq!(username, Username::Username("alice".into()));
                 assert_eq!(realm, "example.com");
                 assert_eq!(nonce, "abc123");
                 assert_eq!(uri, "sip:bob@example.com");
                 assert_eq!(response, "00000000000000000000000000000000");
-                assert_eq!(algorithm, Algorithm::SHA1);
+                assert_eq!(algorithm, Algorithm::SHA256);
                 assert_eq!(opaque, Some(BytesStr::from_static("opaque_value")));
                 assert_eq!(
                     qop_response,
@@ -811,6 +928,7 @@ mod test {
                         nc: 1
                     })
                 );
+                assert_eq!(userhash, false);
                 assert_eq!(
                     other[0],
                     AuthParam {
@@ -828,25 +946,26 @@ mod test {
     #[test]
     fn print_all_fields_digest_response() {
         let digest = AuthResponse::Digest(DigestResponse {
-            username: BytesStr::from_static("alice"),
+            username: Username::new("alice".into()),
             realm: BytesStr::from_static("example.com"),
             nonce: BytesStr::from_static("abc123"),
             uri: BytesStr::from_static("sip:bob@example.com"),
             response: BytesStr::from_static("00000000000000000000000000000000"),
-            algorithm: Algorithm::SHA1,
+            algorithm: Algorithm::SHA256,
             opaque: Some(BytesStr::from_static("opaque_value")),
             qop_response: Some(QopResponse {
                 qop: QopOption::Auth,
                 cnonce: BytesStr::from_static("def456"),
                 nc: 1,
             }),
+            userhash: false,
             other: vec![AuthParam {
                 name: BytesStr::from_static("another-field"),
                 value: BytesStr::from_static("some_extension"),
             }],
         });
 
-        let expected = r#"Digest username="alice", realm="example.com", nonce="abc123", uri="sip:bob@example.com", response="00000000000000000000000000000000", algorithm=SHA1, opaque="opaque_value", qop="auth", cnonce="def456", nc=00000001, another-field="some_extension""#;
+        let expected = r#"Digest username="alice", realm="example.com", nonce="abc123", uri="sip:bob@example.com", response="00000000000000000000000000000000", algorithm=SHA-256, opaque="opaque_value", qop="auth", cnonce="def456", nc=00000001, another-field="some_extension""#;
 
         assert_eq!(expected, digest.default_print_ctx().to_string());
     }
@@ -869,9 +988,10 @@ mod test {
                 algorithm,
                 opaque,
                 qop_response,
+                userhash,
                 other,
             }) => {
-                assert_eq!(username, "alice");
+                assert_eq!(username, Username::Username("alice".into()));
                 assert_eq!(realm, "example.com");
                 assert_eq!(nonce, "abc123");
                 assert_eq!(uri, "sip:bob@example.com");
@@ -886,6 +1006,7 @@ mod test {
                         nc: 1,
                     })
                 );
+                assert_eq!(userhash, false);
                 assert!(other.is_empty());
             }
             AuthResponse::Other(_) => panic!(),
@@ -912,9 +1033,10 @@ mod test {
                 algorithm,
                 opaque,
                 qop_response,
+                userhash,
                 other,
             }) => {
-                assert_eq!(username, "alice");
+                assert_eq!(username, Username::Username("alice".into()));
                 assert_eq!(realm, "example.com");
                 assert_eq!(nonce, "abc123");
                 assert_eq!(uri, "sip:bob@example.com");
@@ -924,16 +1046,49 @@ mod test {
                 assert_eq!(
                     qop_response,
                     Some(QopResponse {
-                        qop: QopOption::Token(BytesStr::from_static("a_token")),
+                        qop: QopOption::Other(BytesStr::from_static("a_token")),
                         cnonce: BytesStr::from_static("def456"),
                         nc: 1,
                     })
                 );
+                assert_eq!(userhash, false);
                 assert!(other.is_empty());
             }
             AuthResponse::Other(_) => panic!(),
         }
 
         assert_eq!(rem, "");
+    }
+
+    #[test]
+    fn test_username_encoding_spaces() {
+        let name_str = "Oh Long Johnson";
+
+        let username = Username::new(name_str.into()).to_string();
+
+        println!("{}", username);
+
+        assert_eq!(username, "username*=UTF-8''Oh%20Long%20Johnson")
+    }
+
+    #[test]
+    fn test_username_encoding_alphanumeric() {
+        let name_str = "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+        let username = Username::new(name_str.into()).to_string();
+
+        assert_eq!(
+            username,
+            r#"username="1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ""#
+        )
+    }
+
+    #[test]
+    fn test_username_encoding_allowed_special_chars() {
+        let name_str = "!#$&+-.^_`|~";
+
+        let username = Username::new(name_str.into()).to_string();
+
+        assert_eq!(username, r#"username="!#$&+-.^_`|~""#)
     }
 }
