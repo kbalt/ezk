@@ -1,13 +1,16 @@
+use crate::header::headers::OneOrMore;
 use crate::header::name::Name;
+use crate::header::{ConstNamed, ExtendValues, HeaderParse};
 use crate::parse::{whitespace, ParseCtx};
-use crate::print::{Print, PrintCtx};
+use crate::print::PrintCtx;
 use crate::uri::params::{Params, CPS};
+use anyhow::Result;
 use bytesstr::BytesStr;
 use nom::bytes::complete::{is_not, tag, take_while};
 use nom::character::complete::digit1;
 use nom::combinator::{map, map_res, opt};
 use nom::sequence::{delimited, preceded, tuple};
-use nom::IResult;
+use nom::Finish;
 use std::fmt;
 use std::str::FromStr;
 
@@ -40,30 +43,47 @@ impl RetryAfter {
         self.comment = Some(comment.into());
         self
     }
+}
 
-    pub(crate) fn parse(ctx: ParseCtx<'_>) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
-        move |i| {
-            map(
-                tuple((
-                    map_res(digit1, FromStr::from_str),
-                    Params::<CPS>::parse(ctx),
-                    opt(preceded(
-                        take_while(whitespace),
-                        delimited(tag("("), is_not(")"), tag(")")),
-                    )),
+impl ConstNamed for RetryAfter {
+    const NAME: Name = Name::RETRY_AFTER;
+}
+
+impl HeaderParse for RetryAfter {
+    fn parse<'i>(ctx: ParseCtx<'_>, i: &'i str) -> Result<(&'i str, Self)> {
+        let (rem, retry_after) = map(
+            tuple((
+                map_res(digit1, FromStr::from_str),
+                Params::<CPS>::parse(ctx),
+                opt(preceded(
+                    take_while(whitespace),
+                    delimited(tag("("), is_not(")"), tag(")")),
                 )),
-                |(value, params, comment)| RetryAfter {
-                    value,
-                    params,
-                    comment: comment.map(|str| BytesStr::from_parse(ctx.src, str)),
-                },
-            )(i)
-        }
+            )),
+            |(value, params, comment)| RetryAfter {
+                value,
+                params,
+                comment: comment.map(|str| BytesStr::from_parse(ctx.src, str)),
+            },
+        )(i)
+        .finish()?;
+
+        Ok((rem, retry_after))
     }
 }
 
-impl Print for RetryAfter {
-    fn print(&self, f: &mut fmt::Formatter<'_>, _: PrintCtx<'_>) -> fmt::Result {
+impl ExtendValues for RetryAfter {
+    fn extend_values(&self, ctx: PrintCtx<'_>, values: &mut OneOrMore) {
+        *values = self.create_values(ctx)
+    }
+
+    fn create_values(&self, _: PrintCtx<'_>) -> OneOrMore {
+        OneOrMore::One(self.to_string().into())
+    }
+}
+
+impl fmt::Display for RetryAfter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}{}", self.value, self.params)?;
 
         if let Some(comment) = &self.comment {
@@ -74,8 +94,6 @@ impl Print for RetryAfter {
     }
 }
 
-__impl_header!(RetryAfter, Single, Name::RETRY_AFTER);
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -85,7 +103,7 @@ mod test {
     fn retry_after() {
         let input = BytesStr::from_static("120");
 
-        let (rem, retry_after) = RetryAfter::parse(ParseCtx::default(&input))(&input).unwrap();
+        let (rem, retry_after) = RetryAfter::parse(ParseCtx::default(&input), &input).unwrap();
 
         assert!(rem.is_empty());
 
@@ -98,7 +116,7 @@ mod test {
     fn retry_after_duration() {
         let input = BytesStr::from_static("120;duration=60");
 
-        let (rem, retry_after) = RetryAfter::parse(ParseCtx::default(&input))(&input).unwrap();
+        let (rem, retry_after) = RetryAfter::parse(ParseCtx::default(&input), &input).unwrap();
 
         assert!(rem.is_empty());
 
@@ -114,7 +132,7 @@ mod test {
     fn retry_after_duration_comment() {
         let input = BytesStr::from_static("120;duration=60 (Some Comment about being busy)");
 
-        let (rem, retry_after) = RetryAfter::parse(ParseCtx::default(&input))(&input).unwrap();
+        let (rem, retry_after) = RetryAfter::parse(ParseCtx::default(&input), &input).unwrap();
 
         assert!(rem.is_empty());
 

@@ -1,36 +1,31 @@
+use crate::header::headers::OneOrMore;
 use crate::header::name::Name;
-use crate::parse::text::{CsvTextSpec, Text};
+use crate::header::{ConstNamed, ExtendValues, HeaderParse};
+use crate::parse::ParseCtx;
+use crate::print::PrintCtx;
+use anyhow::Result;
 use bytesstr::BytesStr;
 
-impl_wrap_header!(
+csv_header! {
     /// `Supported` header, contains only one supported extension.
     /// To get all supported extension use [`Vec`].
-    #[derive(Default)]
-    Text<CsvTextSpec>,
-    BytesStr,
     Supported,
-    CSV,
+    BytesStr,
     Name::SUPPORTED
-);
+}
 
-impl_wrap_header!(
+csv_header! {
     /// `Require` header, contains only one required extension.
     /// To get all required extension use [`Vec`].
-    #[derive(Default)]
-    Text<CsvTextSpec>,
-    BytesStr,
     Require,
-    CSV,
+    BytesStr,
     Name::REQUIRE
-);
+}
 
-impl_wrap_header!(
+csv_header! {
     /// `Unsupported` header, contains only one unsupported extension.
     /// To get all unsupported extension use [`Vec`].
-    #[derive(Default)]
-    Text<CsvTextSpec>,
-    BytesStr,
     Unsupported,
-    CSV,
+    BytesStr,
     Name::UNSUPPORTED
-);
+}

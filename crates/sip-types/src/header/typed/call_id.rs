@@ -1,67 +1,66 @@
-use crate::header::name::Name;
+use crate::header::headers::OneOrMore;
+use crate::header::{ConstNamed, ExtendValues, HeaderParse};
 use crate::parse::ParseCtx;
-use crate::print::{Print, PrintCtx};
+use crate::print::PrintCtx;
+use crate::Name;
+use anyhow::Result;
 use bytesstr::BytesStr;
-use nom::IResult;
-use std::fmt;
 
 /// `Call-ID`header
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CallID(pub BytesStr);
 
 impl CallID {
-    /// Returns a new Call-ID header
     pub fn new<B>(id: B) -> Self
     where
         B: Into<BytesStr>,
     {
         CallID(id.into())
     }
+}
 
-    pub(crate) fn parse(ctx: ParseCtx<'_>) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
-        move |i| Ok(("", CallID(BytesStr::from_parse(ctx.src, i.trim()))))
+impl ConstNamed for CallID {
+    const NAME: Name = Name::CALL_ID;
+}
+
+impl HeaderParse for CallID {
+    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> Result<(&'i str, Self)> {
+        Ok(("", Self(BytesStr::from_parse(ctx.src, i.trim()))))
     }
 }
 
-impl Print for CallID {
-    fn print(&self, f: &mut fmt::Formatter<'_>, _: PrintCtx<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+impl ExtendValues for CallID {
+    fn extend_values(&self, ctx: PrintCtx<'_>, values: &mut OneOrMore) {
+        *values = self.create_values(ctx)
+    }
+
+    fn create_values(&self, _: PrintCtx<'_>) -> OneOrMore {
+        OneOrMore::One(self.0.as_str().into())
     }
 }
-
-__impl_header!(CallID, Single, Name::CALL_ID);
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::print::AppendCtx;
+    use crate::Headers;
+
+    const CALL_ID: CallID = CallID(BytesStr::from_static("SomeCallID"));
 
     #[test]
-    fn call_id() {
-        let input = BytesStr::from_static("«SomeTestBytes»");
+    fn print_call_id() {
+        let mut headers = Headers::new();
+        headers.insert_named(&CALL_ID);
+        let headers = headers.to_string();
 
-        let (rem, cid) = CallID::parse(ParseCtx::default(&input))(&input).unwrap();
-
-        assert!(rem.is_empty());
-
-        assert_eq!(cid.0, "«SomeTestBytes»")
+        assert_eq!(headers, "Call-ID: SomeCallID\r\n");
     }
 
     #[test]
-    fn call_id_trim() {
-        let input = BytesStr::from_static("   «SomeTestBytes»    ");
+    fn parse_call_id() {
+        let mut headers = Headers::new();
+        headers.insert(Name::CALL_ID, "SomeCallID");
 
-        let (rem, cid) = CallID::parse(ParseCtx::default(&input))(&input).unwrap();
-
-        assert!(rem.is_empty());
-
-        assert_eq!(cid.0, "«SomeTestBytes»")
-    }
-
-    #[test]
-    fn call_id_print() {
-        let cid = CallID::new("abc123");
-
-        assert_eq!(cid.default_print_ctx().to_string(), "abc123");
+        let accept: CallID = headers.get_named().unwrap();
+        assert_eq!(accept, CALL_ID);
     }
 }

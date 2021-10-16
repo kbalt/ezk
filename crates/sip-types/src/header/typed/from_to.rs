@@ -1,12 +1,15 @@
-use crate::header::name::Name;
+use crate::header::headers::OneOrMore;
+use crate::header::{ExtendValues, HeaderParse};
 use crate::parse::ParseCtx;
-use crate::print::{Print, PrintCtx, UriContext};
+use crate::print::{AppendCtx, Print, PrintCtx, UriContext};
 use crate::uri::params::{Params, CPS};
 use crate::uri::NameAddr;
+use anyhow::Result;
 use bytesstr::BytesStr;
+use internal::IResult;
 use nom::combinator::map;
 use nom::sequence::tuple;
-use nom::IResult;
+use nom::Finish;
 use std::fmt;
 
 /// Type which is being wrapped by [From] and [To]
@@ -18,7 +21,7 @@ pub struct FromTo {
 }
 
 impl FromTo {
-    fn new(uri: NameAddr, tag: Option<BytesStr>) -> Self {
+    pub fn new(uri: NameAddr, tag: Option<BytesStr>) -> Self {
         Self {
             uri,
             tag,
@@ -40,6 +43,32 @@ impl FromTo {
     }
 }
 
+impl HeaderParse for FromTo {
+    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> Result<(&'i str, Self)> {
+        let (rem, from_to) = map(
+            tuple((NameAddr::parse_no_params(ctx), Params::<CPS>::parse(ctx))),
+            |(uri, mut params)| FromTo {
+                uri,
+                tag: params.take("tag"),
+                params,
+            },
+        )(i)
+        .finish()?;
+
+        Ok((rem, from_to))
+    }
+}
+
+impl ExtendValues for FromTo {
+    fn extend_values(&self, ctx: PrintCtx<'_>, values: &mut OneOrMore) {
+        *values = self.create_values(ctx)
+    }
+
+    fn create_values(&self, ctx: PrintCtx<'_>) -> OneOrMore {
+        OneOrMore::One(self.print_ctx(ctx).to_string().into())
+    }
+}
+
 impl Print for FromTo {
     fn print(&self, f: &mut fmt::Formatter<'_>, mut ctx: PrintCtx<'_>) -> fmt::Result {
         ctx.uri = Some(UriContext::FromTo);
@@ -51,66 +80,39 @@ impl Print for FromTo {
     }
 }
 
-impl_wrap_header!(
-    /// `To` header. Wraps [FromTo]
-    FromTo,
-    To,
-    Single,
-    Name::TO
-);
-
-impl_wrap_header!(
-    /// `From` header. Wraps [FromTo]
-    FromTo,
-    From,
-    Single,
-    Name::FROM
-);
-
-impl From {
-    #[inline]
-    pub fn new(uri: NameAddr, tag: Option<BytesStr>) -> Self {
-        Self(FromTo::new(uri, tag))
-    }
-}
-
-impl To {
-    #[inline]
-    pub fn new(uri: NameAddr, tag: Option<BytesStr>) -> Self {
-        Self(FromTo::new(uri, tag))
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::host::HostPort;
-    use crate::print::AppendCtx;
     use crate::uri::sip::SipUri;
+    use crate::{Headers, Name};
 
-    #[test]
-    fn from_to() {
-        let input = BytesStr::from_static("Bob <sip:bob@example.com>;tag=abc123");
+    fn test_fromto() -> FromTo {
+        let uri: SipUri = "sip:example.org".parse().unwrap();
 
-        let (rem, from) = From::parse(ParseCtx::default(&input))(&input).unwrap();
-
-        let from_to = from.0;
-
-        assert!(rem.is_empty());
-
-        assert_eq!(from_to.tag.unwrap(), "abc123")
+        FromTo {
+            uri: NameAddr::uri(uri),
+            tag: Some("123".into()),
+            params: Params::new(),
+        }
     }
 
     #[test]
-    fn from_to_print() {
-        let from = From::new(
-            NameAddr::new("Bob", SipUri::new(HostPort::host_name("example.com"))),
-            Some("abc123".into()),
-        );
+    fn print_fromto() {
+        let mut headers = Headers::new();
+        headers.insert_type(Name::FROM, &test_fromto());
+        let headers = headers.to_string();
 
-        assert_eq!(
-            from.default_print_ctx().to_string(),
-            "\"Bob\"<sip:example.com>;tag=abc123"
-        )
+        assert_eq!(headers, "From: <sip:example.org>;tag=123\r\n");
+    }
+
+    #[test]
+    fn parse_fromto() {
+        let mut headers = Headers::new();
+        headers.insert(Name::FROM, "<sip:example.org>;tag=321");
+
+        let from_to: FromTo = headers.get(Name::FROM).unwrap();
+
+        assert_eq!(&from_to.uri.uri, &test_fromto().uri.uri);
+        assert_eq!(from_to.tag, Some(BytesStr::from_static("321")));
     }
 }

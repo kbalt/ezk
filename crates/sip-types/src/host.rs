@@ -5,11 +5,12 @@
 use crate::parse::ParseCtx;
 use crate::print::{Print, PrintCtx, UriContext};
 use bytesstr::BytesStr;
+use internal::IResult;
 use nom::branch::alt;
 use nom::bytes::complete::{is_not, tag, take_while};
 use nom::combinator::{map_res, opt};
 use nom::sequence::{delimited, preceded, tuple};
-use nom::{AsChar, IResult};
+use nom::AsChar;
 use std::fmt;
 use std::hash::Hash;
 use std::net::{

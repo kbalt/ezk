@@ -2,7 +2,7 @@
 
 mod accept;
 mod allow;
-mod auth;
+// mod auth;
 mod call_id;
 mod contact;
 mod content;
@@ -20,18 +20,18 @@ mod via;
 
 pub use accept::Accept;
 pub use allow::Allow;
-pub use auth::{Auth, AuthParam, Authorization, ProxyAuthenticate, WWWAuthenticate};
+// pub use auth::{Auth, AuthParam, Authorization, ProxyAuthenticate, WWWAuthenticate};
 pub use call_id::CallID;
 pub use contact::Contact;
 pub use content::{ContentLength, ContentType};
 pub use cseq::CSeq;
 pub use expires::Expires;
 pub use extensions::{Require, Supported};
-pub use from_to::{From, FromTo, To};
+pub use from_to::FromTo;
 pub use max_fwd::MaxForwards;
 pub use prack::{RAck, RSeq};
 pub use replaces::Replaces;
 pub use retry_after::RetryAfter;
-pub use routing::{RecordRoute, Route, Routing};
+pub use routing::Routing;
 pub use timer::{MinSe, Refresher, SessionExpires};
 pub use via::Via;

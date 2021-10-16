@@ -1,4 +1,9 @@
 #![forbid(unsafe_code)]
+// header::name::Name triggers these because of `Bytes`
+#![allow(
+    clippy::declare_interior_mutable_const,
+    clippy::borrow_interior_mutable_const
+)]
 
 #[macro_use]
 mod macros;

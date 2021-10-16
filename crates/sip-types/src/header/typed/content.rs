@@ -1,107 +1,80 @@
+use crate::header::headers::OneOrMore;
 use crate::header::name::Name;
-use crate::parse::text::{CsvTextSpec, Text};
+use crate::header::{ConstNamed, ExtendValues, HeaderParse};
 use crate::parse::ParseCtx;
-use crate::print::{Print, PrintCtx};
+use crate::print::PrintCtx;
+use anyhow::Result;
 use bytesstr::BytesStr;
-use nom::combinator::map;
-use nom::IResult;
-use std::fmt;
 
-// Content Length
-
-decl_from_str_header!(
+from_str_header! {
     /// `Content-Length` header
     ContentLength,
-    usize,
-    Single,
-    Name::CONTENT_LENGTH
-);
-
-// Content-Type
+    Name::CONTENT_LENGTH,
+    usize
+}
 
 /// `Content-Type` header
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContentType(pub BytesStr);
 
-impl ContentType {
-    pub fn parse(ctx: ParseCtx<'_>) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
-        move |i| map(Text::<CsvTextSpec>::parse(ctx), ContentType)(i)
+impl ConstNamed for ContentType {
+    const NAME: Name = Name::CONTENT_TYPE;
+}
+
+impl HeaderParse for ContentType {
+    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> Result<(&'i str, Self)> {
+        Ok(("", Self(BytesStr::from_parse(ctx.src, i.trim()))))
     }
 }
 
-impl Print for ContentType {
-    fn print(&self, f: &mut fmt::Formatter<'_>, _: PrintCtx<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+impl ExtendValues for ContentType {
+    fn extend_values(&self, ctx: PrintCtx<'_>, values: &mut OneOrMore) {
+        *values = self.create_values(ctx)
+    }
+
+    fn create_values(&self, _: PrintCtx<'_>) -> OneOrMore {
+        OneOrMore::One(self.0.as_str().into())
     }
 }
-
-__impl_header!(ContentType, Single, Name::CONTENT_TYPE);
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::print::AppendCtx;
+    use crate::Headers;
 
     #[test]
-    fn content_length() {
-        let input = BytesStr::from_static("240");
+    fn print_content_length() {
+        let mut headers = Headers::new();
+        headers.insert_named(&ContentLength(120));
+        let headers = headers.to_string();
 
-        let (rem, content_length) =
-            ContentLength::parse(ParseCtx::default(&input))(&input).unwrap();
-
-        assert!(rem.is_empty());
-
-        assert_eq!(content_length.0, 240);
+        assert_eq!(headers, "Content-Length: 120\r\n");
     }
 
     #[test]
-    fn content_length_spaces() {
-        let input = BytesStr::from_static("    240     ");
+    fn print_content_type() {
+        let mut headers = Headers::new();
+        headers.insert_named(&ContentType(BytesStr::from_static("application/sdp")));
+        let headers = headers.to_string();
 
-        let (rem, content_length) =
-            ContentLength::parse(ParseCtx::default(&input))(&input).unwrap();
-
-        assert!(rem.is_empty());
-
-        assert_eq!(content_length.0, 240);
+        assert_eq!(headers, "Content-Type: application/sdp\r\n");
     }
 
     #[test]
-    fn content_length_print() {
-        let content_length = ContentLength(700);
+    fn parse_content_length() {
+        let mut headers = Headers::new();
+        headers.insert(Name::CONTENT_LENGTH, "120");
 
-        assert_eq!(content_length.default_print_ctx().to_string(), "700");
+        let clen: ContentLength = headers.get_named().unwrap();
+        assert_eq!(clen.0, 120);
     }
 
     #[test]
-    fn content_type() {
-        let input = BytesStr::from_static("application/sdp");
+    fn parse_content_type() {
+        let mut headers = Headers::new();
+        headers.insert(Name::CONTENT_TYPE, "application/sdp");
 
-        let (rem, content_length) = ContentType::parse(ParseCtx::default(&input))(&input).unwrap();
-
-        assert!(rem.is_empty());
-
-        assert_eq!(content_length.0, "application/sdp");
-    }
-
-    #[test]
-    fn content_type_spaces() {
-        let input = BytesStr::from_static("        application/sdp   ");
-
-        let (rem, content_type) = ContentType::parse(ParseCtx::default(&input))(&input).unwrap();
-
-        assert!(rem.is_empty());
-
-        assert_eq!(content_type.0, "application/sdp");
-    }
-
-    #[test]
-    fn content_type_print() {
-        let content_type = ContentType(BytesStr::from_static("application/sdp"));
-
-        assert_eq!(
-            content_type.default_print_ctx().to_string(),
-            "application/sdp"
-        );
+        let ctype: ContentType = headers.get_named().unwrap();
+        assert_eq!(ctype.0, "application/sdp");
     }
 }

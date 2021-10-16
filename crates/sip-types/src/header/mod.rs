@@ -1,238 +1,162 @@
 //! Contains everything header related
 
-use crate::parse::Parser;
+use crate::parse::{ParseCtx, Parser};
 use crate::print::PrintCtx;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bytesstr::BytesStr;
+use headers::OneOrMore;
 use name::Name;
 
 mod error;
 pub(crate) mod headers;
+pub mod multiple;
 pub(crate) mod name;
 
 pub use error::HeaderError;
 
-/// Describes how multiple header values have to be treated.
+// ==== PARSE TRAITS ====
+
+/// Assign a constant header name to a type.
 ///
-/// There is (at least) two types of SIP headers.
-///
-/// The ones that may have multiple values in one or more header-values and are comma separated. (CSV)
-///
-/// And the ones that may not be comma separated and may be spread over multiple header-values. (Single)
-///
-/// This information is only used by the [Header] implementation of [Vec] in this crate.
-#[derive(Copy, Clone)]
-pub enum Kind {
-    CSV,
-    Single,
+/// Is used by [`Headers`]'s `(get/take)_named` API so no
+/// name has to be provided by the caller.
+pub trait ConstNamed {
+    const NAME: Name;
 }
 
-/// Trait for typed headers.
-/// It is used to en/decode headers into and from [BytesStr] stored inside [Headers].
-///
-/// [Headers]: headers::Headers
-pub trait Header: std::fmt::Debug {
-    type Kind;
-
-    /// Returns the [Name] of the Header.
-    fn name() -> &'static Name;
-
-    /// Returns the [Kind] of the header see its documentation for more information.
-    fn kind() -> Self::Kind;
-
-    /// Decode the header from one or more Values inside the iterator.
-    /// Bytes taken from the iterator but not used when parsing should be returned.
-    fn decode<'i, I>(parser: Parser, values: &mut I) -> Result<(Option<&'i str>, Self)>
+/// Decode a header from one or more values. Used to parse headers from [`Headers`].
+pub trait DecodeValues: Sized {
+    /// Decode a header from a iterator of [`BytesStr`].
+    ///
+    /// Implementations should assume that `values` will always yield at least one value
+    fn decode<'i, I>(parser: Parser, values: &mut I) -> Result<(&'i str, Self)>
     where
-        I: Iterator<Item = &'i BytesStr>,
-        Self: Sized;
-
-    /// Encode the Header into a collection containing values.
-    fn encode<E>(&self, ctx: PrintCtx<'_>, ext: &mut E)
-    where
-        E: Extend<BytesStr>;
+        I: Iterator<Item = &'i BytesStr>;
 }
 
-#[doc(hidden)]
-#[macro_export]
-macro_rules! __impl_header {
-    ($ty:ty, $kind:ident, $name:expr) => {
-        impl $crate::header::Header for $ty {
-            type Kind = $crate::header::Kind;
-
-            #[inline]
-            fn name() -> &'static Name {
-                static MY_NAME: $crate::Name = $name;
-                &MY_NAME
-            }
-
-            fn decode<'i, I: Iterator<Item = &'i bytesstr::BytesStr>>(
-                parser: $crate::parse::Parser,
-                values: &mut I,
-            ) -> anyhow::Result<(Option<&'i str>, Self)>
-            where
-                Self: Sized,
-            {
-                use anyhow::Context as _;
-                let val = values.next().context("no items to decode in iterator")?;
-
-                let ctx = $crate::parse::ParseCtx::new(val.as_ref(), parser);
-
-                let parse_fn = <$ty>::parse(ctx);
-
-                let (rem, hdr) =
-                    parse_fn(val.as_ref()).map_err(|_| anyhow::anyhow!("invalid input"))?;
-
-                if rem.is_empty() {
-                    Ok((None, hdr))
-                } else {
-                    Ok((Some(rem), hdr))
-                }
-            }
-
-            fn encode<E: Extend<bytesstr::BytesStr>>(
-                &self,
-                ctx: $crate::print::PrintCtx<'_>,
-                ext: &mut E,
-            ) {
-                ext.extend(::std::iter::once(
-                    $crate::print::AppendCtx::print_ctx(self, ctx)
-                        .to_string()
-                        .into(),
-                ))
-            }
-
-            fn kind() -> $crate::header::Kind {
-                $crate::header::Kind::$kind
-            }
-        }
-    };
+/// Simplified parse trait which plays nicer with nom parsers. Should be implemented
+/// by any header that only cares about a single header value.
+pub trait HeaderParse: Sized {
+    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> Result<(&'i str, Self)>;
 }
 
-macro_rules! impl_wrap_header {
-    ($(#[$meta:meta])* $to_wrap:ty, $wrapper:ident, $kind:ident, $name:expr) => {
-        impl_wrap_header!($(#[$meta])* $to_wrap, $to_wrap, $wrapper, $kind, $name);
-    };
-    ($(#[$meta:meta])* $to_parse:ty, $to_wrap:ty, $wrapper:ident, $kind:ident, $name:expr) => {
-        #[derive(Debug, Clone)]
-        $(#[$meta])*
-        pub struct $wrapper(pub $to_wrap);
+// ==== PRINT TRAITS ====
 
-        impl $crate::print::Print for $wrapper {
-            fn print(
-                &self,
-                f: &mut ::std::fmt::Formatter<'_>,
-                ctx: $crate::print::PrintCtx<'_>,
-            ) -> ::std::fmt::Result {
-                $crate::print::Print::print(&self.0, f, ctx)
-            }
-        }
-
-        impl $wrapper {
-            pub(crate) fn parse<'p>(ctx: $crate::parse::ParseCtx<'p>) -> impl Fn(&'p str) -> nom::IResult<&'p str, Self> + 'p {
-                move |i| nom::combinator::map(<$to_parse>::parse(ctx), $wrapper)(i)
-            }
-        }
-
-        impl<T: Into<$to_wrap>> std::convert::From<T> for $wrapper {
-            fn from(t: T) -> $wrapper {
-                $wrapper(t.into())
-            }
-        }
-
-        impl std::ops::Deref for $wrapper {
-            type Target = $to_wrap;
-
-            fn deref(&self) -> &Self::Target {
-                &self.0
-            }
-        }
-
-        impl std::ops::DerefMut for $wrapper {
-            fn deref_mut(&mut self) -> &mut Self::Target {
-                &mut self.0
-            }
-        }
-
-        $crate::__impl_header!($wrapper, $kind, $name);
-    };
+/// Assign a dynamic header name to a type.
+/// Used for [`Headers`]'s `insert_named(_front)` API.
+///
+/// Can be used for enum holding different header variants.
+pub trait DynNamed {
+    fn name(&self) -> Name;
 }
 
-/// Declare a header type that just wraps a single type which implements [FromStr].
-///
-/// [FromStr]: std::str::FromStr
-///
-/// # Example
-///
-/// ```
-/// use ezk_sip_types::{decl_from_str_header, Headers, Name};
-/// use bytesstr::BytesStr;
-///
-/// decl_from_str_header!(
-///     #[derive(PartialEq)]    // optional meta like derives or doc comments
-///     Custom,                 // type name
-///     u32,                    // the type to be wrapped
-///     Single,                 // the kind of header either `Single` or `CSV`
-///     Name::custom("Custom", &["custom"])   // and the name
-/// );
-///
-/// let custom = Custom(120);
-///
-/// let mut headers = Headers::new();
-///
-/// headers.insert_type(&custom);
-///
-/// assert_eq!(headers.get::<Custom>().unwrap(), Custom(120));
-///
-/// ```
-#[macro_export]
-macro_rules! decl_from_str_header {
-    ($(#[$meta:meta])* $name:ident, $from_str:ty, $kind:ident, $hdr_name:expr) => {
-        #[derive(Debug, Clone)]
-        $(#[$meta])*
-        pub struct $name(pub $from_str);
-
-        impl $crate::print::Print for $name {
-            fn print(
-                &self,
-                f: &mut ::std::fmt::Formatter<'_>,
-                _: $crate::print::PrintCtx<'_>,
-            ) -> ::std::fmt::Result {
-                ::std::fmt::Display::fmt(&self.0, f)
-            }
-        }
-
-        impl $name {
-            pub(crate) fn parse(_: $crate::parse::ParseCtx<'_>) -> impl Fn(&str) -> nom::IResult<&str, Self> {
-                decl_from_str_header!(@impl_ $name, $kind)
-            }
-        }
-
-        $crate::__impl_header!($name, $kind, $hdr_name);
-    };
-    (@impl_ $name:ident, CSV) => {
-        move |i| {
-            nom::combinator::map(
-                nom::combinator::map_res(
-                    nom::bytes::complete::take_while(|c: char| c != ','),
-                    |i| std::str::FromStr::from_str(str::trim(i)).map(|item| ("", item))
-                ),
-                |(_, item)| $name(item)
-            )(i)
-        }
-    };
-    (@impl_ $name:ident, Single) => {
-        move |i| {
-            nom::combinator::map(
-                nom::combinator::map_res(
-                    |i| Ok(("", str::trim(i))),
-                    std::str::FromStr::from_str,
-                ),
-                $name,
-            )(i)
-        }
+impl<T: ConstNamed> DynNamed for T {
+    fn name(&self) -> Name {
+        T::NAME
     }
 }
 
-pub mod multiple;
+/// Insert a header type into [`Header`].
+pub trait ExtendValues {
+    /// Called when there already existing values.
+    ///
+    /// Implementations may want to override or extend
+    /// `values`, depending on the type of header.
+    fn extend_values(&self, ctx: PrintCtx<'_>, values: &mut OneOrMore);
+
+    /// Called when there are no existing values.
+    ///
+    /// Must generate header value to be inserted into [`Headers`].
+    fn create_values(&self, ctx: PrintCtx<'_>) -> OneOrMore;
+}
+
+// ==== BLANKED IMPL ===-
+
+impl<H: HeaderParse> DecodeValues for H {
+    fn decode<'i, I>(parser: Parser, values: &mut I) -> Result<(&'i str, Self)>
+    where
+        I: Iterator<Item = &'i BytesStr>,
+    {
+        let value = values.next().context("no items in values")?;
+
+        let ctx = ParseCtx {
+            src: value.as_ref(),
+            parser,
+        };
+
+        H::parse(ctx, value.as_str())
+    }
+}
+
+macro_rules! csv_header {
+    ($(#[$meta:meta])* $struct_name:ident, $wrapping:ty, $header_name:expr) => {
+        $(#[$meta])*
+        #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub struct $struct_name(pub $wrapping);
+
+        impl ConstNamed for $struct_name {
+            const NAME: Name = $header_name;
+        }
+
+        impl HeaderParse for $struct_name {
+            fn parse<'i>(ctx: ParseCtx, i: &'i str) -> Result<(&'i str, Self)> {
+                if let Some(comma_idx) = i.find(',') {
+                    Ok((
+                        &i[comma_idx..],
+                        Self(<$wrapping>::from_parse(ctx.src, &i[..comma_idx])),
+                    ))
+                } else {
+                    Ok(("", Self(<$wrapping>::from_parse(ctx.src, i))))
+                }
+            }
+        }
+
+        impl ExtendValues for $struct_name {
+            fn extend_values(&self, _: PrintCtx<'_>, values: &mut OneOrMore) {
+                let value = match values {
+                    OneOrMore::One(value) => value,
+                    OneOrMore::More(values) => {
+                        values.last_mut().expect("empty OneOrMore::More variant")
+                    }
+                };
+
+                *value = format!("{}, {}", value, self.0).into();
+            }
+
+            fn create_values(&self, _: PrintCtx<'_>) -> OneOrMore {
+                OneOrMore::One(self.0.to_string().into())
+            }
+        }
+    };
+}
+
+macro_rules! from_str_header {
+    ($(#[$meta:meta])* $struct_name:ident, $header_name:expr, $from_str_ty:ty) => {
+        $(#[$meta])*
+        #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub struct $struct_name(pub $from_str_ty);
+
+        impl ConstNamed for $struct_name {
+            const NAME: Name =  $header_name;
+        }
+
+        impl HeaderParse for $struct_name {
+            fn parse<'i>(_: ParseCtx, i: &'i str) -> Result<(&'i str, Self)> {
+                Ok(("", Self(i.trim().parse()?)))
+            }
+        }
+
+        impl ExtendValues for $struct_name {
+            fn extend_values(&self, ctx: PrintCtx<'_>, values: &mut OneOrMore) {
+                *values = self.create_values(ctx)
+            }
+
+            fn create_values(&self, _: PrintCtx<'_>) -> OneOrMore {
+                OneOrMore::One(self.0.to_string().into())
+            }
+        }
+
+    }
+}
+
 pub mod typed;

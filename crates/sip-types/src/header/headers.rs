@@ -1,10 +1,9 @@
-use super::HeaderError;
+use super::{ConstNamed, DecodeValues, DynNamed, ExtendValues, HeaderError};
 use crate::header::name::Name;
-use crate::header::Header;
 use crate::parse::Parser;
+use crate::print::{AppendCtx, Print, PrintCtx};
 use bytesstr::BytesStr;
-use std::iter::once;
-use std::iter::FromIterator;
+use std::iter::{once, FromIterator};
 use std::mem::take;
 use std::{fmt, slice};
 
@@ -12,16 +11,26 @@ use std::{fmt, slice};
 /// The headers are stored as [BytesStr] under its respective [Name].
 ///
 /// Internally it is a `Vec`-backed multimap to keep insertion order
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Headers {
+    parser: Parser,
     entries: Vec<Entry>,
+}
+
+impl fmt::Debug for Headers {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Headers")
+            .field("entries", &self.entries)
+            .finish()
+    }
 }
 
 impl Headers {
     /// Returns a new empty [Headers]
     #[inline]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Headers {
+            parser: Parser::default(),
             entries: Vec::new(),
         }
     }
@@ -30,90 +39,56 @@ impl Headers {
     #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
         Headers {
+            parser: Parser::default(),
             entries: Vec::with_capacity(capacity),
         }
     }
 
-    /// Returns if the [Name] of `H`'s [Header] implementation is contain inside the map.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use ezk_sip_types::Headers;
-    /// use ezk_sip_types::header::typed::Expires;
-    ///
-    /// let mut headers = Headers::new();
-    ///
-    /// headers.insert_type(&Expires(120));
-    ///
-    /// assert!(headers.contains::<Expires>());
-    /// ```
-    #[inline]
-    pub fn contains<H: Header>(&mut self) -> bool {
-        self.entries.iter().any(|entry| &entry.name == H::name())
+    /// Set the [`Parser`] to be used when parsing types.
+    pub fn set_parser(&mut self, parser: Parser) {
+        self.parser = parser;
     }
 
-    /// Prints the header into a BytesStr and stores it
-    /// (if not already present) at the start of the buffer
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use ezk_sip_types::Headers;
-    /// use ezk_sip_types::header::typed::{Expires, MaxForwards};
-    ///
-    /// let mut headers = Headers::new();
-    ///
-    /// // insert expires header first
-    /// headers.insert_type(&Expires(120));
-    ///
-    /// // insert Max-Forwards in front
-    /// headers.insert_type_front(&MaxForwards(70));
-    ///
-    /// // test order
-    /// assert_eq!(headers.to_string(), "Max-Forwards: 70\r\nExpires: 120\r\n");
-    /// ```
+    /// Returns if a header with the given name is inside the map.
     #[inline]
-    pub fn insert_type_front<H: Header>(&mut self, header: &H) {
-        if let Some(Entry { values, .. }) = self.entry_mut(H::name()) {
-            header.encode(Default::default(), values);
-        } else if let Some(values) = Values::encode(header) {
+    pub fn contains(&self, name: &Name) -> bool {
+        self.entries.iter().any(|entry| &entry.name == name)
+    }
+
+    /// Inserts `header` using its [`HeaderNamed`] and [`InsertIntoHeaders`] implementation to the front of the list
+    #[inline]
+    pub fn insert_named_front<H: DynNamed + ExtendValues>(&mut self, header: &H) {
+        self.insert_type_front(header.name(), header)
+    }
+
+    /// Inserts `header` using its [`InsertIntoHeaders`] implementation to the front of the list
+    #[inline]
+    pub fn insert_type_front<H: ExtendValues>(&mut self, name: Name, header: &H) {
+        let ctx = PrintCtx::default();
+
+        if let Some(Entry { values, .. }) = self.entry_mut(&name) {
+            header.extend_values(ctx, values);
+        } else {
             self.entries.insert(
                 0,
                 Entry {
-                    name: H::name().clone(),
-                    values,
+                    name,
+                    values: header.create_values(ctx),
                 },
             );
         }
     }
 
-    /// Bypass the requirement for a [Header] implementation and insert a [BytesStr] directly
-    /// at the beginning of a message
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use ezk_sip_types::Headers;
-    ///
-    /// let mut headers = Headers::new();
-    ///
-    /// // insert expires header first
-    /// headers.insert("expires", "120");
-    ///
-    /// // insert Max-Forwards in front
-    /// headers.insert_front("max-forwards", "70");
-    ///
-    /// // test order
-    /// assert_eq!(headers.to_string(), "Max-Forwards: 70\r\nExpires: 120\r\n");
-    /// ```
+    /// Inserts a header value with the given name to the front of the list
     #[inline]
     pub fn insert_front<N, V>(&mut self, name: N, value: V)
     where
         N: Into<Name>,
-        V: Into<BytesStr>,
+        V: Print,
     {
+        let ctx = PrintCtx::default();
         let name = name.into();
+        let value = value.print_ctx(ctx).to_string();
 
         if let Some(Entry { values, .. }) = self.entry_mut(&name) {
             values.push(value.into());
@@ -122,280 +97,158 @@ impl Headers {
                 0,
                 Entry {
                     name,
-                    values: Values::One(value.into()),
+                    values: OneOrMore::One(value.into()),
                 },
             );
         }
     }
 
-    /// Prints the header into a BytesStr and stores it.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use ezk_sip_types::Headers;
-    /// use ezk_sip_types::header::typed::Expires;
-    ///
-    /// let mut headers = Headers::new();
-    ///
-    /// let expires = Expires(120);
-    ///
-    /// assert!(headers.get::<Expires>().is_err());
-    ///
-    /// headers.insert_type(&expires);
-    ///
-    /// assert_eq!(headers.get::<Expires>().unwrap(), expires);
-    /// ```
+    /// Inserts `header` using its [`DynNamed`] and [`ExtendValues`] implementation to the list
     #[inline]
-    pub fn insert_type<H: Header>(&mut self, header: &H) {
-        if let Some(Entry { values, .. }) = self.entry_mut(H::name()) {
-            header.encode(Default::default(), values);
-        } else if let Some(values) = Values::encode(header) {
+    pub fn insert_named<H: DynNamed + ExtendValues>(&mut self, header: &H) {
+        self.insert_type(header.name(), header)
+    }
+
+    /// Inserts `header` using its [`ExtendValues`] implementation to the list
+    #[inline]
+    pub fn insert_type<H: ExtendValues>(&mut self, name: Name, header: &H) {
+        let ctx = PrintCtx::default();
+
+        if let Some(Entry { values, .. }) = self.entry_mut(&name) {
+            header.extend_values(ctx, values);
+        } else {
             self.entries.push(Entry {
-                name: H::name().clone(),
-                values,
+                name,
+                values: header.create_values(ctx),
             });
         }
     }
 
-    /// Bypass the requirement for a [Header] implementation and insert a [BytesStr] directly
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use ezk_sip_types::{Headers, Name};
-    /// use ezk_sip_types::header::typed::Expires;
-    ///
-    /// let mut headers = Headers::new();
-    ///
-    /// assert!(headers.get::<Expires>().is_err());
-    ///
-    /// headers.insert("expires", "120");
-    ///
-    /// assert_eq!(headers.get::<Expires>().unwrap(), Expires(120));
-    /// ```
+    /// Insert a header value with the given name to end of the list
     #[inline]
     pub fn insert<N, V>(&mut self, name: N, value: V)
     where
         N: Into<Name>,
-        V: Into<BytesStr>,
+        V: Print,
     {
+        let ctx = PrintCtx::default();
         let name = name.into();
+        let value = value.print_ctx(ctx).to_string();
 
         if let Some(Entry { values, .. }) = self.entry_mut(&name) {
             values.push(value.into());
         } else {
             self.entries.push(Entry {
                 name,
-                values: Values::One(value.into()),
+                values: OneOrMore::One(value.into()),
             });
         }
     }
 
-    /// Remove a header using the type parameter `H`.
-    ///
-    /// If present it returns all [BytesStr]s saved under the [Header]'s name
-    ///
-    /// To remove a header and parse it into the type `H` use [Headers::take].
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use ezk_sip_types::Headers;
-    /// use ezk_sip_types::header::typed::Expires;
-    ///
-    /// let mut headers = Headers::new();
-    ///
-    /// headers.insert_type(&Expires(120));
-    ///
-    /// assert_eq!(headers.remove_type::<Expires>(), Some(vec!["120".into()]));
-    /// ```
-    #[inline]
-    pub fn remove_type<H: Header>(&mut self) -> Option<Vec<BytesStr>> {
-        self.remove(H::name())
-    }
-
-    /// Remove all headers with the given `name`
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use ezk_sip_types::{Headers, Name};
-    /// use ezk_sip_types::header::typed::Expires;
-    ///
-    /// let mut headers = Headers::new();
-    ///
-    /// headers.insert_type(&Expires(120));
-    ///
-    /// assert_eq!(headers.remove(&Name::EXPIRES), Some(vec!["120".into()]));
-    /// ```
+    /// Remove all headers with the given name
     #[inline]
     pub fn remove(&mut self, name: &Name) -> Option<Vec<BytesStr>> {
         match remove_where(&mut self.entries, |Entry { name: n, .. }| name == n)?.values {
-            Values::One(v) => Some(vec![v]),
-            Values::Many(v) => Some(v),
+            OneOrMore::One(v) => Some(vec![v]),
+            OneOrMore::More(v) => Some(v),
         }
     }
 
     /// Returns a parsed header `H` and removes it from the map.
-    ///
-    /// If a header is present but errors during parsing th error will be discarded and returns None.
-    /// To handle errors use [Headers::try_take]
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use ezk_sip_types::{Headers, Name};
-    /// use ezk_sip_types::header::typed::Expires;
-    ///
-    /// let mut headers = Headers::new();
-    ///
-    /// headers.insert_type(&Expires(120));
-    ///
-    /// assert!(headers.take::<Expires>().is_some());
-    /// assert!(headers.take::<Expires>().is_none());
-    /// ```
     #[inline]
-    pub fn take<H: Header>(&mut self) -> Option<H> {
-        self.take2(Default::default())
-    }
-
-    /// Same as [Headers::take] but with custom parser.
-    #[inline]
-    pub fn take2<H: Header>(&mut self, parser: Parser) -> Option<H> {
-        self.try_take2(parser).map(Result::ok).flatten()
+    pub fn take_named<H: ConstNamed + DecodeValues>(&mut self) -> Option<H> {
+        self.try_take_named().map(Result::ok).flatten()
     }
 
     /// Returns a parsed header `H` and removes it from the map.
-    /// Returns `None` instead an HeaderError if header is not present.
+    /// Returns `None` instead of a HeaderError if the header is not present.
     #[inline]
-    pub fn try_take<H: Header>(&mut self) -> Option<Result<H, HeaderError>> {
-        self.try_take2(Default::default())
-    }
-
-    /// Same as [Headers::try_take] but with custom parser.
-    #[inline]
-    pub fn try_take2<H: Header>(&mut self, parser: Parser) -> Option<Result<H, HeaderError>> {
-        remove_where(&mut self.entries, |Entry { name, .. }| name == H::name())
-            .map(|Entry { values, .. }| values.decode(parser))
+    pub fn try_take_named<H: ConstNamed + DecodeValues>(
+        &mut self,
+    ) -> Option<Result<H, HeaderError>> {
+        remove_where(&mut self.entries, |Entry { name, .. }| *name == H::NAME)
+            .map(|Entry { values, .. }| values.decode(H::NAME, self.parser))
     }
 
     /// Returns a parsed header `H`.
-    ///
-    /// If a header is present but errors during parsing th error will be discarded and returns None.
-    /// To handle errors use [Headers::try_get]
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use ezk_sip_types::{Headers, Name};
-    /// use ezk_sip_types::header::typed::Expires;
-    ///
-    /// let mut headers = Headers::new();
-    ///
-    /// headers.insert_type(&Expires(120));
-    ///
-    /// assert_eq!(headers.get::<Expires>().unwrap().0, 120);
-    /// ```
     #[inline]
-    pub fn get<H: Header>(&self) -> Result<H, HeaderError> {
-        self.get2(Default::default())
-    }
-
-    /// Same as [Headers::get] but with custom parser.
-    #[inline]
-    pub fn get2<H: Header>(&self, parser: Parser) -> Result<H, HeaderError> {
-        match self.try_get2(parser) {
+    pub fn get_named<H: ConstNamed + DecodeValues>(&self) -> Result<H, HeaderError> {
+        match self.try_get_named() {
             Some(res) => res,
-            None => Err(HeaderError::missing(H::name().clone())),
+            None => Err(HeaderError::missing(H::NAME)),
         }
     }
 
-    /// Returns a parsed header `H`. Returns `None` instead an HeaderError if header is not present.
+    /// Returns a parsed header `H`. Returns `None` instead of an
+    /// HeaderError if the header is not present.
     #[inline]
-    pub fn try_get<H: Header>(&self) -> Option<Result<H, HeaderError>> {
-        self.try_get2(Default::default())
+    pub fn try_get_named<H: ConstNamed + DecodeValues>(&self) -> Option<Result<H, HeaderError>> {
+        Some(self.entry(&H::NAME)?.values.decode(H::NAME, self.parser))
     }
 
-    /// Same as [Headers::try_get] but with custom parser.
+    /// Takes a closure which edits a named header type.
     #[inline]
-    pub fn try_get2<H: Header>(&self, parser: Parser) -> Option<Result<H, HeaderError>> {
-        Some(self.entry(H::name())?.values.decode(parser))
+    pub fn edit_named<H, F>(&mut self, edit: F) -> Result<(), HeaderError>
+    where
+        H: ConstNamed + DecodeValues + ExtendValues,
+        F: FnOnce(&mut H),
+    {
+        self.edit(H::NAME, edit)
+    }
+
+    // =======================================================
+
+    /// Returns a parsed header `H` and removes it from the map.
+    #[inline]
+    pub fn take<H: DecodeValues>(&mut self, name: Name) -> Option<H> {
+        self.try_take(name).map(Result::ok).flatten()
+    }
+
+    /// Returns a parsed header `H` and removes it from the map.
+    /// Returns `None` instead if a HeaderError if header is not present.
+    #[inline]
+    pub fn try_take<H: DecodeValues>(&mut self, name: Name) -> Option<Result<H, HeaderError>> {
+        remove_where(&mut self.entries, |entry| entry.name == name)
+            .map(|Entry { values, .. }| values.decode(name, self.parser))
+    }
+
+    /// Returns a parsed header `H`.
+    #[inline]
+    pub fn get<H: DecodeValues>(&self, name: Name) -> Result<H, HeaderError> {
+        match self.try_get(name.clone()) {
+            Some(res) => res,
+            None => Err(HeaderError::missing(name)),
+        }
+    }
+
+    /// Returns a parsed header `H`. Returns `None` instead a HeaderError if header is not present.
+    #[inline]
+    pub fn try_get<H: DecodeValues>(&self, name: Name) -> Option<Result<H, HeaderError>> {
+        Some(self.entry(&name)?.values.decode(name, self.parser))
     }
 
     /// Takes a closure which edits a header.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use ezk_sip_types::{Headers, Name};
-    /// use ezk_sip_types::header::typed::Expires;
-    ///
-    /// let mut headers = Headers::new();
-    ///
-    /// headers.insert_type(&Expires(120));
-    ///
-    /// assert_eq!(headers.get::<Expires>().unwrap(), Expires(120));
-    ///
-    /// headers.edit(|expires: &mut Expires| {
-    ///     expires.0 = 240;
-    /// });
-    ///
-    /// assert_eq!(headers.get::<Expires>().unwrap(), Expires(240));
-    /// ```
     #[inline]
-    pub fn edit<H, F>(&mut self, edit: F) -> Result<(), HeaderError>
+    pub fn edit<H, F>(&mut self, name: Name, edit: F) -> Result<(), HeaderError>
     where
-        H: Header,
+        H: DecodeValues + ExtendValues,
         F: FnOnce(&mut H),
     {
-        self.edit2(Default::default(), edit)
-    }
-
-    /// Same as [Headers::edit] but with custom parser.
-    #[inline]
-    pub fn edit2<H, F>(&mut self, parser: Parser, edit: F) -> Result<(), HeaderError>
-    where
-        H: Header,
-        F: FnOnce(&mut H),
-    {
+        let parser = self.parser;
         let entry = self
-            .entry_mut(H::name())
-            .ok_or_else(|| HeaderError::missing(H::name().clone()))?;
+            .entry_mut(&name)
+            .ok_or_else(|| HeaderError::missing(name.clone()))?;
 
-        let mut header = entry.values.decode(parser)?;
+        let mut header = entry.values.decode(name, parser)?;
 
         (edit)(&mut header);
 
-        if let Some(values) = Values::encode(&header) {
-            entry.values = values;
-        } else {
-            self.remove(H::name());
-        }
+        entry.values = H::create_values(&header, Default::default());
 
         Ok(())
     }
 
     /// Clones all headers with `name` into another [Headers].
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use ezk_sip_types::{Headers, Name};
-    /// use ezk_sip_types::header::typed::Expires;
-    ///
-    /// let mut headers1 = Headers::new();
-    /// let mut headers2 = Headers::new();
-    ///
-    /// headers1.insert_type(&Expires(120));
-    ///
-    /// assert_eq!(headers1.get::<Expires>().unwrap(), Expires(120));
-    /// assert!(headers2.get::<Expires>().is_err());
-    ///
-    /// headers1.clone_into(&mut headers2, Name::EXPIRES).unwrap();
-    ///
-    /// assert_eq!(headers2.get::<Expires>().unwrap(), Expires(120));
-    /// ```
     #[inline]
     pub fn clone_into(&self, dest: &mut Self, name: Name) -> Result<(), HeaderError> {
         let Entry { values, .. } = self
@@ -403,10 +256,10 @@ impl Headers {
             .ok_or_else(|| HeaderError::missing(name.clone()))?;
 
         match values {
-            Values::One(val) => {
+            OneOrMore::One(val) => {
                 dest.insert(name, val.clone());
             }
-            Values::Many(values) => {
+            OneOrMore::More(values) => {
                 for val in values {
                     dest.insert(name.clone(), val.clone());
                 }
@@ -417,31 +270,11 @@ impl Headers {
     }
 
     /// Drain all headers into another [Headers].
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use ezk_sip_types::{Headers, Name};
-    /// use ezk_sip_types::header::typed::Expires;
-    ///
-    /// let mut headers1 = Headers::new();
-    /// let mut headers2 = Headers::new();
-    ///
-    /// headers1.insert_type(&Expires(120));
-    ///
-    /// assert_eq!(headers1.get::<Expires>().unwrap(), Expires(120));
-    /// assert!(headers2.get::<Expires>().is_err());
-    ///
-    /// headers1.drain_into(&mut headers2);
-    ///
-    /// assert!(headers1.get::<Expires>().is_err());
-    /// assert_eq!(headers2.get::<Expires>().unwrap(), Expires(120));
-    /// ```
     pub fn drain_into(&mut self, dst: &mut Self) {
         for Entry { name, values } in self.entries.drain(..) {
             match values {
-                Values::One(value) => dst.insert(name, value),
-                Values::Many(values) => values
+                OneOrMore::One(value) => dst.insert(name, value),
+                OneOrMore::More(values) => values
                     .into_iter()
                     .for_each(|value| dst.insert(name.clone(), value)),
             }
@@ -483,8 +316,8 @@ impl Headers {
                 let entry = self.entries.next()?;
 
                 match &entry.values {
-                    Values::One(val) => Some((&entry.name, val)),
-                    Values::Many(values) => {
+                    OneOrMore::One(val) => Some((&entry.name, val)),
+                    OneOrMore::More(values) => {
                         let mut iter = values.iter();
                         let ret = iter.next().expect("empty vec in values");
 
@@ -532,76 +365,48 @@ impl Extend<(Name, BytesStr)> for Headers {
 #[derive(Debug, PartialEq)]
 struct Entry {
     name: Name,
-    values: Values,
+    values: OneOrMore,
 }
 
 #[derive(Debug, PartialEq)]
-enum Values {
+pub enum OneOrMore {
     One(BytesStr),
-    Many(Vec<BytesStr>),
+    More(Vec<BytesStr>),
 }
 
-impl Values {
-    fn push(&mut self, value: BytesStr) {
+impl OneOrMore {
+    pub fn push(&mut self, value: BytesStr) {
         match self {
-            Values::One(existing_value) => {
+            OneOrMore::One(existing_value) => {
                 let existing_value = take(existing_value);
-                *self = Values::Many(vec![existing_value, value]);
+                *self = OneOrMore::More(vec![existing_value, value]);
             }
-            Values::Many(vec) => vec.push(value),
+            OneOrMore::More(vec) => vec.push(value),
         }
     }
 
-    fn decode<H: Header>(&self, parser: Parser) -> Result<H, HeaderError> {
+    fn decode<H: DecodeValues>(&self, name: Name, parser: Parser) -> Result<H, HeaderError> {
         match &self {
-            Values::One(v) => H::decode(parser, &mut once(v)),
-            Values::Many(v) => H::decode(parser, &mut v.iter()),
+            OneOrMore::One(v) => H::decode(parser, &mut once(v)),
+            OneOrMore::More(v) => H::decode(parser, &mut v.iter()),
         }
         .map(|(_, h)| h)
-        .map_err(|err| HeaderError::malformed(H::name().clone(), err))
-    }
-
-    fn encode<H: Header>(header: &H) -> Option<Self> {
-        enum ValuesExt {
-            Empty,
-            One(BytesStr),
-            Many(Vec<BytesStr>),
-        }
-
-        impl Extend<BytesStr> for ValuesExt {
-            fn extend<T: IntoIterator<Item = BytesStr>>(&mut self, iter: T) {
-                iter.into_iter().for_each(|value| match self {
-                    ValuesExt::Empty => *self = ValuesExt::One(value),
-                    ValuesExt::One(bytes) => *self = ValuesExt::Many(vec![take(bytes), value]),
-                    ValuesExt::Many(vec) => vec.push(value),
-                });
-            }
-        }
-
-        let mut values_ext = ValuesExt::Empty;
-
-        H::encode(header, Default::default(), &mut values_ext);
-
-        match values_ext {
-            ValuesExt::Empty => None,
-            ValuesExt::One(value) => Some(Values::One(value)),
-            ValuesExt::Many(values) => Some(Values::Many(values)),
-        }
+        .map_err(|err| HeaderError::malformed(name, err))
     }
 }
 
-impl Extend<BytesStr> for Values {
+impl Extend<BytesStr> for OneOrMore {
     fn extend<T: IntoIterator<Item = BytesStr>>(&mut self, iter: T) {
         match self {
-            Values::One(value) => {
+            OneOrMore::One(value) => {
                 let mut vec = Vec::from_iter(iter);
 
                 if !vec.is_empty() {
                     vec.insert(0, take(value));
-                    *self = Values::Many(vec)
+                    *self = OneOrMore::More(vec)
                 }
             }
-            Values::Many(vec) => vec.extend(iter),
+            OneOrMore::More(vec) => vec.extend(iter),
         }
     }
 }
@@ -622,31 +427,13 @@ mod test {
     fn header_insert() {
         let mut headers = Headers::new();
 
-        headers.insert_type(&MaxForwards(70));
+        headers.insert_named(&MaxForwards(70));
 
         assert_eq!(headers.entries.len(), 1);
         assert_eq!(headers.entries[0].name, Name::MAX_FORWARDS);
         assert_eq!(
             headers.entries[0].values,
-            Values::One(BytesStr::from_static("70"))
-        );
-    }
-
-    #[test]
-    fn header_insert_twice() {
-        let mut headers = Headers::new();
-
-        headers.insert_type(&MaxForwards(70));
-        headers.insert_type(&MaxForwards(70));
-
-        assert_eq!(headers.entries.len(), 1);
-        assert_eq!(headers.entries[0].name, Name::MAX_FORWARDS);
-        assert_eq!(
-            headers.entries[0].values,
-            Values::Many(vec![
-                BytesStr::from_static("70"),
-                BytesStr::from_static("70")
-            ])
+            OneOrMore::One(BytesStr::from_static("70"))
         );
     }
 
@@ -660,7 +447,7 @@ mod test {
         assert_eq!(headers.entries[0].name, Name::MAX_FORWARDS);
         assert_eq!(
             headers.entries[0].values,
-            Values::One(BytesStr::from_static("70"))
+            OneOrMore::One(BytesStr::from_static("70"))
         );
     }
 
@@ -675,7 +462,7 @@ mod test {
         assert_eq!(headers.entries[0].name, Name::MAX_FORWARDS);
         assert_eq!(
             headers.entries[0].values,
-            Values::Many(vec![
+            OneOrMore::More(vec![
                 BytesStr::from_static("70"),
                 BytesStr::from_static("70")
             ])
@@ -701,7 +488,7 @@ mod test {
         let mut headers = Headers::new();
         headers.insert(Name::MAX_FORWARDS, BytesStr::from_static("70"));
 
-        let max_fwd: MaxForwards = headers.take().unwrap();
+        let max_fwd: MaxForwards = headers.take_named().unwrap();
 
         assert!(headers.entries.is_empty());
         assert_eq!(max_fwd.0, 70);
@@ -712,7 +499,7 @@ mod test {
         let mut headers = Headers::new();
         headers.insert(Name::MAX_FORWARDS, BytesStr::from_static("70"));
 
-        let max_fwd: MaxForwards = headers.get().unwrap();
+        let max_fwd: MaxForwards = headers.get_named().unwrap();
 
         assert_eq!(headers.entries.len(), 1);
         assert_eq!(max_fwd.0, 70);
@@ -725,7 +512,7 @@ mod test {
         headers.insert(Name::MAX_FORWARDS, BytesStr::from_static("120"));
         headers.insert(Name::MAX_FORWARDS, BytesStr::from_static("140"));
 
-        let max_fwd: Vec<MaxForwards> = headers.get().unwrap();
+        let max_fwd: Vec<MaxForwards> = headers.get_named().unwrap();
 
         assert_eq!(headers.entries.len(), 1);
         assert_eq!(max_fwd[0].0, 70);
@@ -739,30 +526,14 @@ mod test {
         headers.insert(Name::MAX_FORWARDS, BytesStr::from_static("70"));
 
         headers
-            .edit(|max_fwd: &mut MaxForwards| max_fwd.0 = 120)
+            .edit_named(|max_fwd: &mut MaxForwards| max_fwd.0 = 120)
             .unwrap();
 
         assert_eq!(headers.entries.len(), 1);
         assert_eq!(
             headers.entries[0].values,
-            Values::One(BytesStr::from_static("120"))
+            OneOrMore::One(BytesStr::from_static("120"))
         );
-    }
-
-    #[test]
-    fn header_edit_remove_empty_multiple() {
-        let mut headers = Headers::new();
-
-        headers.insert(Name::MAX_FORWARDS, BytesStr::from_static("70"));
-
-        headers
-            .edit(|multiple_max_fwd: &mut Vec<MaxForwards>| {
-                assert_eq!(multiple_max_fwd.len(), 1);
-                multiple_max_fwd.clear();
-            })
-            .unwrap();
-
-        assert_eq!(headers.entries.len(), 0);
     }
 
     #[test]
@@ -782,7 +553,7 @@ mod test {
 
         assert_eq!(
             headers2.entries[0].values,
-            Values::Many(vec![
+            OneOrMore::More(vec![
                 BytesStr::from_static("80"),
                 BytesStr::from_static("70")
             ])
@@ -807,7 +578,7 @@ mod test {
 
         assert_eq!(
             headers2.entries[0].values,
-            Values::Many(vec![
+            OneOrMore::More(vec![
                 BytesStr::from_static("90"),
                 BytesStr::from_static("70"),
                 BytesStr::from_static("80")
@@ -830,7 +601,7 @@ mod test {
 
         assert_eq!(
             headers2.entries[0].values,
-            Values::Many(vec![
+            OneOrMore::More(vec![
                 BytesStr::from_static("80"),
                 BytesStr::from_static("70")
             ])
@@ -853,7 +624,7 @@ mod test {
 
         assert_eq!(
             headers2.entries[0].values,
-            Values::Many(vec![
+            OneOrMore::More(vec![
                 BytesStr::from_static("90"),
                 BytesStr::from_static("70"),
                 BytesStr::from_static("80")

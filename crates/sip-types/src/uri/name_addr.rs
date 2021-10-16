@@ -2,11 +2,11 @@ use crate::parse::{parse_quoted, whitespace, ParseCtx};
 use crate::print::{AppendCtx, Print, PrintCtx};
 use crate::uri::Uri;
 use bytesstr::BytesStr;
+use internal::IResult;
 use nom::branch::alt;
-use nom::bytes::complete::{tag, take_while};
-use nom::combinator::{map, map_res, opt};
+use nom::bytes::complete::{tag, take_while, take_while1};
+use nom::combinator::{map, opt};
 use nom::sequence::{delimited, tuple};
-use nom::IResult;
 use std::fmt;
 
 /// Represents an URI with a display name or just a URI
@@ -42,60 +42,38 @@ impl NameAddr {
         }
     }
 
-    pub fn parse<'p>(ctx: ParseCtx<'p>) -> impl Fn(&'p str) -> IResult<&'p str, Self> + 'p {
+    pub fn parse(ctx: ParseCtx<'_>) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
         move |i| {
             map(
                 alt((
                     tuple((
-                        opt(map_res(
-                            alt((parse_quoted, take_while(display))),
-                            |mut display| {
-                                display = display.trim();
-                                if display.is_empty() {
-                                    Err(())
-                                } else {
-                                    Ok(display)
-                                }
-                            },
-                        )),
+                        opt(alt((parse_quoted, take_while1(display)))),
                         take_while(whitespace),
                         delimited(tag("<"), ctx.parse_uri(), tag(">")),
                     )),
                     map(ctx.parse_uri(), |uri| (None, "", uri)),
                 )),
                 move |(name, _, uri)| Self {
-                    name: name.map(|name| BytesStr::from_parse(ctx.src, name)),
+                    name: name.map(|name| BytesStr::from_parse(ctx.src, name.trim())),
                     uri,
                 },
             )(i)
         }
     }
 
-    pub fn parse_no_params<'p>(
-        ctx: ParseCtx<'p>,
-    ) -> impl Fn(&'p str) -> IResult<&'p str, Self> + 'p {
+    pub fn parse_no_params(ctx: ParseCtx<'_>) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
         move |i| {
             map(
                 alt((
                     tuple((
-                        opt(map_res(
-                            alt((parse_quoted, take_while(display))),
-                            |mut display| {
-                                display = display.trim();
-                                if display.is_empty() {
-                                    Err(())
-                                } else {
-                                    Ok(display)
-                                }
-                            },
-                        )),
+                        opt(alt((parse_quoted, take_while1(display)))),
                         take_while(whitespace),
                         delimited(tag("<"), ctx.parse_uri(), tag(">")),
                     )),
                     map(ctx.parse_uri_no_params(), |uri| (None, "", uri)),
                 )),
                 move |(name, _, uri)| Self {
-                    name: name.map(|name| BytesStr::from_parse(ctx.src, name)),
+                    name: name.map(|name| BytesStr::from_parse(ctx.src, name.trim())),
                     uri,
                 },
             )(i)
