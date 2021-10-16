@@ -42,7 +42,11 @@ impl RefreshNeeded<'_> {
     pub async fn process_default(self) -> Result<()> {
         let invite = self.session.dialog.create_request(Method::INVITE);
 
-        let mut transaction = self.session.endpoint.send_invite(invite).await?;
+        let mut transaction = self
+            .session
+            .endpoint
+            .send_invite(invite, None, self.session.dialog.via_host_port.clone())
+            .await?;
 
         let mut ack = None;
 
@@ -164,7 +168,10 @@ impl Session {
         state.set_terminated();
 
         let request = self.dialog.create_request(Method::BYE);
-        let transaction = self.endpoint.send_request(request).await?;
+        let transaction = self
+            .endpoint
+            .send_request(request, None, self.dialog.via_host_port.clone())
+            .await?;
         let response = transaction.receive_final().await?;
 
         match response.line.code.kind() {

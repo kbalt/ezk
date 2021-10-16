@@ -1,3 +1,4 @@
+use self::managed::{DropNotifier, ManagedTransportState, MangedTransport, RefOwner, WeakRefOwner};
 use self::resolver::{Resolver, SystemResolver};
 use crate::{Endpoint, Error, Request, Response, Result, WithStatus};
 use anyhow::anyhow;
@@ -16,7 +17,9 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::{fmt, io};
+use tokio::sync::oneshot;
 
+mod managed;
 pub mod resolver;
 pub mod streaming;
 pub mod udp;
@@ -82,39 +85,65 @@ pub trait Transport: Debug + Display + Send + Sync + 'static {
     async fn send(&self, message: &[u8], target: SocketAddr) -> io::Result<()>;
 }
 
-/// Thin wrapper over a transport to add some convenience functions
+/// Wrapper over implementations of [`Transport`].
+///
+/// Provides reference counting of connection based
+///
 #[derive(Debug, Clone)]
-pub struct TpHandle(Arc<dyn Transport>);
+pub struct TpHandle {
+    ref_check: Option<RefOwner>,
+    transport: Arc<dyn Transport>,
+}
 
 impl Deref for TpHandle {
     type Target = dyn Transport;
 
     fn deref(&self) -> &Self::Target {
-        &*self.0
+        &*self.transport
     }
 }
 
 impl fmt::Display for TpHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0.direction() {
-            Direction::None => write!(f, "{}", self.0),
-            Direction::Outgoing(_) => write!(f, "outgoing:{}", self.0),
-            Direction::Incoming(_) => write!(f, "incoming:{}", self.0),
+        match self.transport.direction() {
+            Direction::None => write!(f, "{}", self.transport),
+            Direction::Outgoing(_) => write!(f, "outgoing:{}", self.transport),
+            Direction::Incoming(_) => write!(f, "incoming:{}", self.transport),
         }
     }
 }
 
 impl TpHandle {
+    /// Create a new handle over a transport without any lifetime
+    /// management. Useful for transports without a connection
+    /// or lifetime like UDP.
     pub fn new<T: Transport>(transport: T) -> Self {
-        Self(Arc::new(transport))
+        Self {
+            ref_check: None,
+            transport: Arc::new(transport),
+        }
     }
 
+    /// Get the [`TpKey`] to identify this transport
     pub fn key(&self) -> TpKey {
         TpKey {
-            name: self.0.name(),
-            bound: self.0.bound(),
-            direction: self.0.direction(),
+            name: self.transport.name(),
+            bound: self.transport.bound(),
+            direction: self.transport.direction(),
         }
+    }
+
+    fn new_managed<T: Transport>(transport: T) -> (Self, WeakRefOwner, DropNotifier) {
+        let (owner, notifier) = managed::ref_counter();
+
+        let weak = owner.downgrade();
+
+        let transport = Self {
+            ref_check: Some(owner),
+            transport: Arc::new(transport),
+        };
+
+        (transport, weak, notifier)
     }
 }
 
@@ -230,7 +259,8 @@ pub struct TpKey {
 pub(crate) struct Transports {
     unmanaged: Box<[TpHandle]>,
     factories: Box<[Arc<dyn Factory>]>,
-    transports: Mutex<HashMap<TpKey, TpHandle>>,
+
+    transports: Mutex<HashMap<TpKey, MangedTransport>>,
 
     resolver: Box<dyn Resolver>,
 }
@@ -291,17 +321,17 @@ impl Transports {
 
         // Try to find any idling transport to use
         {
-            let transports = self.transports.lock();
+            let mut transports = self.transports.lock();
 
-            for (_, transport) in transports.iter() {
-                let remote = match transport.direction() {
+            for (_, managed) in transports.iter_mut() {
+                let remote = match managed.transport.direction() {
                     Direction::None => unreachable!(),
                     Direction::Incoming(_) => continue,
                     Direction::Outgoing(remote) => remote,
                 };
 
                 if let Some(tp_name) = &info.transport {
-                    if !transport.matches_transport_param(tp_name) {
+                    if !managed.transport.matches_transport_param(tp_name) {
                         continue;
                     }
                 }
@@ -310,13 +340,17 @@ impl Transports {
                     continue;
                 }
 
-                if !info.allows_security_level(transport.secure()) {
+                if !info.allows_security_level(managed.transport.secure()) {
                     continue;
                 }
 
-                log::trace!("selected transport: {}", transport);
+                log::trace!("selected transport: {}", managed.transport);
 
-                return Ok((transport.clone(), vec![remote]));
+                if let Some(transport) = managed.try_get() {
+                    return Ok((transport, vec![remote]));
+                } else {
+                    log::warn!("bug: failed to use transport {}", managed.transport)
+                }
             }
         }
 
@@ -369,12 +403,89 @@ impl Transports {
                 Some(transport.clone())
             }
             Direction::Incoming(_) | Direction::Outgoing(_) => {
-                let transports = self.transports.lock();
-                transports.get(key).cloned()
+                let mut transports = self.transports.lock();
+                transports.get_mut(key)?.try_get()
             }
         }
     }
 
+    /// Adds the given connected transport and return a strong tp-handle and notifier
+    pub fn add_managed_used<T>(&self, transport: T) -> (TpHandle, DropNotifier)
+    where
+        T: Transport,
+    {
+        let (transport, weak, rx) = TpHandle::new_managed(transport);
+
+        let mut transports = self.transports.lock();
+
+        transports.insert(
+            transport.key(),
+            MangedTransport {
+                transport: transport.transport.clone(),
+                state: ManagedTransportState::Used(weak),
+            },
+        );
+
+        (transport, rx)
+    }
+
+    /// Adds the transport which is not in use (e.g. it was just accepted).
+    ///
+    /// Returns a oneshot receiver which yields a [`DropNotifier`].
+    /// That notifier will be sent once the transports gets used.
+    pub fn add_managed_unused<T>(&self, transport: T) -> oneshot::Receiver<DropNotifier>
+    where
+        T: Transport,
+    {
+        let (tx, rx) = oneshot::channel();
+
+        let mut transports = self.transports.lock();
+
+        transports.insert(
+            TpKey {
+                name: transport.name(),
+                bound: transport.bound(),
+                direction: transport.direction(),
+            },
+            MangedTransport {
+                transport: Arc::new(transport),
+                state: ManagedTransportState::Unused(tx),
+            },
+        );
+
+        rx
+    }
+
+    /// Sets the state of the transport behind the key to unused.
+    ///
+    /// Returns a oneshot receiver which yields a [`DropNotifier`].
+    /// That notifier will be sent once the transports gets reused.
+    pub fn set_unused(&self, tp_key: &TpKey) -> oneshot::Receiver<DropNotifier> {
+        let (tx, rx) = oneshot::channel();
+
+        let mut transports = self.transports.lock();
+        let managed = transports
+            .get_mut(tp_key)
+            .expect("invalid tp_key to set_unused passed");
+
+        managed.state = ManagedTransportState::Unused(tx);
+
+        rx
+    }
+
+    /// Returns the transport behind the key. Sets the state to used if its not
+    pub fn set_used(&self, tp_key: &TpKey) -> TpHandle {
+        let mut transports = self.transports.lock();
+        let managed = transports
+            .get_mut(tp_key)
+            .expect("invalid tp_key to set_unused passed");
+
+        managed
+            .try_get()
+            .expect("set_used failed to retrieve TpHandle")
+    }
+
+    /// Remove the transport behind the key
     pub fn drop_transport(&self, tp_key: &TpKey) {
         log::trace!("drop transport {:?}", tp_key);
 

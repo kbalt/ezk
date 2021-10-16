@@ -2,8 +2,9 @@ use super::consts::{T1, T2};
 use super::key::TsxKey;
 use super::{TsxRegistration, TsxResponse};
 use crate::transaction::consts::T4;
-use crate::transport::OutgoingRequest;
+use crate::transport::{OutgoingRequest, TpHandle};
 use crate::{Endpoint, Request, Result};
+use sip_types::host::HostPort;
 use sip_types::{Code, CodeKind, Method};
 use std::time::Instant;
 use tokio::time::{timeout, timeout_at};
@@ -38,7 +39,12 @@ enum State {
 
 impl ClientTsx {
     /// Internal: Used by [Endpoint::send_request]
-    pub(crate) async fn send(endpoint: Endpoint, request: Request) -> Result<Self> {
+    pub(crate) async fn send(
+        endpoint: Endpoint,
+        request: Request,
+        transport: Option<TpHandle>,
+        via_host_port: Option<HostPort>,
+    ) -> Result<Self> {
         let method = request.line.method.clone();
 
         assert!(
@@ -47,13 +53,15 @@ impl ClientTsx {
             method
         );
 
-        let mut request = endpoint.create_outgoing(request).await?;
+        let mut request = endpoint.create_outgoing(request, transport).await?;
 
         let registration = TsxRegistration::create(endpoint, TsxKey::client(&method));
 
-        let via = registration
-            .endpoint
-            .create_via(&request.parts.transport, &registration.tsx_key);
+        let via = registration.endpoint.create_via(
+            &request.parts.transport,
+            &registration.tsx_key,
+            via_host_port,
+        );
 
         request.msg.headers.insert_type_front(&via);
         registration

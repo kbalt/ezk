@@ -8,7 +8,7 @@ use crate::{BaseHeaders, IncomingRequest, Layer, MayTake, Request, Response, Res
 use bytes::{Bytes, BytesMut};
 use bytesstr::BytesStr;
 use sip_types::header::typed::{Accept, Allow, Supported, Via};
-use sip_types::host::Host;
+use sip_types::host::{Host, HostPort};
 use sip_types::msg::{MessageLine, StatusLine};
 use sip_types::parse::Parser;
 use sip_types::print::{AppendCtx, BytesPrint, PrintCtx};
@@ -70,13 +70,23 @@ impl Endpoint {
     }
 
     /// Sends an INVITE request and return a [`ClientInvTsx`] which MUST be used to drive the transaction
-    pub async fn send_invite(&self, request: Request) -> Result<ClientInvTsx> {
-        ClientInvTsx::send(self.clone(), request).await
+    pub async fn send_invite(
+        &self,
+        request: Request,
+        transport: Option<TpHandle>,
+        via_host_port: Option<HostPort>,
+    ) -> Result<ClientInvTsx> {
+        ClientInvTsx::send(self.clone(), request, transport, via_host_port).await
     }
 
     /// Sends a request and return a [`ClientTsx`] which MUST be used to drive the transaction
-    pub async fn send_request(&self, request: Request) -> Result<ClientTsx> {
-        ClientTsx::send(self.clone(), request).await
+    pub async fn send_request(
+        &self,
+        request: Request,
+        transport: Option<TpHandle>,
+        via_host_port: Option<HostPort>,
+    ) -> Result<ClientTsx> {
+        ClientTsx::send(self.clone(), request, transport, via_host_port).await
     }
 
     /// Create a [`ServerTsx`] from an [`IncomingRequest`]. The returned transaction
@@ -107,18 +117,36 @@ impl Endpoint {
     }
 
     /// Create a VIA header with the given transport and transaction key
-    pub fn create_via(&self, transport: &TpHandle, tsx_key: &TsxKey) -> Via {
+    pub fn create_via(
+        &self,
+        transport: &TpHandle,
+        tsx_key: &TsxKey,
+        via_host_port: Option<HostPort>,
+    ) -> Via {
         Via::new(
             transport.name(),
-            transport.sent_by(),
+            via_host_port.unwrap_or_else(|| transport.sent_by().into()),
             tsx_key.branch().clone(),
         )
     }
 
     /// Takes a request and converts it into an `Outgoing`.
     /// To do so it calculates the destination and retrieves a suitable transport
-    pub async fn create_outgoing(&self, request: Request) -> Result<OutgoingRequest> {
-        let (transport, destination) = self.transports().select(self, &*request.line.uri).await?;
+    pub async fn create_outgoing(
+        &self,
+        request: Request,
+        transport: Option<TpHandle>,
+    ) -> Result<OutgoingRequest> {
+        let (transport, destination) = if let Some(transport) = transport {
+            let destination = self
+                .transports()
+                .resolve_uri(&request.line.uri.info())
+                .await?;
+
+            (transport, destination)
+        } else {
+            self.transports().select(self, &*request.line.uri).await?
+        };
 
         Ok(OutgoingRequest {
             msg: request,

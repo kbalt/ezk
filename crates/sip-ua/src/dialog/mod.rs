@@ -4,6 +4,7 @@ use bytesstr::BytesStr;
 use sip_core::transport::OutgoingResponse;
 use sip_core::{Endpoint, IncomingRequest, LayerKey, Request, Result};
 use sip_types::header::typed::{CSeq, CallID, Contact, From, RecordRoute, To};
+use sip_types::host::HostPort;
 use sip_types::{Code, Method};
 
 mod key;
@@ -51,6 +52,12 @@ pub struct Dialog {
     /// Requires all future requests to also use secure transports
     // TODO use this
     pub secure: bool,
+
+    /// Via address of the dialog, can be set to override the transports
+    /// default via host-port.
+    ///
+    /// Can be discovered by reading the received param on responses or by using STUN
+    pub via_host_port: Option<HostPort>,
 }
 
 impl Dialog {
@@ -85,6 +92,7 @@ impl Dialog {
             call_id,
             route_set,
             secure,
+            via_host_port: None,
         };
 
         let entry = DialogEntry::new(dialog.peer_cseq);

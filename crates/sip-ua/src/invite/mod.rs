@@ -327,12 +327,17 @@ async fn create_ack(dialog: &mut Dialog, cseq_num: u32) -> Result<OutgoingReques
     // Set CSeq
     ack.headers.edit(|cseq: &mut CSeq| cseq.cseq = cseq_num)?;
 
-    let mut ack = dialog.endpoint.create_outgoing(ack).await?;
+    let mut ack = dialog.endpoint.create_outgoing(ack, None).await?;
 
     // Create temporary transaction key to create Via, but never register it
     // as we don't need to receive responses
     let tsx_key = TsxKey::client(&Method::ACK);
-    let via = dialog.endpoint.create_via(&ack.parts.transport, &tsx_key);
+    let via = dialog.endpoint.create_via(
+        // wrap
+        &ack.parts.transport,
+        &tsx_key,
+        dialog.via_host_port.clone(),
+    );
 
     ack.msg.headers.insert_type_front(&via);
 

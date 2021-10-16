@@ -1,12 +1,16 @@
 use super::decode::StreamingDecoder;
+use crate::transport::managed::DropNotifier;
 use crate::transport::{Direction, Factory, ReceivedMessage, TpHandle, TpKey, Transport};
 use crate::{Endpoint, EndpointBuilder};
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{fmt, io};
 use tokio::io::{split, AsyncRead, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::ToSocketAddrs;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{broadcast, oneshot, Mutex};
+use tokio::time::{sleep, Sleep};
 use tokio_stream::{Stream, StreamExt};
 use tokio_util::codec::FramedRead;
 
@@ -177,12 +181,12 @@ where
 
                     let framed = FramedRead::new(read, StreamingDecoder::new(endpoint.parser()));
 
-                    let transport = TpHandle::new(transport);
+                    let (transport, notifier) = endpoint.transports().add_managed_used(transport);
 
                     tokio::spawn(receive_task::<T>(
                         endpoint.clone(),
                         framed,
-                        transport.clone(),
+                        ReceiveTaskState::InUse(notifier),
                         local,
                         remote,
                         false,
@@ -225,20 +229,22 @@ async fn task_accept<T>(
 
                 let (read, write) = split(stream);
 
-                let transport = TpHandle::new(StreamingWrite::<T> {
+                let transport = StreamingWrite::<T> {
                     listener: bound,
                     bound: local,
                     remote,
                     socket: Mutex::new(write),
                     incoming: true,
-                });
+                };
+
+                let rx = endpoint.transports().add_managed_unused(transport);
 
                 let framed = FramedRead::new(read, StreamingDecoder::new(endpoint.parser()));
 
                 tokio::spawn(receive_task::<T>(
                     endpoint.clone(),
                     framed,
-                    transport,
+                    ReceiveTaskState::Unused(Box::pin(sleep(Duration::from_secs(32))), rx),
                     local,
                     remote,
                     true,
@@ -250,10 +256,15 @@ async fn task_accept<T>(
     }
 }
 
+enum ReceiveTaskState {
+    InUse(DropNotifier),
+    Unused(Pin<Box<Sleep>>, oneshot::Receiver<DropNotifier>),
+}
+
 async fn receive_task<T>(
     endpoint: Endpoint,
     mut framed: FramedRead<ReadHalf<T::Streaming>, StreamingDecoder>,
-    transport: TpHandle,
+    mut state: ReceiveTaskState,
     local: SocketAddr,
     remote: SocketAddr,
     incoming: bool,
@@ -272,12 +283,50 @@ async fn receive_task<T>(
 
     let _drop_guard = UnclaimedGuard {
         endpoint: &endpoint,
-        // assume that the transport is incoming when we pass in the `Transport` itself
         tp_key,
     };
 
     loop {
-        let message = match framed.next().await {
+        let item = match &mut state {
+            ReceiveTaskState::InUse(notifier) => {
+                tokio::select! {
+                    item = framed.next() => {
+                        item
+                    }
+                    _ = notifier => {
+                        log::debug!("all refs to transport dropped, destroying soon if not used");
+                        let rx = endpoint.transports().set_unused(&tp_key);
+                        state = ReceiveTaskState::Unused(Box::pin(sleep(Duration::from_secs(32))), rx);
+                        continue;
+                    }
+                }
+            }
+            ReceiveTaskState::Unused(timeout, rx) => {
+                tokio::select! {
+                    item = framed.next() => {
+                        item
+                    }
+                    notifier = rx => {
+                        if let Ok(notifier) = notifier {
+                            state = ReceiveTaskState::InUse(notifier);
+
+                            continue;
+                        } else {
+                            log::error!("failed to receive notifier");
+                            return;
+                        }
+                    }
+                    _ = timeout => {
+                        log::debug!("dropping transport, not used anymore");
+                        return;
+                    }
+                }
+            }
+        };
+
+        let transport = endpoint.transports().set_used(&tp_key);
+
+        let message = match item {
             Some(Ok(item)) => item,
             Some(Err(e)) => {
                 log::warn!("An error occurred when reading {} stream {}", T::NAME, e);
@@ -292,7 +341,7 @@ async fn receive_task<T>(
         let message = ReceivedMessage::new(
             remote,
             message.buffer,
-            transport.clone(),
+            transport,
             message.line,
             message.headers,
             message.body,

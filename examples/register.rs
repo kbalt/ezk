@@ -22,7 +22,7 @@ async fn main() -> Result<()> {
 
     loop {
         let request = registration.create_register(false);
-        let transaction = endpoint.send_request(request).await?;
+        let transaction = endpoint.send_request(request, None, None).await?;
         let response = transaction.receive_final().await?;
 
         match response.line.code.kind() {
