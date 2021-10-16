@@ -11,3 +11,4 @@ keywords = []
 
 [dependencies]
 nom = { version = "7", default-features = false, features = ["alloc"] }
+anyhow = "1"

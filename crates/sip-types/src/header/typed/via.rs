@@ -1,14 +1,18 @@
+use crate::header::headers::OneOrMore;
 use crate::header::name::Name;
+use crate::header::{ConstNamed, ExtendValues, HeaderParse};
 use crate::host::HostPort;
 use crate::parse::{token, whitespace, ParseCtx};
 use crate::print::{AppendCtx, Print, PrintCtx};
 use crate::uri::params::{Param, Params, CPS};
+use anyhow::Result;
 use bytesstr::BytesStr;
 use internal::ws;
+use internal::IResult;
 use nom::bytes::complete::{tag, take_while};
 use nom::combinator::map;
 use nom::sequence::{delimited, preceded, tuple};
-use nom::IResult;
+use nom::Finish;
 use std::fmt;
 
 /// `Via` header
@@ -37,29 +41,47 @@ impl Via {
             params: Params::new().with(Param::value("branch", branch)),
         }
     }
+}
 
-    pub(crate) fn parse(ctx: ParseCtx<'_>) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
-        move |i| {
-            map(
-                tuple((
-                    preceded(
-                        parse_sip_version,
-                        delimited(
-                            take_while(whitespace),
-                            take_while(token),
-                            take_while(whitespace),
-                        ),
+impl ConstNamed for Via {
+    const NAME: Name = Name::VIA;
+}
+
+impl HeaderParse for Via {
+    fn parse<'i>(ctx: ParseCtx<'_>, i: &'i str) -> Result<(&'i str, Self)> {
+        let (rem, via) = map(
+            tuple((
+                preceded(
+                    parse_sip_version,
+                    delimited(
+                        take_while(whitespace),
+                        take_while(token),
+                        take_while(whitespace),
                     ),
-                    HostPort::parse(ctx),
-                    Params::<CPS>::parse(ctx),
-                )),
-                move |(tp, hp, p)| Via {
-                    transport: BytesStr::from_parse(ctx.src, tp),
-                    sent_by: hp,
-                    params: p,
-                },
-            )(i)
-        }
+                ),
+                HostPort::parse(ctx),
+                Params::<CPS>::parse(ctx),
+            )),
+            move |(tp, hp, p)| Via {
+                transport: BytesStr::from_parse(ctx.src, tp),
+                sent_by: hp,
+                params: p,
+            },
+        )(i)
+        .finish()?;
+
+        Ok((rem, via))
+    }
+}
+
+impl ExtendValues for Via {
+    fn extend_values(&self, ctx: PrintCtx<'_>, values: &mut OneOrMore) {
+        // Do not create Via CSV header
+        values.push(self.print_ctx(ctx).to_string().into());
+    }
+
+    fn create_values(&self, ctx: PrintCtx<'_>) -> OneOrMore {
+        OneOrMore::One(self.print_ctx(ctx).to_string().into())
     }
 }
 
@@ -75,8 +97,6 @@ impl Print for Via {
     }
 }
 
-__impl_header!(Via, CSV, Name::VIA);
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -88,7 +108,7 @@ mod test {
     fn via() {
         let input = BytesStr::from_static("SIP/2.0/TCP 192.168.123.222:53983;branch=abc123");
 
-        let (rem, via) = Via::parse(ParseCtx::default(&input))(&input).unwrap();
+        let (rem, via) = Via::parse(ParseCtx::default(&input), &input).unwrap();
 
         assert!(rem.is_empty());
 

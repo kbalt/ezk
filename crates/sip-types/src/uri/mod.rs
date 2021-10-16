@@ -32,6 +32,12 @@ impl<T: Uri> From<T> for Box<dyn Uri> {
     }
 }
 
+impl PartialEq for Box<dyn Uri> {
+    fn eq(&self, other: &Self) -> bool {
+        self.compare(&**other)
+    }
+}
+
 downcast_rs::impl_downcast!(Uri);
 
 impl Print for Box<dyn Uri> {

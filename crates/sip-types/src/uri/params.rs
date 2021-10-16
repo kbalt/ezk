@@ -2,11 +2,11 @@ use crate::parse::{parse_quoted, ParseCtx};
 use bytes::Bytes;
 use bytesstr::BytesStr;
 use internal::ws;
+use internal::IResult;
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_while};
 use nom::combinator::{map, map_res, opt};
 use nom::multi::many0;
-use nom::IResult;
 use percent_encoding::{percent_decode, percent_encode, AsciiSet};
 use std::borrow::Cow;
 use std::fmt;
@@ -14,7 +14,7 @@ use std::marker::PhantomData;
 use std::str::Utf8Error;
 
 /// A list of parameters
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub struct Params<S> {
     params: Vec<Param>,
     marker: PhantomData<S>,

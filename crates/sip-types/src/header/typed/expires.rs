@@ -1,45 +1,39 @@
-use crate::header::name::Name;
+use crate::header::headers::OneOrMore;
+use crate::header::{ConstNamed, ExtendValues, HeaderParse};
+use crate::parse::ParseCtx;
+use crate::print::PrintCtx;
+use crate::Name;
+use anyhow::Result;
 
-decl_from_str_header!(
+from_str_header! {
     /// `Expires` header
-    #[derive(Eq, PartialEq)]
     Expires,
-    u32,
-    Single,
-    Name::EXPIRES
-);
+    Name::EXPIRES,
+    u32
+}
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::parse::ParseCtx;
-    use crate::print::AppendCtx;
-    use bytesstr::BytesStr;
+    use crate::Headers;
+
+    const EXPIRES: Expires = Expires(300);
 
     #[test]
-    fn expires() {
-        let input = BytesStr::from_static("240");
+    fn print_expires() {
+        let mut headers = Headers::new();
+        headers.insert_named(&EXPIRES);
+        let headers = headers.to_string();
 
-        let (rem, content_length) = Expires::parse(ParseCtx::default(&input))(&input).unwrap();
-
-        assert!(rem.is_empty());
-
-        assert_eq!(content_length.0, 240);
+        assert_eq!(headers, "Expires: 300\r\n");
     }
 
     #[test]
-    fn expires_spaces() {
-        let input = BytesStr::from_static("   240   ");
+    fn parse_expires() {
+        let mut headers = Headers::new();
+        headers.insert(Name::EXPIRES, "300");
 
-        let (rem, expires) = Expires::parse(ParseCtx::default(&input))(&input).unwrap();
-
-        assert!(rem.is_empty());
-
-        assert_eq!(expires.0, 240);
-    }
-
-    #[test]
-    fn expires_print() {
-        assert_eq!(Expires(30).default_print_ctx().to_string(), "30");
+        let expires: Expires = headers.get_named().unwrap();
+        assert_eq!(expires, EXPIRES);
     }
 }

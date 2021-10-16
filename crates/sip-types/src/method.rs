@@ -1,10 +1,10 @@
 use crate::parse::{token, ParseCtx};
 use bytes::Bytes;
 use bytesstr::BytesStr;
+use internal::IResult;
 use nom::branch::alt;
-use nom::bytes::complete::{tag_no_case, take_while};
+use nom::bytes::complete::{tag_no_case, take_while1};
 use nom::combinator::map;
-use nom::IResult;
 use std::fmt;
 
 /// Represents a SIP-Method.
@@ -38,7 +38,7 @@ macro_rules! methods {
         impl Method {
             $(pub const $ident : Self = Self(Repr :: $ident );)+
 
-            fn from_parse(src: &Bytes, slice: &str) -> Self {
+            pub fn from_parse(src: &Bytes, slice: &str) -> Self {
                 if let Ok((_, repr)) = alt((
                    $(
                    map(tag_no_case($print), |_| Repr::$ident),
@@ -77,7 +77,7 @@ methods! {
 impl Method {
     /// returns an nom-compatible method-parser
     pub fn parse(ctx: ParseCtx<'_>) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
-        move |i| map(take_while(token), |slice| Self::from_parse(ctx.src, slice))(i)
+        move |i| map(take_while1(token), |slice| Self::from_parse(ctx.src, slice))(i)
     }
 }
 

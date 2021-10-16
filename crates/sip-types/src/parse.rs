@@ -1,18 +1,15 @@
-//! Parsing utilities for SIP message components
-
 #![allow(unused_parens)]
+//! Parsing utilities for SIP message components
 
 use crate::uri::sip::SipUri;
 use crate::uri::Uri;
 use bytes::Bytes;
+use internal::{IResult, ParseError};
 use nom::branch::alt;
 use nom::bytes::complete::{escaped, is_not};
 use nom::character::complete::char;
 use nom::combinator::map;
 use nom::sequence::delimited;
-use nom::IResult;
-
-pub(crate) mod text;
 
 pub(crate) fn parse_quoted(i: &str) -> IResult<&str, &str> {
     delimited(char('"'), escaped(is_not("\""), '\\', char('"')), char('"'))(i)
@@ -35,11 +32,10 @@ pub struct Parser {
     pub parse_other_uri_no_params: fn(&str) -> IResult<&str, Box<dyn Uri>>,
 }
 
-fn fail(i: &str) -> IResult<&str, Box<dyn Uri>> {
-    Err(nom::Err::Error(nom::error::Error::new(
-        i,
-        nom::error::ErrorKind::Alt,
-    )))
+fn fail(_: &str) -> IResult<&str, Box<dyn Uri>> {
+    Err(nom::Err::Error(ParseError::from(anyhow::anyhow!(
+        "failed to parse any uri"
+    ))))
 }
 
 impl Default for Parser {
@@ -73,7 +69,7 @@ impl<'p> ParseCtx<'p> {
         ParseCtx { src, parser }
     }
 
-    pub fn parse_uri(self) -> impl Fn(&'p str) -> IResult<&'p str, Box<dyn Uri>> {
+    pub fn parse_uri(self) -> impl Fn(&str) -> IResult<&str, Box<dyn Uri>> + 'p {
         move |i| {
             alt((
                 map(SipUri::parse(self), |uri| -> Box<dyn Uri> { Box::new(uri) }),
@@ -82,7 +78,7 @@ impl<'p> ParseCtx<'p> {
         }
     }
 
-    pub fn parse_uri_no_params(self) -> impl Fn(&'p str) -> IResult<&'p str, Box<dyn Uri>> {
+    pub fn parse_uri_no_params(self) -> impl Fn(&str) -> IResult<&str, Box<dyn Uri>> + 'p {
         move |i| {
             alt((
                 map(SipUri::parse_no_params(self), |uri| -> Box<dyn Uri> {
@@ -91,18 +87,5 @@ impl<'p> ParseCtx<'p> {
                 self.parser.parse_other_uri_no_params,
             ))(i)
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn escaped() {
-        assert_eq!(parse_quoted(r#""Bob""#), Ok(("", "Bob")));
-        assert_eq!(parse_quoted(r#""Bob" "#), Ok((" ", "Bob")));
-
-        assert_eq!(parse_quoted(r#""Bob" "Alice""#), Ok((r#" "Alice""#, "Bob")));
     }
 }

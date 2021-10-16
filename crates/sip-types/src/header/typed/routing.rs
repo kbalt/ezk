@@ -1,11 +1,13 @@
-use crate::header::name::Name;
+use crate::header::headers::OneOrMore;
+use crate::header::{ExtendValues, HeaderParse};
 use crate::parse::ParseCtx;
 use crate::print::{AppendCtx, Print, PrintCtx, UriContext};
 use crate::uri::params::{Params, CPS};
 use crate::uri::NameAddr;
+use anyhow::Result;
 use nom::combinator::map;
 use nom::sequence::tuple;
-use nom::IResult;
+use nom::Finish;
 use std::fmt;
 
 /// Implementation for all Route-related headers.
@@ -15,102 +17,109 @@ pub struct Routing {
     pub params: Params<CPS>,
 }
 
-impl Routing {
-    pub(crate) fn parse<'p>(ctx: ParseCtx<'p>) -> impl Fn(&'p str) -> IResult<&'p str, Self> + 'p {
-        move |i| {
-            map(
-                tuple((NameAddr::parse_no_params(ctx), Params::<CPS>::parse(ctx))),
-                |(uri, params)| Routing { uri, params },
-            )(i)
-        }
+impl HeaderParse for Routing {
+    fn parse<'i>(ctx: ParseCtx<'_>, i: &'i str) -> Result<(&'i str, Self)> {
+        let (rem, routing) = map(
+            tuple((NameAddr::parse_no_params(ctx), Params::<CPS>::parse(ctx))),
+            |(uri, params)| Self { uri, params },
+        )(i)
+        .finish()?;
+
+        Ok((rem, routing))
+    }
+}
+
+impl ExtendValues for Routing {
+    fn extend_values(&self, ctx: PrintCtx<'_>, values: &mut OneOrMore) {
+        let value = match values {
+            OneOrMore::One(value) => value,
+            OneOrMore::More(values) => values.last_mut().expect("empty OneOrMore::More variant"),
+        };
+
+        *value = format!("{}, {}", value, self.print_ctx(ctx)).into();
+    }
+
+    fn create_values(&self, ctx: PrintCtx<'_>) -> OneOrMore {
+        OneOrMore::One(self.print_ctx(ctx).to_string().into())
     }
 }
 
 impl Print for Routing {
     fn print(&self, f: &mut fmt::Formatter<'_>, mut ctx: PrintCtx<'_>) -> fmt::Result {
         ctx.uri = Some(UriContext::Routing);
-        write!(f, "{}{}", self.uri.print_ctx(ctx), self.params)?;
-        Ok(())
+        write!(f, "{}{}", self.uri.print_ctx(ctx), self.params)
     }
 }
-
-impl_wrap_header!(
-    /// `Route` header. Wraps [Routing].
-    Routing,
-    Route,
-    CSV,
-    Name::ROUTE
-);
-
-impl_wrap_header!(
-    /// `Record-Route` header. Wraps [`Routing`]. Contains only one route. To get all routes use [`Vec`].
-    Routing,
-    RecordRoute,
-    CSV,
-    Name::RECORD_ROUTE
-);
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::header::Header;
-    use crate::host::{Host, HostPort};
-    use crate::uri::sip::{SipUri, UserPart};
-    use bytesstr::BytesStr;
-    use std::iter::once;
+    use crate::uri::sip::SipUri;
+    use crate::{Headers, Name};
+
+    fn test_routing() -> Routing {
+        let uri: SipUri = "sip:example.org".parse().unwrap();
+
+        Routing {
+            uri: NameAddr::uri(uri),
+            params: Params::new(),
+        }
+    }
 
     #[test]
-    fn routing() {
-        let input = BytesStr::from_static(
-            "<sip:bigbox3.site3.atlanta.com;lr>, <sip:server10.biloxi.com;lr>",
-        );
+    fn print_routing_single() {
+        let mut headers = Headers::new();
+        headers.insert_type(Name::ROUTE, &test_routing());
+        let headers = headers.to_string();
 
-        let (rem, routing) = Routing::parse(ParseCtx::default(&input))(&input).unwrap();
+        assert_eq!(headers, "Route: <sip:example.org>\r\n")
+    }
 
-        assert_eq!(rem, ", <sip:server10.biloxi.com;lr>");
+    #[test]
+    fn print_routing_multiple_vec() {
+        let mut headers = Headers::new();
+        headers.insert_type(Name::ROUTE, &vec![test_routing(), test_routing()]);
+        let headers = headers.to_string();
+
+        assert_eq!(headers, "Route: <sip:example.org>, <sip:example.org>\r\n")
+    }
+
+    #[test]
+    fn print_routing_multiple_insert() {
+        let mut headers = Headers::new();
+        headers.insert_type(Name::ROUTE, &test_routing());
+        headers.insert_type(Name::ROUTE, &test_routing());
+        let headers = headers.to_string();
+
+        assert_eq!(headers, "Route: <sip:example.org>, <sip:example.org>\r\n")
+    }
+
+    #[test]
+    fn parse_routing_single() {
+        let mut headers = Headers::new();
+        headers.insert(Name::ROUTE, "<sip:example.org>");
+
+        let routing: Routing = headers.get(Name::ROUTE).unwrap();
+        assert_eq!(&routing.uri.uri, &test_routing().uri.uri);
         assert!(routing.params.is_empty());
-        assert!(routing.uri.name.is_none());
-
-        let sip_uri: &SipUri = routing.uri.uri.downcast_ref().unwrap();
-
-        assert!(!sip_uri.sips);
-        assert!(sip_uri.header_params.is_empty());
-
-        let lr = sip_uri.uri_params.get("lr").unwrap();
-        assert!(lr.value.is_none());
-
-        assert!(matches!(sip_uri.user_part, UserPart::Empty));
-        assert!(
-            matches!(&sip_uri.host_port.host, Host::Name(n) if n == "bigbox3.site3.atlanta.com")
-        );
-        assert!(sip_uri.host_port.port.is_none());
+        assert_eq!(routing.uri.name, None)
     }
 
     #[test]
-    fn routing_multiple() {
-        let input = BytesStr::from_static(
-            "<sip:bigbox3.site3.atlanta.com;lr>, <sip:server10.biloxi.com;lr>",
-        );
-        let (rem, routing) = Vec::<Route>::decode(Default::default(), &mut once(&input)).unwrap();
+    fn parse_multiple_vec() {
+        let mut headers = Headers::new();
+        headers.insert(Name::ROUTE, "<sip:example.org>, <sip:example.org>");
 
-        assert!(rem.is_none());
+        let routing: Vec<Routing> = headers.get(Name::ROUTE).unwrap();
 
-        let _r1 = &routing[0];
-        let _r2 = &routing[1];
-    }
+        assert_eq!(routing.len(), 2);
 
-    #[test]
-    fn routing_print() {
-        let routing = Routing {
-            uri: NameAddr::uri(
-                SipUri::new(HostPort::host_name("bigbox3.site3.atlanta.com")).uri_param_key("lr"),
-            ),
-            params: Default::default(),
-        };
+        assert_eq!(&routing[0].uri.uri, &test_routing().uri.uri);
+        assert!(routing[0].params.is_empty());
+        assert_eq!(routing[0].uri.name, None);
 
-        assert_eq!(
-            routing.default_print_ctx().to_string(),
-            "<sip:bigbox3.site3.atlanta.com;lr>"
-        );
+        assert_eq!(&routing[1].uri.uri, &test_routing().uri.uri);
+        assert!(routing[1].params.is_empty());
+        assert_eq!(routing[1].uri.name, None)
     }
 }
