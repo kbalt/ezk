@@ -1,17 +1,17 @@
 use crate::util::{random_sequence_number, random_string};
 use sip_core::transaction::TsxResponse;
 use sip_core::Request;
-use sip_types::header::typed::{CSeq, CallID, Contact, Expires, From, To};
+use sip_types::header::typed::{CSeq, CallID, Contact, Expires, FromTo};
 use sip_types::uri::{NameAddr, Uri};
-use sip_types::{CodeKind, Method};
+use sip_types::{CodeKind, Method, Name};
 use std::time::Duration;
 use tokio::time::{interval_at, Instant, Interval};
 
 pub struct Registration {
     registrar: Box<dyn Uri>,
 
-    to: To,
-    from: From,
+    to: FromTo,
+    from: FromTo,
 
     cseq: u32,
     call_id: CallID,
@@ -30,8 +30,8 @@ impl Registration {
 
         Self {
             registrar,
-            to: To::new(id.clone(), None),
-            from: From::new(id.clone(), Some(random_string())),
+            to: FromTo::new(id.clone(), None),
+            from: FromTo::new(id.clone(), Some(random_string())),
             cseq: random_sequence_number(),
             call_id: CallID::new(random_string()),
             contact: Contact::new(id),
@@ -44,14 +44,14 @@ impl Registration {
     pub fn create_register(&mut self, remove_binding: bool) -> Request {
         let mut request = Request::new(Method::REGISTER, self.registrar.clone());
 
-        request.headers.insert_type(&self.to);
-        request.headers.insert_type(&self.from);
-        request.headers.insert_type(&self.call_id);
+        request.headers.insert_type(Name::FROM, &self.from);
+        request.headers.insert_type(Name::TO, &self.to);
+        request.headers.insert_named(&self.call_id);
 
         self.cseq += 1;
         let cseq = CSeq::new(self.cseq, Method::REGISTER);
 
-        request.headers.insert_type(&cseq);
+        request.headers.insert_named(&cseq);
 
         let expires = if remove_binding {
             Expires(0)
@@ -59,8 +59,8 @@ impl Registration {
             Expires(self.expires)
         };
 
-        request.headers.insert_type(&expires);
-        request.headers.insert_type(&self.contact);
+        request.headers.insert_named(&expires);
+        request.headers.insert_named(&self.contact);
 
         request
     }
@@ -68,7 +68,7 @@ impl Registration {
     pub fn receive_success_response(&mut self, response: TsxResponse) {
         assert_eq!(response.line.code.kind(), CodeKind::Success);
 
-        if let Ok(expires) = response.headers.get::<Expires>() {
+        if let Ok(expires) = response.headers.get_named::<Expires>() {
             if self.expires != expires.0 {
                 self.register_interval = create_reg_interval(expires.0);
                 self.expires = expires.0;
@@ -76,7 +76,7 @@ impl Registration {
         }
 
         if self.to.tag.is_none() {
-            self.to.tag = response.base_headers.to.0.tag;
+            self.to.tag = response.base_headers.to.tag;
         }
     }
 

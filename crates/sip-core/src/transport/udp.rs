@@ -153,7 +153,7 @@ async fn handle_msg(
     let head_end = parser.head_end();
 
     // look for optional content-length header
-    let body = match headers.get::<ContentLength>() {
+    let body = match headers.get_named::<ContentLength>() {
         Ok(len) => {
             if len.0 == 0 {
                 Bytes::new()

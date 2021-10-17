@@ -73,7 +73,7 @@ impl ClientInvTsx {
             via_host_port,
         );
 
-        request.msg.headers.insert_type_front(&via);
+        request.msg.headers.insert_named_front(&via);
         registration
             .endpoint
             .send_outgoing_request(&mut request)
@@ -210,9 +210,9 @@ fn create_ack(
         .headers
         .clone_into(&mut headers, Name::CALL_ID)?;
 
-    let cseq = request.msg.headers.get::<CSeq>()?;
+    let cseq = request.msg.headers.get_named::<CSeq>()?;
 
-    headers.insert_type(&CSeq {
+    headers.insert_named(&CSeq {
         cseq: cseq.cseq,
         method: Method::ACK,
     });

@@ -63,7 +63,7 @@ impl ClientTsx {
             via_host_port,
         );
 
-        request.msg.headers.insert_type_front(&via);
+        request.msg.headers.insert_named_front(&via);
         registration
             .endpoint
             .send_outgoing_request(&mut request)
