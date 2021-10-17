@@ -7,12 +7,12 @@
 
 use bytes::Bytes;
 use downcast_rs::{impl_downcast, Downcast};
-use sip_types::header::typed::{CSeq, CallID, From, To, Via};
+use sip_types::header::typed::{CSeq, CallID, FromTo, Via};
 use sip_types::header::HeaderError;
 use sip_types::msg::{RequestLine, StatusLine};
 use sip_types::print::AppendCtx;
 use sip_types::uri::Uri;
-use sip_types::{Headers, Method};
+use sip_types::{Headers, Method, Name};
 use std::fmt;
 use transaction::TsxKey;
 use transport::MessageTpInfo;
@@ -79,8 +79,8 @@ impl Request {
 #[derive(Debug)]
 pub struct BaseHeaders {
     pub top_via: Via,
-    pub from: From,
-    pub to: To,
+    pub from: FromTo,
+    pub to: FromTo,
     pub call_id: CallID,
     pub cseq: CSeq,
 }
@@ -88,11 +88,11 @@ pub struct BaseHeaders {
 impl BaseHeaders {
     fn extract_from(headers: &Headers) -> Result<Self, HeaderError> {
         Ok(BaseHeaders {
-            top_via: headers.get()?,
-            from: headers.get()?,
-            to: headers.get()?,
-            call_id: headers.get()?,
-            cseq: headers.get()?,
+            top_via: headers.get_named()?,
+            from: headers.get(Name::FROM)?,
+            to: headers.get(Name::TO)?,
+            call_id: headers.get_named()?,
+            cseq: headers.get_named()?,
         })
     }
 }

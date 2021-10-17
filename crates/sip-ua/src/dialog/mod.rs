@@ -3,9 +3,9 @@ use crate::util::random_sequence_number;
 use bytesstr::BytesStr;
 use sip_core::transport::OutgoingResponse;
 use sip_core::{Endpoint, IncomingRequest, LayerKey, Request, Result};
-use sip_types::header::typed::{CSeq, CallID, Contact, From, RecordRoute, To};
+use sip_types::header::typed::{CSeq, CallID, Contact, FromTo, Routing};
 use sip_types::host::HostPort;
-use sip_types::{Code, Method};
+use sip_types::{Code, Method, Name};
 
 mod key;
 mod layer;
@@ -28,12 +28,12 @@ pub struct Dialog {
     /// From header used to construct requests inside the dialog
     ///
     /// All dialog code assumes that the tag is some
-    pub from: From,
+    pub local_fromto: FromTo,
 
     /// To header used to construct requests inside the dialog
     ///
     /// Tag may be `None` to provide backwards compatibility
-    pub to: To,
+    pub peer_fromto: FromTo,
 
     /// Local Contact header, used to construct requests inside the dialog
     pub local_contact: Contact,
@@ -46,7 +46,7 @@ pub struct Dialog {
     pub call_id: CallID,
 
     /// Dialog's Route set, must be set with every request
-    pub route_set: Vec<RecordRoute>,
+    pub route_set: Vec<Routing>,
 
     /// Was a secure transport used to construct this dialog
     /// Requires all future requests to also use secure transports
@@ -67,15 +67,15 @@ impl Dialog {
         endpoint: Endpoint,
         dialog_layer: LayerKey<DialogLayer>,
         peer_cseq: u32,
-        from: From,
-        to: To,
+        peer_fromto: FromTo,
+        local_fromto: FromTo,
         local_contact: Contact,
         peer_contact: Contact,
         call_id: CallID,
-        route_set: Vec<RecordRoute>,
+        route_set: Vec<Routing>,
         secure: bool,
     ) -> Self {
-        assert!(to.tag.is_some());
+        assert!(local_fromto.tag.is_some());
 
         let dialog = Self {
             endpoint,
@@ -85,8 +85,8 @@ impl Dialog {
 
             // On server dialogs the from/to headers are reversed
             // since they are taken from an incoming request
-            from: From(to.0),
-            to: To(from.0),
+            local_fromto,
+            peer_fromto,
             local_contact,
             peer_contact,
             call_id,
@@ -109,8 +109,8 @@ impl Dialog {
     pub fn key(&self) -> DialogKey {
         DialogKey {
             call_id: self.call_id.0.clone(),
-            peer_tag: self.to.tag.clone(),
-            local_tag: self.from.tag.clone().unwrap(),
+            peer_tag: self.peer_fromto.tag.clone(),
+            local_tag: self.local_fromto.tag.clone().unwrap(),
         }
     }
 
@@ -120,11 +120,11 @@ impl Dialog {
         let cseq = CSeq::new(self.local_cseq, method);
         self.local_cseq += 1;
 
-        request.headers.insert_type(&self.from);
-        request.headers.insert_type(&self.to);
-        request.headers.insert_type(&self.call_id);
-        request.headers.insert_type(&cseq);
-        request.headers.insert_type(&self.route_set);
+        request.headers.insert_type(Name::FROM, &self.local_fromto);
+        request.headers.insert_type(Name::TO, &self.peer_fromto);
+        request.headers.insert_named(&self.call_id);
+        request.headers.insert_named(&cseq);
+        request.headers.insert_type(Name::ROUTE, &self.route_set);
 
         request
     }
@@ -139,24 +139,27 @@ impl Dialog {
 
         if code == Code::TRYING {
             // remove tag from 100 response
-            response.msg.headers.edit(|to: &mut To| to.tag = None)?;
+            response
+                .msg
+                .headers
+                .edit(Name::TO, |to: &mut FromTo| to.tag = None)?;
         }
 
         if request.line.method == Method::INVITE {
             let code = code.into_u16();
 
             if let 101..=399 | 485 = code {
-                if !response.msg.headers.contains::<Contact>() {
-                    response.msg.headers.insert_type(&self.local_contact);
+                if !response.msg.headers.contains(&Name::CONTACT) {
+                    response.msg.headers.insert_named(&self.local_contact);
                 }
             }
 
             if let 180..=189 | 200..=299 | 405 = code {
-                response.msg.headers.insert_type(self.endpoint.allowed());
+                response.msg.headers.insert_named(self.endpoint.allowed());
             }
 
             if let 200..=299 = code {
-                response.msg.headers.insert_type(self.endpoint.supported());
+                response.msg.headers.insert_named(self.endpoint.supported());
             }
         }
 

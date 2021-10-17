@@ -11,9 +11,8 @@ use parking_lot as pl;
 use sip_core::transaction::consts::T1;
 use sip_core::transport::OutgoingResponse;
 use sip_core::{Endpoint, Error, IncomingRequest, LayerKey, Result, WithStatus};
-use sip_types::header::typed::{Contact, RSeq, RecordRoute, Require, Supported};
-use sip_types::{Code, Method};
-use std::ops::Deref;
+use sip_types::header::typed::{Contact, RSeq, Require, Routing, Supported};
+use sip_types::{Code, Method, Name};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::time::timeout;
@@ -63,14 +62,17 @@ impl Acceptor {
 
         // ==== create dialog
 
-        let supported = invite.headers.get::<Vec<Supported>>().unwrap_or_default();
+        let supported = invite
+            .headers
+            .get_named::<Vec<Supported>>()
+            .unwrap_or_default();
 
-        let peer_supports_timer = supported.iter().any(|ext| ext.deref() == "timer");
-        let peer_supports_100rel = supported.iter().any(|ext| ext.deref() == "100rel");
+        let peer_supports_timer = supported.iter().any(|ext| ext.0 == "timer");
+        let peer_supports_100rel = supported.iter().any(|ext| ext.0 == "100rel");
 
-        let route_set: Vec<RecordRoute> = invite.headers.get().unwrap_or_default();
+        let route_set: Vec<Routing> = invite.headers.get(Name::RECORD_ROUTE).unwrap_or_default();
 
-        let peer_contact: Contact = invite.headers.get()?;
+        let peer_contact: Contact = invite.headers.get_named()?;
 
         if invite.base_headers.from.tag.is_none() {
             return Err(Error {
@@ -197,8 +199,8 @@ impl Acceptor {
         if let InviteSessionState::Provisional { tsx, dialog, .. } = &mut *state {
             let rack = random_sequence_number();
 
-            response.msg.headers.insert_type(&Require("100rel".into()));
-            response.msg.headers.insert_type(&RSeq(rack));
+            response.msg.headers.insert_named(&Require("100rel".into()));
+            response.msg.headers.insert_named(&RSeq(rack));
 
             let (prack_sender, mut prack_recv) = oneshot::channel();
 

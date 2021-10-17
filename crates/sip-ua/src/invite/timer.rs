@@ -27,7 +27,7 @@ impl AcceptorTimerConfig {
         response: &mut OutgoingResponse,
         invite: &IncomingRequest,
     ) -> SessionTimer {
-        let delta_secs = if let Ok(min_se) = invite.headers.get::<MinSe>() {
+        let delta_secs = if let Ok(min_se) = invite.headers.get_named::<MinSe>() {
             min_se.0.max(self.interval_secs)
         } else {
             self.interval_secs
@@ -48,8 +48,8 @@ impl AcceptorTimerConfig {
             }
         };
 
-        response.msg.headers.insert_type(&Require("timer".into()));
-        response.msg.headers.insert_type(&SessionExpires {
+        response.msg.headers.insert_named(&Require("timer".into()));
+        response.msg.headers.insert_named(&SessionExpires {
             delta_secs,
             refresher: self.refresher,
         });

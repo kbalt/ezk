@@ -325,7 +325,8 @@ async fn create_ack(dialog: &mut Dialog, cseq_num: u32) -> Result<OutgoingReques
     let mut ack = dialog.create_request(Method::ACK);
 
     // Set CSeq
-    ack.headers.edit(|cseq: &mut CSeq| cseq.cseq = cseq_num)?;
+    ack.headers
+        .edit_named(|cseq: &mut CSeq| cseq.cseq = cseq_num)?;
 
     let mut ack = dialog.endpoint.create_outgoing(ack, None).await?;
 
@@ -339,7 +340,7 @@ async fn create_ack(dialog: &mut Dialog, cseq_num: u32) -> Result<OutgoingReques
         dialog.via_host_port.clone(),
     );
 
-    ack.msg.headers.insert_type_front(&via);
+    ack.msg.headers.insert_named_front(&via);
 
     Ok(ack)
 }

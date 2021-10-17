@@ -263,11 +263,11 @@ impl Endpoint {
 
         let mut headers = Headers::with_capacity(5);
 
-        headers.insert_type(&request.base_headers.top_via);
-        headers.insert_type(&request.base_headers.from);
-        headers.insert_type(&request.base_headers.to);
-        headers.insert_type(&request.base_headers.call_id);
-        headers.insert_type(&request.base_headers.cseq);
+        headers.insert_named(&request.base_headers.top_via);
+        headers.insert_type(Name::FROM, &request.base_headers.from);
+        headers.insert_type(Name::TO, &request.base_headers.to);
+        headers.insert_named(&request.base_headers.call_id);
+        headers.insert_named(&request.base_headers.cseq);
 
         if code == Code::TRYING {
             let _ = request.headers.clone_into(&mut headers, Name::TIMESTAMP);
@@ -513,19 +513,16 @@ impl EndpointBuilder {
     }
 
     /// Add an ALLOW header to the endpoints capabilities
-    pub fn add_allow<A>(&mut self, allowed: A)
-    where
-        A: Into<Allow>,
-    {
-        self.allow.push(allowed.into())
+    pub fn add_allow(&mut self, allowed: Method) {
+        self.allow.push(Allow(allowed))
     }
 
     /// Add an SUPPORTED header to the endpoints capabilities
-    pub fn add_supported<A>(&mut self, supported: A)
+    pub fn add_supported<S>(&mut self, supported: S)
     where
-        A: Into<Supported>,
+        S: Into<BytesStr>,
     {
-        self.supported.push(supported.into())
+        self.supported.push(Supported(supported.into()))
     }
 
     /// Add an unmanaged transport to the endpoint which will never vanish or break (e.g. UDP)

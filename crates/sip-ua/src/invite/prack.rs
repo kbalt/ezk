@@ -25,7 +25,7 @@ impl InviteUsage {
         let (prack, awaited_prack) = {
             let mut awaited_prack_opt = self.inner.awaited_prack.lock();
             if let Some(awaited_prack) = awaited_prack_opt.take() {
-                let rack = request.headers.get::<RAck>()?;
+                let rack = request.headers.get_named::<RAck>()?;
 
                 if awaited_prack.rack == rack.rack && awaited_prack.cseq == rack.cseq {
                     (request.take(), awaited_prack)
