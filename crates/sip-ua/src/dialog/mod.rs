@@ -1,8 +1,7 @@
-use crate::dialog::layer::DialogEntry;
-use crate::util::random_sequence_number;
+use crate::util::{random_sequence_number, random_string};
 use bytesstr::BytesStr;
 use sip_core::transport::OutgoingResponse;
-use sip_core::{Endpoint, IncomingRequest, LayerKey, Request, Result};
+use sip_core::{Endpoint, Error, IncomingRequest, LayerKey, Request, Result};
 use sip_types::header::typed::{CSeq, CallID, Contact, FromTo, Routing};
 use sip_types::host::HostPort;
 use sip_types::{Code, Method, Name};
@@ -13,11 +12,13 @@ mod layer;
 pub use key::DialogKey;
 pub use layer::{register_usage, DialogLayer, Usage, UsageGuard};
 
+use self::layer::DialogEntry;
+
 #[derive(Debug)]
 pub struct Dialog {
     pub endpoint: Endpoint,
 
-    dialog_layer: LayerKey<DialogLayer>,
+    pub dialog_layer: LayerKey<DialogLayer>,
 
     /// Local CSeq number, increments with every request constructed using this dialog
     pub local_cseq: u32,
@@ -62,47 +63,54 @@ pub struct Dialog {
 
 impl Dialog {
     /// Create a dialog from an incoming request (may be early)
-    #[allow(clippy::too_many_arguments)]
     pub fn new_server(
         endpoint: Endpoint,
         dialog_layer: LayerKey<DialogLayer>,
-        peer_cseq: u32,
-        peer_fromto: FromTo,
-        local_fromto: FromTo,
-        local_contact: Contact,
-        peer_contact: Contact,
-        call_id: CallID,
-        route_set: Vec<Routing>,
-        secure: bool,
-    ) -> Self {
-        assert!(local_fromto.tag.is_some());
+        request: &IncomingRequest,
+        contact: Contact,
+    ) -> Result<Self> {
+        if request.base_headers.from.tag.is_none() {
+            return Err(Error {
+                status: Code::BAD_REQUEST,
+                error: Some(anyhow::anyhow!("Missing Tag")),
+            });
+        }
 
-        let dialog = Self {
+        let route_set: Vec<Routing> = request.headers.get(Name::RECORD_ROUTE).unwrap_or_default();
+
+        let mut dialog = Self {
             endpoint,
             dialog_layer,
             local_cseq: random_sequence_number(),
-            peer_cseq,
-
-            // On server dialogs the from/to headers are reversed
-            // since they are taken from an incoming request
-            local_fromto,
-            peer_fromto,
-            local_contact,
-            peer_contact,
-            call_id,
+            peer_cseq: request.base_headers.cseq.cseq,
+            local_fromto: request.base_headers.to.clone(),
+            peer_fromto: request.base_headers.from.clone(),
+            local_contact: contact,
+            peer_contact: request.headers.get_named()?,
+            call_id: request.base_headers.call_id.clone(),
             route_set,
-            secure,
+            // TODO check how this works exactly
+            secure: request.line.uri.info().secure,
             via_host_port: None,
         };
 
-        let entry = DialogEntry::new(dialog.peer_cseq);
+        // TODO: maybe initialize the to-tag and dialog-entry
+        // once a non-100 response has been formed? Might
+        // cause incompatibility...
+        dialog.local_fromto.tag = Some(random_string());
 
+        let entry = DialogEntry::new(dialog.peer_cseq);
         dialog.endpoint[dialog_layer]
             .dialogs
             .lock()
             .insert(dialog.key(), entry);
 
-        dialog
+        Ok(dialog)
+    }
+
+    pub fn register_usage<U: Usage>(&self, usage: U) -> UsageGuard {
+        register_usage(self.endpoint.clone(), self.dialog_layer, self.key(), usage)
+            .expect("called by the dialog")
     }
 
     /// Create a key that the dialog can be identified with
