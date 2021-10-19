@@ -4,7 +4,7 @@ use sip_types::header::typed::Contact;
 use sip_types::uri::sip::SipUri;
 use sip_types::uri::NameAddr;
 use sip_types::{Code, Method};
-use sip_ua::dialog::DialogLayer;
+use sip_ua::dialog::{Dialog, DialogLayer};
 use sip_ua::invite::acceptor::Acceptor;
 use sip_ua::invite::session::Event;
 use sip_ua::invite::InviteLayer;
@@ -33,14 +33,10 @@ impl Layer for InviteAcceptLayer {
         let contact: SipUri = "sip:bob@example.com".parse().unwrap();
         let contact = Contact::new(NameAddr::uri(contact));
 
-        let acceptor = Acceptor::new(
-            endpoint.clone(),
-            self.dialog_layer,
-            self.invite_layer,
-            invite,
-            contact,
-        )
-        .unwrap();
+        let dialog =
+            Dialog::new_server(endpoint.clone(), self.dialog_layer, &invite, contact).unwrap();
+
+        let acceptor = Acceptor::new(endpoint.clone(), dialog, self.invite_layer, invite).unwrap();
 
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 

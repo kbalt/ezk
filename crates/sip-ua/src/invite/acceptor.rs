@@ -1,18 +1,17 @@
 use super::session::Session;
 use super::timer::{AcceptorTimerConfig, SessionTimer};
 use super::{AwaitedAck, AwaitedPrack, Inner, InviteLayer};
-use crate::dialog::{register_usage, Dialog, DialogLayer, UsageGuard};
+use crate::dialog::{register_usage, Dialog, UsageGuard};
 use crate::invite::session::Role;
 use crate::invite::{InviteSessionState, InviteUsage};
-use crate::util::{random_sequence_number, random_string};
-use anyhow::anyhow;
+use crate::util::random_sequence_number;
 use bytesstr::BytesStr;
 use parking_lot as pl;
 use sip_core::transaction::consts::T1;
 use sip_core::transport::OutgoingResponse;
 use sip_core::{Endpoint, Error, IncomingRequest, LayerKey, Result, WithStatus};
-use sip_types::header::typed::{Contact, RSeq, Require, Routing, Supported};
-use sip_types::{Code, Method, Name};
+use sip_types::header::typed::{RSeq, Require, Supported};
+use sip_types::{Code, Method};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::time::timeout;
@@ -49,18 +48,15 @@ pub(super) struct CancellableKey {
 impl Acceptor {
     pub fn new(
         endpoint: Endpoint,
-        dialog_layer: LayerKey<DialogLayer>,
+        dialog: Dialog,
         invite_layer: LayerKey<InviteLayer>,
-        mut invite: IncomingRequest,
-        local_contact: Contact,
+        invite: IncomingRequest,
     ) -> Result<Self> {
         assert_eq!(
             invite.line.method,
             Method::INVITE,
             "incoming request must be invite"
         );
-
-        // ==== create dialog
 
         let supported = invite
             .headers
@@ -70,32 +66,6 @@ impl Acceptor {
         let peer_supports_timer = supported.iter().any(|ext| ext.0 == "timer");
         let peer_supports_100rel = supported.iter().any(|ext| ext.0 == "100rel");
 
-        let route_set: Vec<Routing> = invite.headers.get(Name::RECORD_ROUTE).unwrap_or_default();
-
-        let peer_contact: Contact = invite.headers.get_named()?;
-
-        if invite.base_headers.from.tag.is_none() {
-            return Err(Error {
-                status: Code::BAD_REQUEST,
-                error: Some(anyhow!("Missing Tag")),
-            });
-        }
-
-        invite.base_headers.to.tag = Some(random_string());
-
-        let dialog = Dialog::new_server(
-            endpoint.clone(),
-            dialog_layer,
-            invite.base_headers.cseq.cseq,
-            invite.base_headers.from.clone(),
-            invite.base_headers.to.clone(),
-            local_contact,
-            peer_contact,
-            invite.base_headers.call_id.clone(),
-            route_set,
-            invite.line.uri.info().secure,
-        );
-
         // ==== register acceptor usage to dialog
 
         let dialog_key = dialog.key();
@@ -104,6 +74,8 @@ impl Acceptor {
             cseq: invite.base_headers.cseq.cseq,
             branch: invite.tsx_key.branch().clone(),
         };
+
+        let dialog_layer = dialog.dialog_layer;
 
         // Create Inner shared state
         let tsx = endpoint.create_server_inv_tsx(&invite);
