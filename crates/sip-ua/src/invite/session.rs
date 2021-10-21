@@ -168,7 +168,7 @@ impl Session {
         state.set_terminated();
 
         let request = self.dialog.create_request(Method::BYE);
-        let transaction = self
+        let mut transaction = self
             .endpoint
             .send_request(request, None, self.dialog.via_host_port.clone())
             .await?;

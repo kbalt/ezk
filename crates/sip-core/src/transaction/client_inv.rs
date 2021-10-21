@@ -13,12 +13,6 @@ use sip_types::{Code, CodeKind, Headers, Method, Name};
 use std::time::{Duration, Instant};
 use tokio::time::{timeout, timeout_at};
 
-#[derive(Debug)]
-struct ClientInvTsxInner {
-    registration: TsxRegistration,
-    request: OutgoingRequest,
-}
-
 /// Client INVITE transaction. Used to receives responses to a INVITE request.
 ///
 /// Dropping it prematurely may result in an invalid transaction and it cannot be guaranteed
@@ -29,7 +23,8 @@ struct ClientInvTsxInner {
 #[must_use]
 #[derive(Debug)]
 pub struct ClientInvTsx {
-    inner: Option<ClientInvTsxInner>,
+    registration: Option<TsxRegistration>,
+    request: OutgoingRequest,
     timeout: Instant,
     state: State,
 }
@@ -82,13 +77,16 @@ impl ClientInvTsx {
         let timeout = Instant::now() + T1 * 64;
 
         Ok(Self {
-            inner: Some(ClientInvTsxInner {
-                registration,
-                request,
-            }),
+            registration: Some(registration),
+            request,
             timeout,
             state: State::Init,
         })
+    }
+
+    /// Returns the request the transaction was created from
+    pub fn request(&self) -> &OutgoingRequest {
+        &self.request
     }
 
     /// Receive one or more responses.
@@ -101,26 +99,25 @@ impl ClientInvTsx {
     /// This behavior SHOULD only apply if an INVITE is sent outside a dialog.
     #[tracing::instrument(name = "tsx_inv_receive", level = "debug", skip(self))]
     pub async fn receive(&mut self) -> Result<Option<TsxResponse>> {
-        let inner = match &mut self.inner {
-            Some(inner) => inner,
+        let registration = match &mut self.registration {
+            Some(registration) => registration,
             None => return Ok(None),
         };
 
         match self.state {
-            State::Init if !inner.request.parts.transport.reliable() => {
+            State::Init if !self.request.parts.transport.reliable() => {
                 let mut n = T1;
 
                 loop {
-                    let receive = timeout(n, inner.registration.receive_response());
+                    let receive = timeout(n, registration.receive_response());
 
                     match timeout_at(self.timeout.into(), receive).await {
                         Ok(Ok(msg)) => return self.handle_msg(msg).await,
                         Ok(Err(_)) => {
                             // retransmit
-                            inner
-                                .registration
+                            registration
                                 .endpoint
-                                .send_outgoing_request(&mut inner.request)
+                                .send_outgoing_request(&mut self.request)
                                 .await?;
 
                             n *= 2;
@@ -130,13 +127,13 @@ impl ClientInvTsx {
                 }
             }
             State::Init | State::Proceeding => {
-                match timeout_at(self.timeout.into(), inner.registration.receive_response()).await {
+                match timeout_at(self.timeout.into(), registration.receive_response()).await {
                     Ok(msg) => self.handle_msg(msg).await,
                     Err(_) => bail_status!(Code::REQUEST_TIMEOUT),
                 }
             }
             State::Accepted => {
-                match timeout_at(self.timeout.into(), inner.registration.receive_response()).await {
+                match timeout_at(self.timeout.into(), registration.receive_response()).await {
                     Ok(msg) => Ok(Some(msg)),
                     Err(_) => {
                         self.state = State::Terminated;
@@ -158,17 +155,16 @@ impl ClientInvTsx {
                 self.state = State::Accepted;
             }
             _ => {
-                let mut inner = self.inner.take().expect("already checked");
+                let mut registration = self.registration.take().expect("already checked");
 
-                let mut ack = create_ack(&inner.request, &msg)?;
+                let mut ack = create_ack(&self.request, &msg)?;
 
-                inner
-                    .registration
+                registration
                     .endpoint
                     .send_outgoing_request(&mut ack)
                     .await?;
 
-                if inner.request.parts.transport.reliable() {
+                if self.request.parts.transport.reliable() {
                     self.state = State::Terminated;
                 } else {
                     self.state = State::Completed;
@@ -176,12 +172,11 @@ impl ClientInvTsx {
                     tokio::spawn(async move {
                         let timeout = Instant::now() + Duration::from_secs(32);
 
-                        while timeout_at(timeout.into(), inner.registration.receive())
+                        while timeout_at(timeout.into(), registration.receive())
                             .await
                             .is_ok()
                         {
-                            inner
-                                .registration
+                            registration
                                 .endpoint
                                 .send_outgoing_request(&mut ack)
                                 .await

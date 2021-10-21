@@ -9,12 +9,6 @@ use sip_types::{Code, CodeKind, Method};
 use std::time::Instant;
 use tokio::time::{timeout, timeout_at};
 
-#[derive(Debug)]
-struct ClientTsxInner {
-    registration: TsxRegistration,
-    request: OutgoingRequest,
-}
-
 /// Client non-INVITE transaction. Used to receive responses to a sent request.
 ///
 /// Dropping it prematurely may result in an invalid transaction and it cannot be guaranteed
@@ -24,7 +18,8 @@ struct ClientTsxInner {
 #[must_use]
 #[derive(Debug)]
 pub struct ClientTsx {
-    inner: Option<ClientTsxInner>,
+    registration: Option<TsxRegistration>,
+    request: OutgoingRequest,
     timeout: Instant,
     state: State,
 }
@@ -72,13 +67,16 @@ impl ClientTsx {
         let timeout = Instant::now() + T1 * 64;
 
         Ok(Self {
-            inner: Some(ClientTsxInner {
-                registration,
-                request,
-            }),
+            registration: Some(registration),
+            request,
             timeout,
             state: State::Init,
         })
+    }
+
+    /// Returns the request the transaction was created from
+    pub fn request(&self) -> &OutgoingRequest {
+        &self.request
     }
 
     /// Receive one or more responses
@@ -89,17 +87,15 @@ impl ClientTsx {
     /// After receiving the final response this function will panic if called again.
     /// This is due to it needing to move out some internal state to a new task.
     pub async fn receive(&mut self) -> Result<TsxResponse> {
-        let inner = if let Some(inner) = &mut self.inner {
-            inner
+        let registration = if let Some(registration) = &mut self.registration {
+            registration
         } else {
             // TODO: This is not a nice API :/
             panic!("transaction already received a final response");
         };
 
-        let registration = &mut inner.registration;
-
         match self.state {
-            State::Init if !inner.request.parts.transport.reliable() => {
+            State::Init if !self.request.parts.transport.reliable() => {
                 loop {
                     let receive = timeout(T2, registration.receive_response());
 
@@ -109,7 +105,7 @@ impl ClientTsx {
                             // retransmit
                             registration
                                 .endpoint
-                                .send_outgoing_request(&mut inner.request)
+                                .send_outgoing_request(&mut self.request)
                                 .await?;
                         }
                         Err(_) => bail_status!(Code::REQUEST_TIMEOUT),
@@ -130,7 +126,7 @@ impl ClientTsx {
 
     /// Calls [`ClientTsx::receive`] and discards all provisional responses
     /// until it receives the final one, returning it.
-    pub async fn receive_final(mut self) -> Result<TsxResponse> {
+    pub async fn receive_final(&mut self) -> Result<TsxResponse> {
         loop {
             let response = self.receive().await?;
 
@@ -149,9 +145,9 @@ impl ClientTsx {
                 self.state = State::Proceeding;
             }
             _ => {
-                let mut inner = self.inner.take().expect("already checked");
+                let mut registration = self.registration.take().expect("already checked");
 
-                if inner.request.parts.transport.reliable() {
+                if self.request.parts.transport.reliable() {
                     self.state = State::Terminated;
                 } else {
                     self.state = State::Completed;
@@ -160,7 +156,7 @@ impl ClientTsx {
                     tokio::spawn(async move {
                         let timeout = Instant::now() + T4;
 
-                        while timeout_at(timeout.into(), inner.registration.receive())
+                        while timeout_at(timeout.into(), registration.receive())
                             .await
                             .is_ok()
                         {
