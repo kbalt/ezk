@@ -154,6 +154,12 @@ impl Dialog {
         }
 
         if request.line.method == Method::INVITE {
+            // Copy record route headers into response
+            request
+                .headers
+                .clone_into(&mut response.msg.headers, Name::RECORD_ROUTE)
+                .ok();
+
             let code = code.into_u16();
 
             if let 101..=399 | 485 = code {
