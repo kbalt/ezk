@@ -189,11 +189,9 @@ impl Endpoint {
             message.parts.buffer = buffer.freeze();
         }
 
-        let target = message.parts.destination[0];
-
         log::trace!(
-            "Sending request to {}\n{:?}",
-            target,
+            "Sending request to {:?}\n{:?}",
+            &message.parts.destination,
             BytesPrint(&message.parts.buffer)
         );
 
@@ -263,7 +261,11 @@ impl Endpoint {
 
         let mut headers = Headers::with_capacity(5);
 
-        headers.insert_named(&request.base_headers.top_via);
+        // TODO: can this be done more efficient? Maybe always get all via headers
+        // and check that at least one exists.
+        let mut vias: Vec<Via> = request.headers.get_named()?;
+        *vias.first_mut().unwrap() = request.base_headers.top_via.clone();
+        headers.insert_named(&vias);
         headers.insert_type(Name::FROM, &request.base_headers.from);
         headers.insert_type(Name::TO, &request.base_headers.to);
         headers.insert_named(&request.base_headers.call_id);
@@ -342,7 +344,8 @@ impl Endpoint {
     #[tracing::instrument(level = "debug", skip(self, message), fields(%message))]
     async fn do_receive(self, message: ReceivedMessage) {
         log::trace!(
-            "Received message: \n{:?}",
+            "Received message from {}: \n{:?}",
+            message.tp_info.source,
             BytesPrint(&message.tp_info.buffer)
         );
 
