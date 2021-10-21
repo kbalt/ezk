@@ -412,7 +412,7 @@ mod test {
                 assert_eq!(algorithm, Algorithm::MD5);
                 assert_eq!(opaque, None);
                 assert_eq!(qop_response, None);
-                assert_eq!(userhash, false);
+                assert!(!userhash);
                 assert_eq!(other, vec![]);
             }
             _ => panic!(),
@@ -490,7 +490,7 @@ mod test {
                 let qop_response = qop_response.unwrap();
                 assert_eq!(qop_response.qop, QopOption::AuthInt);
                 assert_eq!(qop_response.nc, 1);
-                assert_eq!(userhash, false);
+                assert!(!userhash);
                 assert_eq!(other, vec![]);
             }
             _ => panic!("Expected digest"),
@@ -526,7 +526,7 @@ mod test {
                 let qop_response = qop_response.unwrap();
                 assert_eq!(qop_response.qop, QopOption::AuthInt);
                 assert_eq!(qop_response.nc, 2);
-                assert_eq!(userhash, false);
+                assert!(!userhash);
                 assert_eq!(other, vec![]);
             }
             _ => panic!("Expected digest"),

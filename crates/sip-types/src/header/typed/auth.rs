@@ -269,10 +269,10 @@ impl Username {
     ///
     /// Determines the variant and encodes non ascii usernames with utf8 percentage encoding.
     pub fn new(username: BytesStr) -> Self {
-        let maybe_encoded = utf8_percent_encode(username.as_str(), CHARSET).into();
+        let maybe_encoded = utf8_percent_encode(&username, CHARSET).into();
 
         match maybe_encoded {
-            Cow::Borrowed(username) => Username::Username(username.into()),
+            Cow::Borrowed(_) => Username::Username(username),
             Cow::Owned(encoded) => {
                 let username_encoded = format!("UTF-8''{}", encoded).into();
 
@@ -586,10 +586,10 @@ mod test {
                 assert_eq!(domain, None);
                 assert_eq!(nonce, "abc123");
                 assert_eq!(opaque, None);
-                assert_eq!(stale, false);
+                assert!(!stale);
                 assert_eq!(algorithm, Algorithm::MD5);
                 assert_eq!(qop, vec![]);
-                assert_eq!(userhash, false);
+                assert!(!userhash);
                 assert!(other.is_empty())
             }
             _ => panic!(),
@@ -641,7 +641,7 @@ mod test {
                 assert_eq!(domain, Some(BytesStr::from_static("TODO")));
                 assert_eq!(nonce, "abc123");
                 assert_eq!(opaque, Some(BytesStr::from_static("opaque_value")));
-                assert_eq!(stale, true);
+                assert!(stale);
                 assert_eq!(algorithm, Algorithm::SHA256);
                 assert_eq!(
                     qop,
@@ -651,7 +651,7 @@ mod test {
                         QopOption::Other(BytesStr::from_static("a_token"))
                     ]
                 );
-                assert_eq!(userhash, false);
+                assert!(!userhash);
                 assert_eq!(other.len(), 1);
                 assert_eq!(
                     other[0],
@@ -816,7 +816,7 @@ mod test {
                 assert_eq!(nonce, "abc123");
                 assert_eq!(algorithm, Algorithm::MD5);
                 assert_eq!(opaque, None);
-                assert_eq!(stale, false);
+                assert!(!stale);
                 assert_eq!(
                     qop,
                     vec![
@@ -825,7 +825,7 @@ mod test {
                         QopOption::Other(BytesStr::from_static("AuTh-Int")),
                     ]
                 );
-                assert_eq!(userhash, false);
+                assert!(!userhash);
                 assert!(other.is_empty());
             }
             _ => panic!(),
@@ -865,7 +865,7 @@ mod test {
                 assert_eq!(algorithm, Algorithm::MD5);
                 assert_eq!(opaque, None);
                 assert_eq!(qop_response, None);
-                assert_eq!(userhash, false);
+                assert!(!userhash);
                 assert!(other.is_empty());
             }
             AuthResponse::Other(_) => panic!(),
@@ -928,7 +928,7 @@ mod test {
                         nc: 1
                     })
                 );
-                assert_eq!(userhash, false);
+                assert!(!userhash);
                 assert_eq!(
                     other[0],
                     AuthParam {
@@ -1006,7 +1006,7 @@ mod test {
                         nc: 1,
                     })
                 );
-                assert_eq!(userhash, false);
+                assert!(!userhash);
                 assert!(other.is_empty());
             }
             AuthResponse::Other(_) => panic!(),
@@ -1051,7 +1051,7 @@ mod test {
                         nc: 1,
                     })
                 );
-                assert_eq!(userhash, false);
+                assert!(!userhash);
                 assert!(other.is_empty());
             }
             AuthResponse::Other(_) => panic!(),
