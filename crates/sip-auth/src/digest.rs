@@ -44,7 +44,6 @@ fn hash_sha512_trunc256(i: &[u8]) -> String {
 type HashFn = fn(&[u8]) -> String;
 
 struct QopEntry {
-    nc: u32,
     ha1: String,
     ha2: String,
     hash: HashFn,
@@ -126,7 +125,11 @@ impl UacAuthenticator for DigestAuthenticator {
             QopOption::Auth | QopOption::AuthInt => (qop_entry.hash)(
                 format!(
                     "{}:{}:{:08X}:{}:auth:{}",
-                    qop_entry.ha1, digest.nonce, qop_entry.nc, qop_response.cnonce, qop_entry.ha2
+                    qop_entry.ha1,
+                    digest.nonce,
+                    qop_response.nc,
+                    qop_response.cnonce,
+                    qop_entry.ha2
                 )
                 .as_bytes(),
             ),
@@ -227,7 +230,7 @@ impl DigestAuthenticator {
                     .as_bytes(),
                 );
 
-                self.save_qop_response(&challenge.realm, nc, ha1, ha2, hash);
+                self.save_qop_response(&challenge.realm, ha1, ha2, hash);
 
                 let qop_response = QopResponse {
                     qop: QopOption::AuthInt,
@@ -250,7 +253,7 @@ impl DigestAuthenticator {
                     .as_bytes(),
                 );
 
-                self.save_qop_response(&challenge.realm, nc, ha1, ha2, hash);
+                self.save_qop_response(&challenge.realm, ha1, ha2, hash);
 
                 let qop_response = QopResponse {
                     qop: QopOption::Auth,
@@ -300,12 +303,11 @@ impl DigestAuthenticator {
     fn save_qop_response(
         &mut self,
         challenge_realm: &BytesStr,
-        nc: u32,
         ha1: String,
         ha2: String,
         hash: HashFn,
     ) {
-        let qop_entry = QopEntry { nc, ha1, ha2, hash };
+        let qop_entry = QopEntry { ha1, ha2, hash };
 
         if let Some((_, old_qop_entry)) = self
             .qop_responses
@@ -468,13 +470,15 @@ mod test {
             .get::<AuthResponse>(Name::AUTHORIZATION)
             .unwrap();
 
+        let resp_value;
+
         match response {
             AuthResponse::Digest(DigestResponse {
                 username,
                 realm,
                 nonce,
                 uri,
-                response: _, // cannot check, cnonce is random
+                response, // cannot check, cnonce is random
                 algorithm,
                 opaque,
                 qop_response,
@@ -492,6 +496,7 @@ mod test {
                 assert_eq!(qop_response.nc, 1);
                 assert!(!userhash);
                 assert_eq!(other, vec![]);
+                resp_value = response;
             }
             _ => panic!("Expected digest"),
         }
@@ -509,7 +514,7 @@ mod test {
                 realm,
                 nonce,
                 uri,
-                response: _, // cannot check, cnonce is random
+                response, // cannot check, cnonce is random
                 algorithm,
                 opaque,
                 qop_response,
@@ -528,6 +533,7 @@ mod test {
                 assert_eq!(qop_response.nc, 2);
                 assert!(!userhash);
                 assert_eq!(other, vec![]);
+                assert_ne!(resp_value, response)
             }
             _ => panic!("Expected digest"),
         }
