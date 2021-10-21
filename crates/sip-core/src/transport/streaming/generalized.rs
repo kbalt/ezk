@@ -125,7 +125,7 @@ impl<T: StreamingTransport> Transport for StreamingWrite<T> {
         }
     }
 
-    async fn send(&self, bytes: &[u8], _target: SocketAddr) -> io::Result<()> {
+    async fn send(&self, bytes: &[u8], _target: &[SocketAddr]) -> io::Result<()> {
         let mut socket = self.socket.lock().await;
         socket.write_all(bytes).await?;
         Ok(())

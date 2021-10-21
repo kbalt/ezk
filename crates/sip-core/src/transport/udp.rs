@@ -79,10 +79,19 @@ impl Transport for Udp {
         Direction::None
     }
 
-    async fn send(&self, bytes: &[u8], target: SocketAddr) -> io::Result<()> {
-        self.inner.socket.send_to(bytes, target).await?;
+    async fn send(&self, bytes: &[u8], target: &[SocketAddr]) -> io::Result<()> {
+        let target = target
+            .iter()
+            .find(|ip| ip.is_ipv4() == self.bound().is_ipv4());
 
-        Ok(())
+        if let Some(target) = target {
+            self.inner.socket.send_to(bytes, target).await.map(|_| ())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                "no compatible address family available",
+            ))
+        }
     }
 }
 

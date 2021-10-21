@@ -82,7 +82,7 @@ pub trait Transport: Debug + Display + Send + Sync + 'static {
     /// Use the given transport to send `message` to `target`.
     ///
     /// Connection oriented transports may discard the `target` parameter.
-    async fn send(&self, message: &[u8], target: SocketAddr) -> io::Result<()>;
+    async fn send(&self, message: &[u8], target: &[SocketAddr]) -> io::Result<()>;
 }
 
 /// Wrapper over implementations of [`Transport`].

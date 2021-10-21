@@ -200,7 +200,7 @@ impl Endpoint {
         message
             .parts
             .transport
-            .send(&message.parts.buffer, message.parts.destination[0])
+            .send(&message.parts.buffer, &message.parts.destination)
             .await
     }
 
@@ -246,7 +246,7 @@ impl Endpoint {
         message
             .parts
             .transport
-            .send(&message.parts.buffer, message.parts.destination[0])
+            .send(&message.parts.buffer, &message.parts.destination)
             .await
     }
 
