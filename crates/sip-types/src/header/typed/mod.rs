@@ -2,7 +2,7 @@
 
 mod accept;
 mod allow;
-// mod auth;
+mod auth;
 mod call_id;
 mod contact;
 mod content;
@@ -20,7 +20,7 @@ mod via;
 
 pub use accept::Accept;
 pub use allow::Allow;
-// pub use auth::{Auth, AuthParam, Authorization, ProxyAuthenticate, WWWAuthenticate};
+pub use auth::*;
 pub use call_id::CallID;
 pub use contact::Contact;
 pub use content::{ContentLength, ContentType};

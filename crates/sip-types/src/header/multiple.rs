@@ -25,7 +25,7 @@ impl<H: HeaderParse> DecodeValues for Vec<H> {
 
             let mut i = value.as_str();
 
-            while let Ok((remaining, hdr)) = H::parse(ctx, dbg!(i)) {
+            while let Ok((remaining, hdr)) = H::parse(ctx, i) {
                 items.push(hdr);
 
                 let remaining = remaining.trim_start_matches(char::is_whitespace);
