@@ -1,13 +1,7 @@
-use crate::transport::{parse_line, Direction, ReceivedMessage, TpHandle, Transport};
-use crate::{Endpoint, EndpointBuilder, Error, Result, WithStatus};
-use anyhow::anyhow;
-use bytes::Bytes;
-use sip_types::header::typed::ContentLength;
-use sip_types::msg::{MessageLine, PullParser};
-use sip_types::parse::ParseCtx;
-use sip_types::{Code, Headers};
+use crate::transport::parse::{parse_complete, CompleteItem};
+use crate::transport::{Direction, ReceivedMessage, TpHandle, Transport};
+use crate::{Endpoint, EndpointBuilder, Result};
 use std::net::SocketAddr;
-use std::str::from_utf8;
 use std::sync::Arc;
 use std::{fmt, io};
 use tokio::net::{ToSocketAddrs, UdpSocket};
@@ -34,7 +28,7 @@ impl fmt::Display for Udp {
 }
 
 impl Udp {
-    pub async fn spawn<A>(builder: &mut EndpointBuilder, addr: A) -> io::Result<()>
+    pub async fn spawn<A>(builder: &mut EndpointBuilder, addr: A) -> io::Result<TpHandle>
     where
         A: ToSocketAddrs,
     {
@@ -51,9 +45,9 @@ impl Udp {
 
         tokio::spawn(receive_task(builder.subscribe(), inner, handle.clone()));
 
-        builder.add_unmanaged_transport(handle);
+        builder.add_unmanaged_transport(handle.clone());
 
-        Ok(())
+        Ok(handle)
     }
 }
 
@@ -84,9 +78,12 @@ impl Transport for Udp {
     }
 
     async fn send(&self, bytes: &[u8], target: &[SocketAddr]) -> io::Result<()> {
-        let target = target
-            .iter()
-            .find(|ip| ip.is_ipv4() == self.bound().is_ipv4());
+        let target = target.iter().find(|addr| {
+            matches!(
+                (addr, self.inner.bound),
+                (SocketAddr::V4(_), SocketAddr::V4(_)) | (SocketAddr::V6(_), SocketAddr::V6(_))
+            )
+        });
 
         if let Some(target) = target {
             self.inner.socket.send_to(bytes, target).await.map(|_| ())
@@ -114,7 +111,7 @@ async fn receive_task(
     loop {
         let result = inner.socket.recv_from(&mut buffer).await;
 
-        if let Err(e) = handle_msg(&endpoint, &handle, result, &buffer).await {
+        if let Err(e) = handle_msg(&endpoint, &*inner, &handle, result, &buffer).await {
             log::error!("UDP recv error {:?}", e);
         }
     }
@@ -122,83 +119,44 @@ async fn receive_task(
 
 async fn handle_msg(
     endpoint: &Endpoint,
+    inner: &Inner,
     handle: &TpHandle,
     result: io::Result<(usize, SocketAddr)>,
     bytes: &[u8],
 ) -> Result<()> {
     let (len, remote) = result?;
 
-    let buf = Bytes::copy_from_slice(&bytes[..len]);
+    let bytes = &bytes[..len];
 
-    let mut parser = PullParser::new(&buf, 0);
-
-    let mut message_line = None;
-    let mut headers = Headers::new();
-
-    for item in &mut parser {
-        match item {
-            Ok(line) => {
-                let line = from_utf8(line)?;
-
-                if message_line.is_none() {
-                    let ctx = ParseCtx::new(&buf, endpoint.parser());
-
-                    match MessageLine::parse(ctx)(line) {
-                        Ok((_, line)) => {
-                            message_line = Some(line);
-                        }
-                        Err(_) => {
-                            return Err(Error {
-                                status: Code::BAD_REQUEST,
-                                error: Some(anyhow!("Invalid Request/Status Line")),
-                            });
-                        }
-                    }
-                } else {
-                    parse_line(&buf, line, &mut headers)?;
-                }
-            }
-            Err(_) => {
-                return Err(Error {
-                    status: Code::BAD_REQUEST,
-                    error: Some(anyhow!("Message Incomplete")),
-                });
-            }
+    match parse_complete(endpoint.parser(), bytes) {
+        Ok(CompleteItem::KeepAliveRequest) => {
+            inner.socket.send_to(b"\r\n", remote).await?;
         }
-    }
-
-    let head_end = parser.head_end();
-
-    // look for optional content-length header
-    let body = match headers.get_named::<ContentLength>() {
-        Ok(len) => {
-            if len.0 == 0 {
-                Bytes::new()
-            } else if buf.len() >= head_end + len.0 {
-                buf.slice(head_end..head_end + len.0)
-            } else {
-                return Err(Error {
-                    status: Code::BAD_REQUEST,
-                    error: Some(anyhow!("Message Body Incomplete")),
-                });
-            }
+        Ok(CompleteItem::KeepAliveResponse) => {
+            // ignore for now
         }
-        Err(_) => {
-            log::trace!("no valid content-length given, guessing body length from udp frame");
-
-            if head_end == buf.len() {
-                Bytes::new()
-            } else {
-                buf.slice(head_end..)
-            }
+        Ok(CompleteItem::Stun(message)) => {
+            endpoint.receive_stun(message, remote, handle.clone());
+        }
+        Ok(CompleteItem::Sip {
+            line,
+            headers,
+            body,
+            buffer,
+        }) => {
+            endpoint.receive(ReceivedMessage::new(
+                remote,
+                buffer,
+                handle.clone(),
+                line,
+                headers,
+                body,
+            ));
+        }
+        Err(_e) => {
+            // ignore for now
         }
     };
-
-    let line = message_line.status(Code::BAD_REQUEST)?;
-
-    let msg = ReceivedMessage::new(remote, buf, handle.clone(), line, headers, body);
-
-    endpoint.receive(msg);
 
     Ok(())
 }

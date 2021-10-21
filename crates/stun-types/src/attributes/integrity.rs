@@ -43,7 +43,7 @@ impl<'s> MessageIntegrityKey<'s> {
 pub struct MessageIntegrity<'k>(PhantomData<&'k ()>);
 
 impl<'k> Attribute<'_> for MessageIntegrity<'k> {
-    type Context = MessageIntegrityKey<'k>;
+    type Context = &'k MessageIntegrityKey<'k>;
     const TYPE: u16 = 0x0008;
 
     fn decode(
@@ -78,7 +78,7 @@ impl<'k> Attribute<'_> for MessageIntegrity<'k> {
 pub struct MessageIntegritySha256<'k>(PhantomData<&'k ()>);
 
 impl<'k> Attribute<'_> for MessageIntegritySha256<'k> {
-    type Context = MessageIntegrityKey<'k>;
+    type Context = &'k MessageIntegrityKey<'k>;
     const TYPE: u16 = 0x001C;
 
     fn decode(
@@ -155,7 +155,6 @@ mod test {
     use crate::builder::MessageBuilder;
     use crate::header::{Class, Method};
     use crate::parse::ParsedMessage;
-    use bytes::BytesMut;
 
     #[test]
     fn selftest_sha1() {
@@ -167,15 +166,15 @@ mod test {
         message
             .add_attr_with(
                 &MessageIntegrity::default(),
-                MessageIntegrityKey::new_short_term(password),
+                &MessageIntegrityKey::new_short_term(password),
             )
             .unwrap();
         let bytes = message.finish();
-        let bytes = BytesMut::from(&bytes[..]);
+        let bytes = Vec::from(&bytes[..]);
 
-        let mut msg = ParsedMessage::parse(bytes).unwrap().unwrap();
+        let mut msg = ParsedMessage::parse(bytes).unwrap();
 
-        msg.get_attr_with::<MessageIntegrity>(MessageIntegrityKey::new_short_term(password))
+        msg.get_attr_with::<MessageIntegrity>(&MessageIntegrityKey::new_short_term(password))
             .unwrap()
             .unwrap();
     }
@@ -190,15 +189,15 @@ mod test {
         message
             .add_attr_with(
                 &MessageIntegritySha256::default(),
-                MessageIntegrityKey::new_short_term(password),
+                &MessageIntegrityKey::new_short_term(password),
             )
             .unwrap();
         let bytes = message.finish();
-        let bytes = BytesMut::from(&bytes[..]);
+        let bytes = Vec::from(&bytes[..]);
 
-        let mut msg = ParsedMessage::parse(bytes).unwrap().unwrap();
+        let mut msg = ParsedMessage::parse(bytes).unwrap();
 
-        msg.get_attr_with::<MessageIntegritySha256>(MessageIntegrityKey::new_short_term(password))
+        msg.get_attr_with::<MessageIntegritySha256>(&MessageIntegrityKey::new_short_term(password))
             .unwrap()
             .unwrap();
     }

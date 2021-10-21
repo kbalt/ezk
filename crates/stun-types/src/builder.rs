@@ -1,7 +1,7 @@
 use crate::attributes::Attribute;
 use crate::header::{Class, MessageHead, MessageId, Method};
 use crate::{padding_u16, padding_usize, Error};
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{BufMut};
 use std::convert::TryFrom;
 
 pub struct MessageBuilder {
@@ -10,12 +10,12 @@ pub struct MessageBuilder {
 
     padding_in_value_len: bool,
 
-    buffer: BytesMut,
+    buffer: Vec<u8> ,
 }
 
 impl MessageBuilder {
     pub fn new(class: Class, method: Method, tsx_id: u128) -> Self {
-        let mut buffer = BytesMut::new();
+        let mut buffer = Vec::new();
 
         let mut typ = 0;
         method.set(&mut typ);
@@ -89,11 +89,11 @@ impl MessageBuilder {
         Ok(())
     }
 
-    pub fn finish(self) -> Bytes {
-        self.buffer.freeze()
+    pub fn finish(self) -> Vec<u8> {
+        self.buffer
     }
 
-    pub fn buffer(&mut self) -> &mut BytesMut {
+    pub fn buffer(&mut self) -> &mut Vec<u8>  {
         &mut self.buffer
     }
 }

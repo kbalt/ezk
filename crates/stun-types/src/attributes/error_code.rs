@@ -1,8 +1,9 @@
 use super::Attribute;
 use crate::builder::MessageBuilder;
 use crate::parse::{ParsedAttr, ParsedMessage};
-use crate::Error;
+use crate::{Error, NE};
 use bitfield::bitfield;
+use byteorder::ReadBytesExt;
 use bytes::BufMut;
 use std::convert::TryFrom;
 use std::str::from_utf8;
@@ -28,17 +29,17 @@ impl<'s> Attribute<'s> for ErrorCode<'s> {
         msg: &'s mut ParsedMessage,
         attr: ParsedAttr,
     ) -> Result<Self, Error> {
-        let value = attr.get_value(msg.buffer());
+        let mut value = attr.get_value(msg.buffer());
 
         if value.len() < 4 {
             return Err(Error::InvalidData("error code must be at least 4 bytes"));
         }
 
-        let head = u32::from_ne_bytes([value[0], value[1], value[2], value[3]]);
+        let head = value.read_u32::<NE>().unwrap();
         let head = ErrorCodeHead(head);
 
-        let reason = if value.len() > 4 {
-            from_utf8(&value[4..])?
+        let reason = if !value.is_empty() {
+            from_utf8(value)?
         } else {
             ""
         };
@@ -66,5 +67,35 @@ impl<'s> Attribute<'s> for ErrorCode<'s> {
 
     fn encode_len(&self) -> Result<u16, Error> {
         Ok(u16::try_from(4 + self.reason.len())?)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{
+        builder::MessageBuilder,
+        header::{Class, Method},
+        parse::ParsedMessage,
+    };
+
+    use super::ErrorCode;
+
+    #[test]
+    fn error_code() {
+        let mut builder = MessageBuilder::new(Class::Error, Method::Binding, 1234);
+        builder
+            .add_attr(&ErrorCode {
+                number: 400,
+                reason: "Bad Request",
+            })
+            .unwrap();
+
+        let bytes = builder.finish();
+
+        let mut parsed = ParsedMessage::parse(bytes.to_vec()).unwrap();
+        let err = parsed.get_attr::<ErrorCode>().unwrap().unwrap();
+
+        assert_eq!(err.number, 400);
+        assert_eq!(err.reason, "Bad Request");
     }
 }

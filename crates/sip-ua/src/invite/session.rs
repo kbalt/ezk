@@ -45,7 +45,7 @@ impl RefreshNeeded<'_> {
         let mut transaction = self
             .session
             .endpoint
-            .send_invite(invite, None, self.session.dialog.via_host_port.clone())
+            .send_invite(invite, &mut self.session.dialog.target)
             .await?;
 
         let mut ack = None;
@@ -170,7 +170,7 @@ impl Session {
         let request = self.dialog.create_request(Method::BYE);
         let mut transaction = self
             .endpoint
-            .send_request(request, None, self.dialog.via_host_port.clone())
+            .send_request(request, &mut self.dialog.target)
             .await?;
         let response = transaction.receive_final().await?;
 

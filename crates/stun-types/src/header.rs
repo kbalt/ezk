@@ -2,7 +2,6 @@ use crate::{Error, COOKIE};
 use bitfield::bitfield;
 use std::convert::TryFrom;
 
-#[allow(clippy::len_without_is_empty)]
 bitfield! {
     pub struct MessageHead(u32);
 

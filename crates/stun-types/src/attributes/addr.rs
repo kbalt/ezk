@@ -3,29 +3,26 @@ use crate::builder::MessageBuilder;
 use crate::parse::{ParsedAttr, ParsedMessage};
 use crate::{Error, COOKIE, NE};
 use byteorder::ReadBytesExt;
-use bytes::{BufMut, BytesMut};
-use std::io::Cursor;
+use bytes::{BufMut};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 const XOR16: u16 = (COOKIE & 0xFFFF) as u16;
 
-fn decode_addr(buf: &[u8], xor16: u16, xor32: u32, xor128: u128) -> Result<SocketAddr, Error> {
-    let mut cursor = Cursor::new(buf);
-
-    if cursor.read_u8()? != 0 {
+fn decode_addr(mut buf: &[u8], xor16: u16, xor32: u32, xor128: u128) -> Result<SocketAddr, Error> {
+    if buf.read_u8()? != 0 {
         return Err(Error::InvalidData("first byte must be zero"));
     }
 
-    let family = cursor.read_u8()?;
-    let port = cursor.read_u16::<NE>()? ^ xor16;
+    let family = buf.read_u8()?;
+    let port = buf.read_u16::<NE>()? ^ xor16;
 
     let addr = match family {
         1 => {
-            let ip = cursor.read_u32::<NE>()? ^ xor32;
+            let ip = buf.read_u32::<NE>()? ^ xor32;
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from(ip), port))
         }
         2 => {
-            let ip = cursor.read_u128::<NE>()? ^ xor128;
+            let ip = buf.read_u128::<NE>()? ^ xor128;
             SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::from(ip), port, 0, 0))
         }
         _ => {
@@ -36,7 +33,7 @@ fn decode_addr(buf: &[u8], xor16: u16, xor32: u32, xor128: u128) -> Result<Socke
     Ok(addr)
 }
 
-fn encode_addr(addr: SocketAddr, buf: &mut BytesMut, xor16: u16, xor32: u32, xor128: u128) {
+fn encode_addr(addr: SocketAddr, buf: &mut Vec<u8> , xor16: u16, xor32: u32, xor128: u128) {
     buf.put_u8(0);
 
     match addr {

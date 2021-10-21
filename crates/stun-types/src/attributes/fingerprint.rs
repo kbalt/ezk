@@ -4,7 +4,6 @@ use crate::parse::{ParsedAttr, ParsedMessage};
 use crate::{Error, NE};
 use byteorder::ReadBytesExt;
 use bytes::BufMut;
-use std::io::Cursor;
 
 /// [RFC8489](https://datatracker.ietf.org/doc/html/rfc8489#section-14.7)
 pub struct Fingerprint;
@@ -63,13 +62,13 @@ impl Attribute<'_> for Fingerprint {
     const TYPE: u16 = 0x8028;
 
     fn decode(_: Self::Context, msg: &mut ParsedMessage, attr: ParsedAttr) -> Result<Self, Error> {
-        let value = attr.get_value(msg.buffer());
+        let mut value = attr.get_value(msg.buffer());
 
         if value.len() != 4 {
             return Err(Error::InvalidData("fingerprint value must be 4 bytes"));
         }
 
-        let attr_value = Cursor::new(&value).read_u32::<NE>()?;
+        let attr_value = value.read_u32::<NE>()?;
 
         let data = &msg.buffer()[..attr.begin];
 

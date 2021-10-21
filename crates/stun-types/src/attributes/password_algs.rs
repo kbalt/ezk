@@ -3,16 +3,15 @@ use crate::builder::MessageBuilder;
 use crate::parse::{ParsedAttr, ParsedMessage};
 use crate::{padding_usize, Error, NE};
 use byteorder::ReadBytesExt;
-use bytes::{Buf, BufMut};
+use bytes::BufMut;
 use std::convert::TryFrom;
-use std::io::Cursor;
 
 pub const ALGORITHM_MD5: u16 = 0x0001;
 pub const ALGORITHM_SHA256: u16 = 0x0002;
 
 /// [RFC8489](https://datatracker.ietf.org/doc/html/rfc8489#section-14.11)
 pub struct PasswordAlgorithms<'s> {
-    algorithms: Vec<(u16, &'s [u8])>,
+    pub algorithms: Vec<(u16, &'s [u8])>,
 }
 
 impl<'s> Attribute<'s> for PasswordAlgorithms<'s> {
@@ -24,23 +23,19 @@ impl<'s> Attribute<'s> for PasswordAlgorithms<'s> {
         msg: &'s mut ParsedMessage,
         attr: ParsedAttr,
     ) -> Result<Self, Error> {
-        let value = attr.get_value(msg.buffer());
-
-        let mut cursor = Cursor::new(value);
+        let mut value = attr.get_value(msg.buffer());
 
         let mut algorithms = vec![];
 
-        while cursor.has_remaining() {
-            let alg = cursor.read_u16::<NE>()?;
-            let len = usize::from(cursor.read_u16::<NE>()?);
+        while !value.is_empty() {
+            let alg = value.read_u16::<NE>()?;
+            let len = usize::from(value.read_u16::<NE>()?);
 
-            let pos = usize::try_from(cursor.position())?;
-
-            if value.len() < pos + len {
+            if value.len() < len {
                 return Err(Error::InvalidData("invalid algorithm len"));
             }
 
-            let params = &value[pos..pos + len];
+            let params = &value[..len];
 
             algorithms.push((alg, params));
         }
@@ -76,8 +71,8 @@ impl<'s> Attribute<'s> for PasswordAlgorithms<'s> {
 
 /// [RFC8489](https://datatracker.ietf.org/doc/html/rfc8489#section-14.12)
 pub struct PasswordAlgorithm<'s> {
-    algorithm: u16,
-    params: &'s [u8],
+    pub algorithm: u16,
+    pub params: &'s [u8],
 }
 
 impl<'s> Attribute<'s> for PasswordAlgorithm<'s> {
@@ -89,20 +84,16 @@ impl<'s> Attribute<'s> for PasswordAlgorithm<'s> {
         msg: &'s mut ParsedMessage,
         attr: ParsedAttr,
     ) -> Result<Self, Error> {
-        let value = attr.get_value(msg.buffer());
+        let mut value = attr.get_value(msg.buffer());
 
-        let mut cursor = Cursor::new(value);
+        let alg = value.read_u16::<NE>()?;
+        let len = usize::from(value.read_u16::<NE>()?);
 
-        let alg = cursor.read_u16::<NE>()?;
-        let len = usize::from(cursor.read_u16::<NE>()?);
-
-        let pos = usize::try_from(cursor.position())?;
-
-        if value.len() < pos + len {
+        if value.len() < len {
             return Err(Error::InvalidData("invalid algorithm len"));
         }
 
-        let params = &value[pos..pos + len];
+        let params = &value[..len];
 
         Ok(Self {
             algorithm: alg,

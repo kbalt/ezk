@@ -1,10 +1,10 @@
 use self::managed::{DropNotifier, ManagedTransportState, MangedTransport, RefOwner, WeakRefOwner};
 use self::resolver::{Resolver, SystemResolver};
-use crate::{Endpoint, Error, Request, Response, Result, WithStatus};
-use anyhow::anyhow;
+use self::stun_user::StunUser;
+use crate::{Endpoint, Request, Response, Result, WithStatus};
 use bytes::Bytes;
 use parking_lot::Mutex;
-use sip_types::host::Host;
+use sip_types::host::{Host, HostPort};
 use sip_types::msg::MessageLine;
 use sip_types::print::AppendCtx;
 use sip_types::uri::{Uri, UriInfo};
@@ -17,11 +17,15 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::{fmt, io};
+use stun::StunEndpoint;
+use stun_types::parse::ParsedMessage;
 use tokio::sync::oneshot;
 
 mod managed;
+mod parse;
 pub mod resolver;
 pub mod streaming;
+mod stun_user;
 pub mod udp;
 
 /// Abstraction over a transport factory.
@@ -103,6 +107,12 @@ impl Deref for TpHandle {
     }
 }
 
+impl PartialEq for TpHandle {
+    fn eq(&self, other: &Self) -> bool {
+        TpKey::from_dyn(&*self.transport) == TpKey::from_dyn(&*other.transport)
+    }
+}
+
 impl fmt::Display for TpHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.transport.direction() {
@@ -126,11 +136,7 @@ impl TpHandle {
 
     /// Get the [`TpKey`] to identify this transport
     pub fn key(&self) -> TpKey {
-        TpKey {
-            name: self.transport.name(),
-            bound: self.transport.bound(),
-            direction: self.transport.direction(),
-        }
+        TpKey::from_dyn(&*self.transport)
     }
 
     fn new_managed<T: Transport>(transport: T) -> (Self, WeakRefOwner, DropNotifier) {
@@ -158,6 +164,24 @@ pub enum Direction {
 
     /// A connection oriented transport which was accepted by this endpoint
     Incoming(SocketAddr),
+}
+
+/// Information saved for subsequent request to the same target
+///
+/// Used to save the transport & resolved socket addrs of an uri.
+/// Can also be used to configure the via_host_port if it needs rewriting.
+#[derive(Debug, Default, Clone)]
+pub struct TargetTransportInfo {
+    /// optional host port to use in the via header
+    pub via_host_port: Option<HostPort>,
+
+    /// Optional transport to use
+    pub transport: Option<TpHandle>,
+
+    /// Addresses to send the request to.
+    /// If empty the request-uri will be used
+    /// to resolve addresses
+    pub destination: Vec<SocketAddr>,
 }
 
 /// Transport related info for a message
@@ -256,25 +280,36 @@ pub struct TpKey {
     pub direction: Direction,
 }
 
+impl TpKey {
+    fn from_dyn(transport: &dyn Transport) -> Self {
+        Self {
+            name: transport.name(),
+            bound: transport.bound(),
+            direction: transport.direction(),
+        }
+    }
+}
+
 pub(crate) struct Transports {
     unmanaged: Box<[TpHandle]>,
     factories: Box<[Arc<dyn Factory>]>,
 
     transports: Mutex<HashMap<TpKey, MangedTransport>>,
 
+    stun: StunEndpoint<StunUser>,
     resolver: Box<dyn Resolver>,
 }
 
 impl Transports {
-    pub async fn resolve(&self, name: &str) -> Result<Vec<SocketAddr>> {
-        self.resolver.resolve(name).await
+    pub async fn resolve(&self, name: &str, port: u16) -> Result<Vec<SocketAddr>> {
+        self.resolver.resolve(name, port).await
     }
 
     pub async fn resolve_host_port(&self, host: &Host, port: u16) -> Result<Vec<SocketAddr>> {
         match host {
             Host::IP6(ip) => Ok(vec![SocketAddr::from((*ip, port))]),
             Host::IP4(ip) => Ok(vec![SocketAddr::from((*ip, port))]),
-            Host::Name(n) => self.resolve(n).await,
+            Host::Name(n) => self.resolve(n, port).await,
         }
     }
 
@@ -491,6 +526,15 @@ impl Transports {
 
         self.transports.lock().remove(tp_key);
     }
+
+    pub async fn receive_stun(
+        &self,
+        message: ParsedMessage,
+        source: SocketAddr,
+        transport: TpHandle,
+    ) {
+        self.stun.receive(message, source, transport).await
+    }
 }
 
 #[derive(Default)]
@@ -515,27 +559,12 @@ impl TransportsBuilder {
         Transports {
             unmanaged: take(&mut self.unmanaged).into_boxed_slice(),
             factories: take(&mut self.factories).into_boxed_slice(),
+            stun: StunEndpoint::new(StunUser),
             transports: Default::default(),
             resolver: self
                 .resolver
                 .take()
                 .unwrap_or_else(|| Box::new(SystemResolver)),
         }
-    }
-}
-
-fn parse_line(src: &Bytes, line: &str, headers: &mut Headers) -> Result<()> {
-    use sip_types::msg::Line;
-
-    match Line::parse(src)(line) {
-        Ok((_, line)) => {
-            headers.insert(line.name, line.value);
-
-            Ok(())
-        }
-        Err(_) => Err(Error {
-            status: Code::BAD_REQUEST,
-            error: Some(anyhow!("Invalid Header Line")),
-        }),
     }
 }

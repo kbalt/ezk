@@ -5,7 +5,6 @@ use crate::{Error, NE};
 use byteorder::ReadBytesExt;
 use bytes::BufMut;
 use std::convert::TryInto;
-use std::io::Cursor;
 use std::net::SocketAddr;
 
 /// [RFC5766](https://datatracker.ietf.org/doc/html/rfc5766#section-14.1)
@@ -16,9 +15,7 @@ impl Attribute<'_> for ChannelNumber {
     const TYPE: u16 = 0x000C;
 
     fn decode(_: Self::Context, msg: &mut ParsedMessage, attr: ParsedAttr) -> Result<Self, Error> {
-        let mut cursor = Cursor::new(attr.get_value(msg.buffer()));
-
-        Ok(Self(cursor.read_u16::<NE>()?))
+        Ok(Self(attr.get_value(msg.buffer()).read_u16::<NE>()?))
     }
 
     fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
@@ -41,9 +38,7 @@ impl Attribute<'_> for Lifetime {
     const TYPE: u16 = 0x000D;
 
     fn decode(_: Self::Context, msg: &mut ParsedMessage, attr: ParsedAttr) -> Result<Self, Error> {
-        let mut cursor = Cursor::new(attr.get_value(msg.buffer()));
-
-        Ok(Self(cursor.read_u32::<NE>()?))
+        Ok(Self(attr.get_value(msg.buffer()).read_u32::<NE>()?))
     }
 
     fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
@@ -116,9 +111,7 @@ impl Attribute<'_> for EvenPort {
     const TYPE: u16 = 0x0018;
 
     fn decode(_: Self::Context, msg: &mut ParsedMessage, attr: ParsedAttr) -> Result<Self, Error> {
-        let mut cursor = Cursor::new(attr.get_value(msg.buffer()));
-
-        Ok(Self(cursor.read_u8()? == 1))
+        Ok(Self(attr.get_value(msg.buffer()).read_u8()? == 1))
     }
 
     fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
@@ -143,10 +136,8 @@ impl Attribute<'_> for RequestedTransport {
     const TYPE: u16 = 0x0019;
 
     fn decode(_: Self::Context, msg: &mut ParsedMessage, attr: ParsedAttr) -> Result<Self, Error> {
-        let mut cursor = Cursor::new(attr.get_value(msg.buffer()));
-
         Ok(Self {
-            protocol_number: cursor.read_u8()?,
+            protocol_number: attr.get_value(msg.buffer()).read_u8()?,
         })
     }
 

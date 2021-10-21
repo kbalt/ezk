@@ -2,9 +2,8 @@ use crate::builder::MessageBuilder;
 use crate::parse::{ParsedAttr, ParsedMessage};
 use crate::{Error, NE};
 use byteorder::ReadBytesExt;
-use bytes::{Buf, BufMut};
+use bytes::{BufMut};
 use std::convert::TryFrom;
-use std::io::Cursor;
 use std::str::from_utf8;
 
 mod addr;
@@ -116,12 +115,12 @@ impl Attribute<'_> for UnknownAttributes {
     const TYPE: u16 = 0x000A;
 
     fn decode(_: Self::Context, msg: &mut ParsedMessage, attr: ParsedAttr) -> Result<Self, Error> {
-        let mut cursor = Cursor::new(attr.get_value(msg.buffer()));
+        let mut value = attr.get_value(msg.buffer());
 
         let mut attributes = vec![];
 
-        while cursor.has_remaining() {
-            attributes.push(cursor.read_u16::<NE>()?);
+        while !value.is_empty() {
+            attributes.push(value.read_u16::<NE>()?);
         }
 
         Ok(Self(attributes))

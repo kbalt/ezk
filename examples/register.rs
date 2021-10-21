@@ -1,4 +1,5 @@
 use sip_core::transport::udp::Udp;
+use sip_core::transport::TargetTransportInfo;
 use sip_core::{Endpoint, Error, Result};
 use sip_types::uri::sip::SipUri;
 use sip_types::uri::NameAddr;
@@ -18,11 +19,12 @@ async fn main() -> Result<()> {
     let id: SipUri = "sip:alice@example.com".parse().unwrap();
     let registrar: SipUri = "sip:example.com".parse().unwrap();
 
+    let mut target = TargetTransportInfo::default();
     let mut registration = Registration::new(NameAddr::uri(id), registrar.into());
 
     loop {
         let request = registration.create_register(false);
-        let mut transaction = endpoint.send_request(request, None, None).await?;
+        let mut transaction = endpoint.send_request(request, &mut target).await?;
         let response = transaction.receive_final().await?;
 
         match response.line.code.kind() {

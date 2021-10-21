@@ -1,81 +1,85 @@
-use bytes::Bytes;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::Duration;
-use stun_types::attributes::{
-    MessageIntegrity, MessageIntegrityKey, MessageIntegritySha256, Realm, Software, Username,
-};
-use stun_types::builder::MessageBuilder;
-use stun_types::header::{Class, Method};
 use stun_types::parse::ParsedMessage;
-use stun_types::{transaction_id, Error};
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 
-pub struct IncomingMessage<T>
-where
-    T: Send + Sync + PartialEq,
-{
-    pub message: ParsedMessage,
-    pub token: T,
+pub mod auth;
+
+pub trait TransportInfo {
+    fn reliable(&self) -> bool;
 }
 
+pub struct Request<'r, T> {
+    pub bytes: &'r [u8],
+    pub tsx_id: u128,
+    pub transport: &'r T,
+}
+
+pub struct IncomingMessage<T> {
+    pub message: ParsedMessage,
+    pub source: SocketAddr,
+    pub transport: T,
+}
+
+/// Defines the "user" of a [`StunEndpoint`].
+///
+/// It is designed to be somewhat flexible and transport agnostic.
+///
+/// When using a [`StunEndpoint`] for multiple transports `UserData`
+/// can be used to either pass the transport around directly or
+/// have just be an identifying key.
 #[async_trait::async_trait]
 pub trait StunEndpointUser: Send + Sync {
-    type Token: Clone + Send + Sync + PartialEq;
+    type Transport: TransportInfo + Send + Sync;
 
-    async fn send(&self, token: &Self::Token, bytes: &[u8]) -> io::Result<()>;
-    async fn receive(&self, message: IncomingMessage<Self::Token>);
+    /// Send the given `bytes` to `target` with the given `transport`.
+    async fn send_to(
+        &self,
+        bytes: &[u8],
+        target: &[SocketAddr],
+        transport: &Self::Transport,
+    ) -> io::Result<()>;
+
+    /// Called by [`StunEndpoint::receive`] when it encounters a message
+    /// without a matching transaction id.
+    async fn receive(&self, message: IncomingMessage<Self::Transport>);
 }
 
-pub struct StunEndpoint<U>
-where
-    U: StunEndpointUser,
-{
-    inner: Arc<Inner<U>>,
-}
-
-struct Inner<U>
-where
-    U: StunEndpointUser,
-{
+/// Transport agnostic endpoint. Uses [`StunEndpointUser`] to define
+/// send/receive behavior.
+pub struct StunEndpoint<U: StunEndpointUser> {
     user: U,
-    transactions: Mutex<HashMap<u128, Transaction<U::Token>>>,
+    transactions: Mutex<HashMap<u128, Transaction>>,
 }
 
-struct Transaction<T>
-where
-    T: Send + Sync + PartialEq,
-{
+struct Transaction {
     sender: oneshot::Sender<ParsedMessage>,
-    token: T,
 }
 
-impl<U> StunEndpoint<U>
-where
-    U: StunEndpointUser,
-{
+impl<U: StunEndpointUser> StunEndpoint<U> {
     pub fn new(user: U) -> Self {
         Self {
-            inner: Arc::new(Inner {
-                user,
-                transactions: Default::default(),
-            }),
+            user,
+            transactions: Default::default(),
         }
     }
 
     pub fn user(&self) -> &U {
-        &self.inner.user
+        &self.user
+    }
+
+    pub fn user_mut(&mut self) -> &mut U {
+        &mut self.user
     }
 
     pub async fn send_request(
         &self,
-        token: U::Token,
-        tsx: u128,
-        bytes: &[u8],
+        request: Request<'_, U::Transport>,
+        target: &[SocketAddr],
     ) -> io::Result<Option<ParsedMessage>> {
         struct DropGuard<'s, U>(&'s StunEndpoint<U>, u128)
         where
@@ -86,177 +90,65 @@ where
             U: StunEndpointUser,
         {
             fn drop(&mut self) {
-                self.0.inner.transactions.lock().remove(&self.1);
+                self.0.transactions.lock().remove(&self.1);
             }
         }
 
-        let _guard = DropGuard(self, tsx);
+        let _guard = DropGuard(self, request.tsx_id);
 
         let (tx, mut rx) = oneshot::channel();
-        self.inner.transactions.lock().insert(
-            tsx,
-            Transaction {
-                sender: tx,
-                token: token.clone(),
-            },
-        );
+        self.transactions
+            .lock()
+            .insert(request.tsx_id, Transaction { sender: tx });
 
         let mut delta = Duration::from_millis(500);
 
-        // TODO retransmit delta
-        for _ in 0..7 {
-            self.inner.user.send(&token, bytes).await?;
-
+        if request.transport.reliable() {
             match timeout(delta, &mut rx).await {
-                Ok(Ok(response)) => return Ok(Some(response)),
+                Ok(Ok(response)) => Ok(Some(response)),
                 Ok(Err(_)) => unreachable!(),
-                Err(_) => {
-                    delta *= 2;
+                Err(_) => Ok(None),
+            }
+        } else {
+            for _ in 0..7 {
+                self.user
+                    .send_to(request.bytes, target, request.transport)
+                    .await?;
+
+                match timeout(delta, &mut rx).await {
+                    Ok(Ok(response)) => return Ok(Some(response)),
+                    Ok(Err(_)) => unreachable!(),
+                    Err(_) => {
+                        delta *= 2;
+                    }
                 }
             }
-        }
 
-        Ok(None)
+            Ok(None)
+        }
     }
 
-    pub async fn receive(&self, message: ParsedMessage, inc_token: U::Token) {
+    /// Pass a received STUN message to the endpoint for further processing
+    pub async fn receive(
+        &self,
+        message: ParsedMessage,
+        source: SocketAddr,
+        transport: U::Transport,
+    ) {
         {
-            let mut transactions = self.inner.transactions.lock();
-            if let Some(Transaction { sender, token }) = transactions.remove(&message.tsx_id) {
-                if inc_token == token {
-                    let _ = sender.send(message);
-                    return;
-                }
+            let mut transactions = self.transactions.lock();
+            if let Some(Transaction { sender }) = transactions.remove(&message.tsx_id) {
+                let _ = sender.send(message);
+                return;
             }
         }
 
-        self.inner
-            .user
+        self.user
             .receive(IncomingMessage {
+                source,
                 message,
-                token: inc_token,
+                transport,
             })
             .await;
-    }
-}
-
-pub struct StunAuthSession {}
-
-pub enum StunCredential {
-    ShortTerm {
-        username: String,
-        password: String,
-    },
-    LongTerm {
-        realm: String,
-        username: String,
-        password: String,
-    },
-}
-
-impl StunCredential {
-    fn auth_msg(&mut self, mut msg: MessageBuilder) -> Result<(), Error> {
-        match &*self {
-            StunCredential::ShortTerm { username, password } => {
-                msg.add_attr(&Username::new(username))?;
-                msg.add_attr_with(
-                    &MessageIntegritySha256::default(),
-                    MessageIntegrityKey::new_short_term(password),
-                )?;
-                msg.add_attr_with(
-                    &MessageIntegrity::default(),
-                    MessageIntegrityKey::new_short_term(password),
-                )?;
-
-                todo!()
-            }
-            StunCredential::LongTerm {
-                realm,
-                username,
-                password,
-            } => {
-                msg.add_attr(&Realm::new(realm))?;
-                msg.add_attr(&Username::new(username))?;
-
-                todo!()
-            }
-        }
-    }
-}
-
-pub struct StunServerConfig {
-    addr: SocketAddr,
-
-    credential: Option<StunCredential>,
-}
-
-impl StunServerConfig {
-    pub fn new(addr: SocketAddr) -> StunServerConfig {
-        Self {
-            addr,
-            credential: None,
-        }
-    }
-
-    pub fn with_credential(self, credential: StunCredential) -> Self {
-        Self {
-            credential: Some(credential),
-            ..self
-        }
-    }
-}
-
-pub struct Client {
-    server: StunServerConfig,
-}
-
-impl Client {
-    pub fn new(server: StunServerConfig) -> Self {
-        Self { server }
-    }
-
-    fn binding_request(&self) -> Bytes {
-        let mut message = MessageBuilder::new(Class::Request, Method::Binding, transaction_id());
-
-        message.add_attr(&Software::new("ezk-stun")).unwrap();
-
-        message.finish()
-    }
-}
-
-#[cfg(test)]
-mod test {
-
-    use bytes::BytesMut;
-    use stun_types::parse::ParsedMessage;
-    use tokio::net::{lookup_host, UdpSocket};
-
-    use super::*;
-
-    #[tokio::test]
-    async fn test() {
-        let addr = lookup_host("stun.sipgate.net:3478")
-            .await
-            .unwrap()
-            .next()
-            .unwrap();
-
-        let client = Client::new(StunServerConfig::new(addr));
-
-        let binding_request = client.binding_request();
-        println!("{:02X?}", &binding_request[..]);
-
-        let udp = UdpSocket::bind("0.0.0.0:0").await.unwrap();
-
-        udp.send_to(&binding_request, addr).await.unwrap();
-
-        let mut buf = BytesMut::new();
-        buf.resize(65535, 0);
-
-        let (len, remote) = udp.recv_from(&mut buf).await.unwrap();
-
-        buf.truncate(len);
-
-        ParsedMessage::parse(buf).unwrap().unwrap();
     }
 }

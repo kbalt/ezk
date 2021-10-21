@@ -1,8 +1,8 @@
-use crate::attributes::Attribute;
+use crate::attributes::{Attribute, Fingerprint, MessageIntegrity, MessageIntegritySha256};
 use crate::header::{Class, MessageHead, MessageId, Method};
 use crate::{padding_usize, Error, COOKIE, NE};
 use byteorder::ReadBytesExt;
-use bytes::{Buf, BytesMut};
+use bytes::Buf;
 use std::convert::TryFrom;
 use std::io::Cursor;
 
@@ -28,7 +28,7 @@ impl ParsedAttr {
 }
 
 pub struct ParsedMessage {
-    buffer: BytesMut,
+    buffer: Vec<u8>,
 
     head: MessageHead,
     id: MessageId,
@@ -41,21 +41,21 @@ pub struct ParsedMessage {
 }
 
 impl ParsedMessage {
-    pub fn parse(buffer: BytesMut) -> Result<Option<ParsedMessage>, Error> {
+    pub fn parse(buffer: Vec<u8>) -> Result<ParsedMessage, Error> {
         let mut cursor = Cursor::new(buffer);
 
         let head = cursor.read_u32::<NE>()?;
         let head = MessageHead(head);
 
         if head.z() != 0 {
-            return Ok(None);
+            return Err(Error::InvalidData("not a stun message"));
         }
 
         let id = cursor.read_u128::<NE>()?;
         let id = MessageId(id);
 
         if id.cookie() != COOKIE {
-            return Ok(None);
+            return Err(Error::InvalidData("not a stun message"));
         }
 
         let class = Class::try_from(head.typ())?;
@@ -106,7 +106,7 @@ impl ParsedMessage {
 
         let tsx_id = id.tsx_id();
 
-        Ok(Some(ParsedMessage {
+        Ok(ParsedMessage {
             buffer: cursor.into_inner(),
             head,
             id,
@@ -114,7 +114,7 @@ impl ParsedMessage {
             method,
             tsx_id,
             attributes,
-        }))
+        })
     }
 
     pub fn get_attr<'a, A>(&'a mut self) -> Option<Result<A, Error>>
@@ -128,9 +128,24 @@ impl ParsedMessage {
     where
         A: Attribute<'a> + 'a,
     {
+        let mut after_integrity = false;
+
         for attr in self.attributes.iter().copied() {
+            if after_integrity
+                && !matches!(attr.typ, MessageIntegritySha256::TYPE | Fingerprint::TYPE)
+            {
+                // ignore attributes after integrity
+                // excluding MESSAGE-INTEGRITY-SHA256 & FINGERPRINT
+                return None;
+            }
+
             if attr.typ == A::TYPE {
                 return Some(A::decode(ctx, self, attr));
+            } else if matches!(
+                attr.typ,
+                MessageIntegrity::TYPE | MessageIntegritySha256::TYPE
+            ) {
+                after_integrity = true;
             }
         }
 
@@ -162,7 +177,7 @@ impl ParsedMessage {
         result
     }
 
-    pub fn buffer(&self) -> &BytesMut {
+    pub fn buffer(&self) -> &[u8] {
         &self.buffer
     }
 
