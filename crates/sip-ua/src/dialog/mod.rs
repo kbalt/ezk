@@ -1,3 +1,4 @@
+use self::layer::DialogEntry;
 use crate::util::{random_sequence_number, random_string};
 use bytesstr::BytesStr;
 use sip_core::transport::OutgoingResponse;
@@ -12,13 +13,14 @@ mod layer;
 pub use key::DialogKey;
 pub use layer::{register_usage, DialogLayer, Usage, UsageGuard};
 
-use self::layer::DialogEntry;
-
 #[derive(Debug)]
 pub struct Dialog {
     pub endpoint: Endpoint,
 
     pub dialog_layer: LayerKey<DialogLayer>,
+
+    /// Flag which indicates if a success response has been sent yet
+    pub created: bool,
 
     /// Local CSeq number, increments with every request constructed using this dialog
     pub local_cseq: u32,
@@ -81,6 +83,7 @@ impl Dialog {
         let mut dialog = Self {
             endpoint,
             dialog_layer,
+            created: false,
             local_cseq: random_sequence_number(),
             peer_cseq: request.base_headers.cseq.cseq,
             local_fromto: request.base_headers.to.clone(),
@@ -94,9 +97,6 @@ impl Dialog {
             via_host_port: None,
         };
 
-        // TODO: maybe initialize the to-tag and dialog-entry
-        // once a non-100 response has been formed? Might
-        // cause incompatibility...
         dialog.local_fromto.tag = Some(random_string());
 
         let entry = DialogEntry::new(dialog.peer_cseq);
@@ -138,27 +138,20 @@ impl Dialog {
     }
 
     pub async fn create_response(
-        &self,
+        &mut self,
         request: &IncomingRequest,
         code: Code,
         reason: Option<BytesStr>,
     ) -> Result<OutgoingResponse> {
         let mut response = self.endpoint.create_response(request, code, reason).await?;
 
-        if code == Code::TRYING {
-            // remove tag from 100 response
-            response
-                .msg
-                .headers
-                .edit(Name::TO, |to: &mut FromTo| to.tag = None)?;
-        }
-
         if request.line.method == Method::INVITE {
-            // Copy record route headers into response
-            request
-                .headers
-                .clone_into(&mut response.msg.headers, Name::RECORD_ROUTE)
-                .ok();
+            if !self.created {
+                // Copy record route headers into response
+                let _ = request
+                    .headers
+                    .clone_into(&mut response.msg.headers, Name::RECORD_ROUTE);
+            }
 
             let code = code.into_u16();
 
@@ -173,6 +166,15 @@ impl Dialog {
             }
 
             if let 200..=299 = code {
+                if !self.created {
+                    self.created = true;
+
+                    // Add To-tag to success response to create dialog
+                    response.msg.headers.edit(Name::TO, |to: &mut FromTo| {
+                        to.tag = self.local_fromto.tag.clone();
+                    })?;
+                }
+
                 response.msg.headers.insert_named(self.endpoint.supported());
             }
         }

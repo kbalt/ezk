@@ -175,7 +175,8 @@ impl InviteLayer {
             let cancel = cancel.take();
             let cancel_tsx = endpoint.create_server_tsx(&cancel);
 
-            if let Some((dialog, invite_tsx, invite)) = inner.state.lock().await.set_cancelled() {
+            if let Some((mut dialog, invite_tsx, invite)) = inner.state.lock().await.set_cancelled()
+            {
                 let invite_response = dialog
                     .create_response(&invite, Code::REQUEST_TERMINATED, None)
                     .await?;
@@ -299,7 +300,7 @@ impl InviteUsage {
     async fn handle_bye_in_provisional_state(
         &self,
         endpoint: &Endpoint,
-        dialog: Dialog,
+        mut dialog: Dialog,
         invite_tsx: ServerInvTsx,
         invite: IncomingRequest,
         bye: IncomingRequest,

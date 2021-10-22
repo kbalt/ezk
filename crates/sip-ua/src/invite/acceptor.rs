@@ -132,9 +132,9 @@ impl Acceptor {
         code: Code,
         reason: Option<BytesStr>,
     ) -> Result<OutgoingResponse> {
-        let state = self.inner.state.lock().await;
+        let mut state = self.inner.state.lock().await;
 
-        if let InviteSessionState::Provisional { dialog, invite, .. } = &*state {
+        if let InviteSessionState::Provisional { dialog, invite, .. } = &mut *state {
             dialog.create_response(invite, code, reason).await
         } else {
             Err(Error::new(Code::REQUEST_TERMINATED))
