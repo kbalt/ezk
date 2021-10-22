@@ -78,7 +78,8 @@ impl Request {
 /// Parsed SIP headers that are part of every message, part of [`IncomingRequest`].
 #[derive(Debug)]
 pub struct BaseHeaders {
-    pub top_via: Via,
+    /// All via headers, must be guaranteed to not be empty
+    pub via: Vec<Via>,
     pub from: FromTo,
     pub to: FromTo,
     pub call_id: CallID,
@@ -88,7 +89,7 @@ pub struct BaseHeaders {
 impl BaseHeaders {
     fn extract_from(headers: &Headers) -> Result<Self, HeaderError> {
         Ok(BaseHeaders {
-            top_via: headers.get_named()?,
+            via: headers.get_named()?,
             from: headers.get(Name::FROM)?,
             to: headers.get(Name::TO)?,
             call_id: headers.get_named()?,

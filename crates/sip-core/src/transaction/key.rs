@@ -109,7 +109,7 @@ impl TsxKey {
     fn from_headers(headers: &BaseHeaders, role: Role) -> Result<Self, HeaderError> {
         let Via {
             sent_by, params, ..
-        } = &headers.top_via;
+        } = &headers.via[0];
 
         let branch = params.get_val("branch").unwrap_or(&EMPTY);
 

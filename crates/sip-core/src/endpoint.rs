@@ -261,11 +261,7 @@ impl Endpoint {
 
         let mut headers = Headers::with_capacity(5);
 
-        // TODO: can this be done more efficient? Maybe always get all via headers
-        // and check that at least one exists.
-        let mut vias: Vec<Via> = request.headers.get_named()?;
-        *vias.first_mut().unwrap() = request.base_headers.top_via.clone();
-        headers.insert_named(&vias);
+        headers.insert_named(&request.base_headers.via);
         headers.insert_type(Name::FROM, &request.base_headers.from);
         headers.insert_type(Name::TO, &request.base_headers.to);
         headers.insert_named(&request.base_headers.call_id);
@@ -277,21 +273,16 @@ impl Endpoint {
 
         let destination = match request.tp_info.transport.direction() {
             Direction::None => {
-                if let Some(maddr) = request
-                    .base_headers
-                    .top_via
+                let via = &request.base_headers.via[0];
+
+                if let Some(maddr) = via
                     .params
                     .get_val("maddr")
                     .and_then(|maddr| maddr.parse::<IpAddr>().ok())
                 {
                     // TODO maddr default port guessing (currently defaulting to 5060)
-                    vec![SocketAddr::new(
-                        maddr,
-                        request.base_headers.top_via.sent_by.port.unwrap_or(5060),
-                    )]
-                } else if let Some(rport) = request
-                    .base_headers
-                    .top_via
+                    vec![SocketAddr::new(maddr, via.sent_by.port.unwrap_or(5060))]
+                } else if let Some(rport) = via
                     .params
                     .get_val("rport")
                     .and_then(|rport| rport.parse::<u16>().ok())
@@ -301,10 +292,7 @@ impl Endpoint {
                     let destination = self
                         .transports()
                         // TODO correctly guess default port
-                        .resolve_host_port(
-                            &request.base_headers.top_via.sent_by.host,
-                            request.base_headers.top_via.sent_by.port.unwrap_or(5060),
-                        )
+                        .resolve_host_port(&via.sent_by.host, via.sent_by.port.unwrap_or(5060))
                         .await?;
 
                     destination
@@ -358,7 +346,7 @@ impl Endpoint {
         };
 
         if message.line.is_request() {
-            add_received_rport(&mut base_headers.top_via, message.tp_info.source);
+            add_received_rport(&mut base_headers.via[0], message.tp_info.source);
         }
 
         let tsx_key = match TsxKey::from_message_parts(&message.line, &base_headers) {
