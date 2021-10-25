@@ -81,11 +81,26 @@ impl UacAuthenticator for DigestAuthenticator {
             AuthChallenge::Other(other) => return Err(Error::UnknownScheme(other.scheme)),
         };
 
-        let realm_already_responded_to = responses
+        // Following things can happen:
+        // - We didn't respond to this challenge yet -> authenticate
+        // - We did respond, but
+        //     - The previous response has an outdated nonce, sets stale to `true` -> authenticate with new nonce
+        //     - The new challenge has set a new nonce but hasn't set stale=true,
+        //       this is a observed behavior from other implementations and happens
+        //       when using any qop. To solve this issue, stale is ignored and the
+        //       the nonce is compared directly.
+        let previous_response = responses
             .iter()
-            .any(|response| response.realm == challenge.realm);
+            .find(|response| response.realm == challenge.realm);
 
-        let authenticate = !realm_already_responded_to || challenge.stale;
+        let authenticate = if let Some(previous_response) = previous_response {
+            match &previous_response.response {
+                AuthResponse::Digest(digest_response) => digest_response.nonce != challenge.nonce,
+                AuthResponse::Other(_) => true,
+            }
+        } else {
+            true
+        };
 
         if authenticate {
             self.handle_digest_challenge(credentials, challenge, request_parts)
