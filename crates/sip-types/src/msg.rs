@@ -56,8 +56,7 @@ fn not_newline(c: char) -> bool {
 ///
 /// let via_line = parser.next().unwrap().unwrap();
 ///
-/// let parse_fn = Line::parse(&msg);
-/// match parse_fn(std::str::from_utf8(via_line).unwrap()) {
+/// match Line::parse(&msg, std::str::from_utf8(via_line).unwrap()) {
 ///     Ok((_, line)) => {
 ///         assert_eq!(line.name, Name::VIA);
 ///         assert_eq!(line.value, "SIP/2.0/TLS client.biloxi.example.com:5061;branch=z9hG4bKnashds7")
@@ -71,16 +70,14 @@ pub struct Line {
 }
 
 impl Line {
-    pub fn parse<'b>(src: &'b Bytes) -> impl Fn(&'b str) -> IResult<&'b str, Self> + 'b {
-        move |i| {
-            map(
-                ws((take_while(token), char(':'), |i| Ok(("", i)))),
-                |(name, _, value)| Line {
-                    name: BytesStr::from_parse(src, name).into(),
-                    value: BytesStr::from_parse(src, value),
-                },
-            )(i)
-        }
+    pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
+        map(
+            ws((take_while(token), char(':'), |i| Ok(("", i)))),
+            |(name, _, value)| Line {
+                name: BytesStr::from_parse(src, name).into(),
+                value: BytesStr::from_parse(src, value),
+            },
+        )(i)
     }
 }
 

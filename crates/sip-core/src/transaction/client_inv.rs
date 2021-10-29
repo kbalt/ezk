@@ -1,13 +1,12 @@
 use super::consts::T1;
 use super::key::TsxKey;
 use super::{TsxRegistration, TsxResponse};
-use crate::transport::{OutgoingParts, OutgoingRequest, TpHandle};
+use crate::transport::{OutgoingParts, OutgoingRequest, TargetTransportInfo};
 use crate::Result;
 use crate::{Endpoint, Request};
 use bytes::Bytes;
 use sip_types::header::typed::CSeq;
 use sip_types::header::HeaderError;
-use sip_types::host::HostPort;
 use sip_types::msg::RequestLine;
 use sip_types::{Code, CodeKind, Headers, Method, Name};
 use std::time::{Duration, Instant};
@@ -43,13 +42,12 @@ impl ClientInvTsx {
     #[tracing::instrument(
         name = "tsx_inv_send",
         level = "debug",
-        skip(endpoint, request, transport, via_host_port), fields(%request)
+        skip(endpoint, request, target), fields(%request)
     )]
     pub(crate) async fn send(
         endpoint: Endpoint,
         request: Request,
-        transport: Option<TpHandle>,
-        via_host_port: Option<HostPort>,
+        target: &mut TargetTransportInfo,
     ) -> Result<Self> {
         assert_eq!(
             request.line.method,
@@ -58,14 +56,14 @@ impl ClientInvTsx {
             request.line.method
         );
 
-        let mut request = endpoint.create_outgoing(request, transport).await?;
+        let mut request = endpoint.create_outgoing(request, target).await?;
 
         let registration = TsxRegistration::create(endpoint, TsxKey::client(&Method::INVITE));
 
         let via = registration.endpoint.create_via(
             &request.parts.transport,
             &registration.tsx_key,
-            via_host_port,
+            target.via_host_port.clone(),
         );
 
         request.msg.headers.insert_named_front(&via);

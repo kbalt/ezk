@@ -2,7 +2,7 @@ use crate::transaction::{ClientInvTsx, ClientTsx, ServerInvTsx, ServerTsx, TsxKe
 use crate::transaction::{Transactions, TsxMessage};
 use crate::transport::{
     Direction, Factory, OutgoingParts, OutgoingRequest, OutgoingResponse, ReceivedMessage,
-    TpHandle, Transport, Transports, TransportsBuilder,
+    TargetTransportInfo, TpHandle, Transports, TransportsBuilder,
 };
 use crate::{BaseHeaders, IncomingRequest, Layer, MayTake, Request, Response, Result};
 use bytes::{Bytes, BytesMut};
@@ -12,6 +12,7 @@ use sip_types::host::{Host, HostPort};
 use sip_types::msg::{MessageLine, StatusLine};
 use sip_types::parse::Parser;
 use sip_types::print::{AppendCtx, BytesPrint, PrintCtx};
+use sip_types::uri::Uri;
 use sip_types::{Code, Headers, Method, Name};
 use std::fmt::Write;
 use std::marker::PhantomData;
@@ -20,6 +21,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::ops::Index;
 use std::sync::Arc;
 use std::{fmt, io};
+use stun_types::parse::ParsedMessage;
 use tokio::sync::broadcast;
 use tracing::Instrument;
 
@@ -73,20 +75,18 @@ impl Endpoint {
     pub async fn send_invite(
         &self,
         request: Request,
-        transport: Option<TpHandle>,
-        via_host_port: Option<HostPort>,
+        target: &mut TargetTransportInfo,
     ) -> Result<ClientInvTsx> {
-        ClientInvTsx::send(self.clone(), request, transport, via_host_port).await
+        ClientInvTsx::send(self.clone(), request, target).await
     }
 
     /// Sends a request and return a [`ClientTsx`] which MUST be used to drive the transaction
     pub async fn send_request(
         &self,
         request: Request,
-        transport: Option<TpHandle>,
-        via_host_port: Option<HostPort>,
+        target: &mut TargetTransportInfo,
     ) -> Result<ClientTsx> {
-        ClientTsx::send(self.clone(), request, transport, via_host_port).await
+        ClientTsx::send(self.clone(), request, target).await
     }
 
     /// Create a [`ServerTsx`] from an [`IncomingRequest`]. The returned transaction
@@ -130,22 +130,35 @@ impl Endpoint {
         )
     }
 
+    /// Try to find or create a suitable transport for a given uri and return a non-empty list
+    /// of resolved socket addresses
+    pub async fn select_transport(&self, uri: &dyn Uri) -> Result<(TpHandle, Vec<SocketAddr>)> {
+        self.transports().select(self, uri).await
+    }
+
     /// Takes a request and converts it into an `Outgoing`.
     /// To do so it calculates the destination and retrieves a suitable transport
     pub async fn create_outgoing(
         &self,
         request: Request,
-        transport: Option<TpHandle>,
+        target: &mut TargetTransportInfo,
     ) -> Result<OutgoingRequest> {
-        let (transport, destination) = if let Some(transport) = transport {
-            let destination = self
-                .transports()
-                .resolve_uri(&request.line.uri.info())
-                .await?;
+        let (transport, destination) = if let Some(transport) = &target.transport {
+            if target.destination.is_empty() {
+                target.destination = self
+                    .transports()
+                    .resolve_uri(&request.line.uri.info())
+                    .await?;
+            }
+
+            (transport.clone(), target.destination.clone())
+        } else {
+            let (transport, destination) = self.select_transport(&*request.line.uri).await?;
+
+            target.transport = Some(transport.clone());
+            target.destination = destination.clone();
 
             (transport, destination)
-        } else {
-            self.transports().select(self, &*request.line.uri).await?
         };
 
         Ok(OutgoingRequest {
@@ -441,6 +454,27 @@ impl Endpoint {
         }
     }
 
+    /// Pass a received STUN message to the endpoint for further processing
+    pub fn receive_stun(&self, message: ParsedMessage, source: SocketAddr, transport: TpHandle) {
+        let this = self.clone();
+        tokio::spawn(async move {
+            this.transports()
+                .receive_stun(message, source, transport)
+                .await
+        });
+    }
+
+    /// Discover the public address of the transport given the ip of a stun server
+    pub async fn discover_public_address(
+        &self,
+        stun_server: &[SocketAddr],
+        transport: &TpHandle,
+    ) -> Result<SocketAddr> {
+        self.transports()
+            .discover_public_address(stun_server, transport)
+            .await
+    }
+
     pub(crate) fn transactions(&self) -> &Transactions {
         &self.inner.transactions
     }
@@ -517,10 +551,7 @@ impl EndpointBuilder {
     }
 
     /// Add an unmanaged transport to the endpoint which will never vanish or break (e.g. UDP)
-    pub fn add_unmanaged_transport<T>(&mut self, transport: T) -> &mut Self
-    where
-        T: Transport,
-    {
+    pub fn add_unmanaged_transport(&mut self, transport: TpHandle) -> &mut Self {
         self.transports.insert_unmanaged(transport);
         self
     }

@@ -1,8 +1,8 @@
-use crate::transport::parse_line;
 use crate::{Error, Result, WithStatus};
 use anyhow::anyhow;
 use bytes::{Bytes, BytesMut};
-use sip_types::msg::{MessageLine, PullParser};
+use internal::Finish;
+use sip_types::msg::{Line, MessageLine, PullParser};
 use sip_types::parse::{ParseCtx, Parser};
 use sip_types::{Code, Headers};
 use std::mem::replace;
@@ -125,7 +125,12 @@ impl Decoder for StreamingDecoder {
                     }
                 }
             } else {
-                parse_line(&src_bytes, line, &mut headers)?;
+                match Line::parse(&src_bytes, line).finish() {
+                    Ok((_, line)) => headers.insert(line.name, line.value),
+                    Err(e) => {
+                        log::error!("Incoming SIP message has malformed header line, {}", e);
+                    }
+                }
             }
         }
 

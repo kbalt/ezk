@@ -10,12 +10,21 @@ categories = ["network-programming", "multimedia"]
 keywords = ["sip"]
 
 [dependencies]
+internal = { package = "ezk-internal", path = "../internal" }
 sip-types = { package = "ezk-sip-types", path = "../sip-types" }
+stun-types = { package = "ezk-stun-types", path = "../stun-types" }
+stun = { package = "ezk-stun", path = "../stun" }
 
 tracing = "0.1"
 bytes = "1"
 anyhow = "1"
-tokio = { version = "1.5.0", features = ["net", "rt-multi-thread", "sync", "macros", "io-util"] }
+tokio = { version = "1.5.0", features = [
+    "net",
+    "rt-multi-thread",
+    "sync",
+    "macros",
+    "io-util",
+] }
 tokio-util = { version = "0.6", features = ["codec"] }
 tokio-stream = "0.1"
 async-trait = "0.1"

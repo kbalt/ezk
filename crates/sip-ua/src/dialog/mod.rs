@@ -1,10 +1,9 @@
 use self::layer::DialogEntry;
 use crate::util::{random_sequence_number, random_string};
 use bytesstr::BytesStr;
-use sip_core::transport::OutgoingResponse;
+use sip_core::transport::{OutgoingResponse, TargetTransportInfo};
 use sip_core::{Endpoint, Error, IncomingRequest, LayerKey, Request, Result};
 use sip_types::header::typed::{CSeq, CallID, Contact, FromTo, Routing};
-use sip_types::host::HostPort;
 use sip_types::{Code, Method, Name};
 
 mod key;
@@ -56,11 +55,8 @@ pub struct Dialog {
     // TODO use this
     pub secure: bool,
 
-    /// Via address of the dialog, can be set to override the transports
-    /// default via host-port.
-    ///
-    /// Can be discovered by reading the received param on responses or by using STUN
-    pub via_host_port: Option<HostPort>,
+    /// Target of the dialog peer
+    pub target: TargetTransportInfo,
 }
 
 impl Dialog {
@@ -94,7 +90,7 @@ impl Dialog {
             route_set,
             // TODO check how this works exactly
             secure: request.line.uri.info().secure,
-            via_host_port: None,
+            target: TargetTransportInfo::default(),
         };
 
         dialog.local_fromto.tag = Some(random_string());
