@@ -3,7 +3,7 @@ use crate::builder::MessageBuilder;
 use crate::parse::{ParsedAttr, ParsedMessage};
 use crate::{Error, COOKIE, NE};
 use byteorder::ReadBytesExt;
-use bytes::{BufMut};
+use bytes::BufMut;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 const XOR16: u16 = (COOKIE & 0xFFFF) as u16;
@@ -33,7 +33,7 @@ fn decode_addr(mut buf: &[u8], xor16: u16, xor32: u32, xor128: u128) -> Result<S
     Ok(addr)
 }
 
-fn encode_addr(addr: SocketAddr, buf: &mut Vec<u8> , xor16: u16, xor32: u32, xor128: u128) {
+fn encode_addr(addr: SocketAddr, buf: &mut Vec<u8>, xor16: u16, xor32: u32, xor128: u128) {
     buf.put_u8(0);
 
     match addr {

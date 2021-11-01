@@ -2,7 +2,7 @@ use crate::builder::MessageBuilder;
 use crate::parse::{ParsedAttr, ParsedMessage};
 use crate::{Error, NE};
 use byteorder::ReadBytesExt;
-use bytes::{BufMut};
+use bytes::BufMut;
 use std::convert::TryFrom;
 use std::str::from_utf8;
 
