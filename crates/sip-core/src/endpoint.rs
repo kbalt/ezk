@@ -7,10 +7,11 @@ use crate::transport::{
 use crate::{BaseHeaders, IncomingRequest, Layer, MayTake, Request, Response, Result, StunError};
 use bytes::{Bytes, BytesMut};
 use bytesstr::BytesStr;
+use internal::{Finish, ParseError};
 use sip_types::header::typed::{Accept, Allow, Supported, Via};
 use sip_types::host::{Host, HostPort};
 use sip_types::msg::{MessageLine, StatusLine};
-use sip_types::parse::Parser;
+use sip_types::parse::{ParseCtx, Parser};
 use sip_types::print::{AppendCtx, BytesPrint, PrintCtx};
 use sip_types::uri::Uri;
 use sip_types::{Code, Headers, Method, Name};
@@ -47,7 +48,6 @@ impl fmt::Debug for Endpoint {
 
 struct Inner {
     // capabilities
-    accept: Vec<Accept>,
     allow: Vec<Allow>,
     supported: Vec<Supported>,
 
@@ -69,6 +69,16 @@ impl Endpoint {
     /// Returns the endpoints current [`Parser`]
     pub fn parser(&self) -> Parser {
         self.inner.parser
+    }
+
+    /// Utility function to parse an uri
+    pub fn parse_uri(&self, i: impl AsRef<str>) -> Result<Box<dyn Uri>, ParseError> {
+        let bytes = BytesStr::from(i.as_ref());
+        let ctx = ParseCtx::new(bytes.as_ref(), self.parser());
+
+        let (_, uri) = ctx.parse_uri()(&bytes).finish()?;
+
+        Ok(uri)
     }
 
     /// Sends an INVITE request and return a [`ClientInvTsx`] which MUST be used to drive the transaction
@@ -99,11 +109,6 @@ impl Endpoint {
     /// can be used to form and send responses to the request.
     pub fn create_server_inv_tsx(&self, request: &IncomingRequest) -> ServerInvTsx {
         ServerInvTsx::new(self.clone(), request)
-    }
-
-    /// Returns all ACCEPT headers this endpoint supports
-    pub fn accepted(&self) -> &Vec<Accept> {
-        &self.inner.accept
     }
 
     /// Returns all ALLOW headers this endpoint supports
@@ -598,7 +603,6 @@ impl EndpointBuilder {
         }
 
         let inner = Inner {
-            accept: take(&mut self.accept),
             allow: take(&mut self.allow),
             supported: take(&mut self.supported),
             parser: Default::default(),
