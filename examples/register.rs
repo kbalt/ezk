@@ -1,6 +1,6 @@
 use sip_core::transport::udp::Udp;
 use sip_core::transport::TargetTransportInfo;
-use sip_core::{Endpoint, Error, Result};
+use sip_core::{Endpoint, Result};
 use sip_types::uri::sip::SipUri;
 use sip_types::uri::NameAddr;
 use sip_types::CodeKind;
@@ -29,7 +29,7 @@ async fn main() -> Result<()> {
 
         match response.line.code.kind() {
             CodeKind::Success => {}
-            _ => return Err(Error::new(response.line.code)),
+            _ => panic!("registration failed!"),
         }
 
         registration.receive_success_response(response);

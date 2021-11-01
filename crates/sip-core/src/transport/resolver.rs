@@ -1,5 +1,4 @@
-use crate::{Result, WithStatus};
-use sip_types::Code;
+use std::io;
 use std::net::SocketAddr;
 use tokio::net::lookup_host;
 
@@ -14,7 +13,7 @@ pub trait Resolver: Send + Sync {
     ///
     /// IO Errors when connecting to a DNS server must return the
     /// error with the status code `503 SERVICE UNAVAILABLE`.
-    async fn resolve(&self, name: &str, port: u16) -> Result<Vec<SocketAddr>>;
+    async fn resolve(&self, name: &str, port: u16) -> io::Result<Vec<SocketAddr>>;
 }
 
 /// Resolves hostname using the systems DNS resolver
@@ -24,10 +23,7 @@ pub struct SystemResolver;
 
 #[async_trait::async_trait]
 impl Resolver for SystemResolver {
-    async fn resolve(&self, name: &str, port: u16) -> Result<Vec<SocketAddr>> {
-        Ok(lookup_host((name, port))
-            .await
-            .status(Code::BAD_GATEWAY)?
-            .collect())
+    async fn resolve(&self, name: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
+        lookup_host((name, port)).await.map(|iter| iter.collect())
     }
 }

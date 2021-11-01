@@ -372,5 +372,5 @@ async fn receive_ack(
         }
     }
 
-    Err(Error::new(Code::REQUEST_TIMEOUT))
+    Err(Error::RequestTimedOut)
 }

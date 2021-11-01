@@ -1,7 +1,6 @@
 use super::consts::RFC3261_BRANCH_PREFIX;
 use super::generate_branch;
 use crate::BaseHeaders;
-use anyhow::{anyhow, Result};
 use bytesstr::BytesStr;
 use sip_types::header::typed::{CSeq, Via};
 use sip_types::header::HeaderError;
@@ -131,7 +130,7 @@ impl TsxKey {
                     .from
                     .tag
                     .as_ref()
-                    .ok_or_else(|| HeaderError::malformed(Name::FROM, anyhow!("missing tag")))?
+                    .ok_or_else(|| HeaderError::malformed_adhoc(Name::FROM, "Missing Tag"))?
                     .clone(),
                 call_id: headers.call_id.0.clone(),
                 via_host_port: sent_by.clone(),

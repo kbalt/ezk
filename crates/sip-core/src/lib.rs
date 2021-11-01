@@ -27,7 +27,7 @@ pub mod transport;
 pub use endpoint::Endpoint;
 pub use endpoint::EndpointBuilder;
 pub use endpoint::LayerKey;
-pub use error::{Error, Result, WithStatus};
+pub use error::{Error, Result, StunError};
 pub use may_take::MayTake;
 
 /// Basic Response

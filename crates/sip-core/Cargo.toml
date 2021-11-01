@@ -17,7 +17,6 @@ stun = { package = "ezk-stun", path = "../stun" }
 
 tracing = "0.1"
 bytes = "1"
-anyhow = "1"
 tokio = { version = "1.5.0", features = [
     "net",
     "rt-multi-thread",

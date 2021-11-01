@@ -1,9 +1,10 @@
+use crate::error::Error;
 use crate::transaction::consts::{T1, T2};
 use crate::transaction::TsxRegistration;
 use crate::transport::OutgoingResponse;
 use crate::{Endpoint, IncomingRequest, Result};
 use sip_types::msg::MessageLine;
-use sip_types::{Code, CodeKind, Method};
+use sip_types::{CodeKind, Method};
 use std::io;
 use std::time::Instant;
 use tokio::time::timeout_at;
@@ -121,7 +122,7 @@ impl ServerInvTsx {
                     // retransmit timeout triggered
 
                     if Instant::now() > abandon_retransmit {
-                        bail_status!(Code::REQUEST_TIMEOUT)
+                        return Err(Error::RequestTimedOut);
                     }
 
                     // do the retransmit

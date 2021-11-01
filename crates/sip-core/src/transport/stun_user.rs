@@ -1,6 +1,5 @@
 use super::{TpHandle, Transports};
-use crate::{Error, Result, WithStatus};
-use sip_types::Code;
+use crate::{Result, StunError};
 use std::io;
 use std::net::SocketAddr;
 use stun::{IncomingMessage, StunEndpointUser};
@@ -40,7 +39,7 @@ impl Transports {
         &self,
         stun_server: &[SocketAddr],
         transport: &TpHandle,
-    ) -> Result<SocketAddr> {
+    ) -> Result<SocketAddr, StunError> {
         if transport.reliable() {
             return Ok(transport.sent_by());
         }
@@ -61,17 +60,17 @@ impl Transports {
             .stun
             .send_request(request, stun_server)
             .await?
-            .status(Code::REQUEST_TIMEOUT)?;
+            .ok_or(StunError::RequestTimedOut)?;
 
         // TODO fix these errors
         if let Some(addr) = response.get_attr::<XorMappedAddress>() {
-            let addr = addr.status(Code::SERVER_INTERNAL_ERROR)?;
-            Ok(addr.0)
+            addr.map(|addr| addr.0)
+                .map_err(StunError::MalformedResponse)
         } else if let Some(addr) = response.get_attr::<MappedAddress>() {
-            let addr = addr.status(Code::SERVER_INTERNAL_ERROR)?;
-            Ok(addr.0)
+            addr.map(|addr| addr.0)
+                .map_err(StunError::MalformedResponse)
         } else {
-            Err(Error::new(Code::SERVER_INTERNAL_ERROR))
+            Err(StunError::InvalidResponse)
         }
     }
 }
