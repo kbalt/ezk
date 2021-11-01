@@ -2,8 +2,8 @@ use super::timer::SessionTimer;
 use super::Inner;
 use crate::dialog::{Dialog, UsageGuard};
 use crate::invite::AwaitedAck;
-use sip_core::transaction::{ServerInvTsx, ServerTsx};
-use sip_core::{Endpoint, Error, IncomingRequest, Result};
+use sip_core::transaction::{ServerInvTsx, ServerTsx, TsxResponse};
+use sip_core::{Endpoint, IncomingRequest, Result};
 use sip_types::header::typed::Refresher;
 use sip_types::{Code, CodeKind, Method};
 use std::sync::Arc;
@@ -68,7 +68,7 @@ impl RefreshNeeded<'_> {
 
                     self.session.endpoint.send_outgoing_request(ack).await?;
                 }
-                _ => return Err(Error::new(response.line.code)),
+                _ => { /* TODO: how to correctly handle responses here */ }
             }
         }
 
@@ -163,7 +163,7 @@ impl Session {
         }
     }
 
-    pub async fn terminate(&mut self) -> Result<()> {
+    pub async fn terminate(&mut self) -> Result<TsxResponse> {
         let mut state = self.inner.state.lock().await;
         state.set_terminated();
 
@@ -172,12 +172,8 @@ impl Session {
             .endpoint
             .send_request(request, &mut self.dialog.target)
             .await?;
-        let response = transaction.receive_final().await?;
 
-        match response.line.code.kind() {
-            CodeKind::Success => Ok(()),
-            _ => Err(Error::new(response.line.code)),
-        }
+        transaction.receive_final().await
     }
 
     fn handle_usage_event(&mut self, evt: Option<UsageEvent>) -> Result<Event<'_>> {

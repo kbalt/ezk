@@ -1,6 +1,7 @@
 use super::consts::T1;
 use super::key::TsxKey;
 use super::{TsxRegistration, TsxResponse};
+use crate::error::Error;
 use crate::transport::{OutgoingParts, OutgoingRequest, TargetTransportInfo};
 use crate::Result;
 use crate::{Endpoint, Request};
@@ -8,7 +9,7 @@ use bytes::Bytes;
 use sip_types::header::typed::CSeq;
 use sip_types::header::HeaderError;
 use sip_types::msg::RequestLine;
-use sip_types::{Code, CodeKind, Headers, Method, Name};
+use sip_types::{CodeKind, Headers, Method, Name};
 use std::time::{Duration, Instant};
 use tokio::time::{timeout, timeout_at};
 
@@ -120,14 +121,14 @@ impl ClientInvTsx {
 
                             n *= 2;
                         }
-                        Err(_) => bail_status!(Code::REQUEST_TIMEOUT),
+                        Err(_) => return Err(Error::RequestTimedOut),
                     }
                 }
             }
             State::Init | State::Proceeding => {
                 match timeout_at(self.timeout.into(), registration.receive_response()).await {
                     Ok(msg) => self.handle_msg(msg).await,
-                    Err(_) => bail_status!(Code::REQUEST_TIMEOUT),
+                    Err(_) => Err(Error::RequestTimedOut),
                 }
             }
             State::Accepted => {

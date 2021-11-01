@@ -1,10 +1,11 @@
 use super::consts::{T1, T2};
 use super::key::TsxKey;
 use super::{TsxRegistration, TsxResponse};
+use crate::error::Error;
 use crate::transaction::consts::T4;
 use crate::transport::{OutgoingRequest, TargetTransportInfo};
 use crate::{Endpoint, Request, Result};
-use sip_types::{Code, CodeKind, Method};
+use sip_types::{CodeKind, Method};
 use std::time::Instant;
 use tokio::time::{timeout, timeout_at};
 
@@ -106,14 +107,14 @@ impl ClientTsx {
                                 .send_outgoing_request(&mut self.request)
                                 .await?;
                         }
-                        Err(_) => bail_status!(Code::REQUEST_TIMEOUT),
+                        Err(_) => return Err(Error::RequestTimedOut),
                     }
                 }
             }
             State::Init | State::Proceeding => {
                 match timeout_at(self.timeout.into(), registration.receive_response()).await {
                     Ok(msg) => self.handle_msg(msg),
-                    Err(_) => bail_status!(Code::REQUEST_TIMEOUT),
+                    Err(_) => Err(Error::RequestTimedOut),
                 }
             }
             State::Completed | State::Terminated => {

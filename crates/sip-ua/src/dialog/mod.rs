@@ -4,6 +4,7 @@ use bytesstr::BytesStr;
 use sip_core::transport::{OutgoingResponse, TargetTransportInfo};
 use sip_core::{Endpoint, Error, IncomingRequest, LayerKey, Request, Result};
 use sip_types::header::typed::{CSeq, CallID, Contact, FromTo, Routing};
+use sip_types::header::HeaderError;
 use sip_types::{Code, Method, Name};
 
 mod key;
@@ -68,10 +69,10 @@ impl Dialog {
         contact: Contact,
     ) -> Result<Self> {
         if request.base_headers.from.tag.is_none() {
-            return Err(Error {
-                status: Code::BAD_REQUEST,
-                error: Some(anyhow::anyhow!("Missing Tag")),
-            });
+            return Err(Error::Header(HeaderError::malformed_adhoc(
+                Name::FROM,
+                "Missing Tag",
+            )));
         }
 
         let route_set: Vec<Routing> = request.headers.get(Name::RECORD_ROUTE).unwrap_or_default();

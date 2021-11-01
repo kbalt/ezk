@@ -1,13 +1,35 @@
-use crate::{Error, Result, WithStatus};
-use anyhow::anyhow;
+use crate::Result;
 use bytes::{Bytes, BytesMut};
 use internal::Finish;
 use sip_types::msg::{Line, MessageLine, PullParser};
 use sip_types::parse::{ParseCtx, Parser};
-use sip_types::{Code, Headers};
+use sip_types::Headers;
+use std::io;
 use std::mem::replace;
-use std::str::from_utf8;
+use std::str::{from_utf8, Utf8Error};
 use tokio_util::codec::Decoder;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error(transparent)]
+    Io(io::Error),
+    #[error("receiving message too large")]
+    MessageTooLarge,
+    #[error("received message is malformed")]
+    Malformed,
+}
+
+impl From<Utf8Error> for Error {
+    fn from(_: Utf8Error) -> Self {
+        Self::Malformed
+    }
+}
+
+impl From<io::Error> for Error {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
 
 pub struct DecodedMessage {
     pub line: MessageLine,
@@ -42,7 +64,7 @@ impl Decoder for StreamingDecoder {
             // do not allow a message head larger than that
             src.clear();
 
-            return Err(Error::new(Code::MESSAGE_TOO_LARGE));
+            return Err(Error::MessageTooLarge);
         }
 
         let mut parser = PullParser::new(src, self.head_progress);
@@ -57,13 +79,16 @@ impl Decoder for StreamingDecoder {
 
                 if let Some(name) = split.next() {
                     if name.eq_ignore_ascii_case(b"content-length") || name.starts_with(b"l") {
-                        let value = split.next().status(Code::BAD_REQUEST)?;
+                        let value = split.next().ok_or(Error::Malformed)?;
                         let value = from_utf8(value)?;
 
-                        content_len = value.trim().parse::<usize>().status(Code::BAD_REQUEST)?;
+                        content_len = value
+                            .trim()
+                            .parse::<usize>()
+                            .map_err(|_| Error::Malformed)?;
 
                         if content_len > (u16::MAX as usize) {
-                            return Err(Error::new(Code::MESSAGE_TOO_LARGE));
+                            return Err(Error::MessageTooLarge);
                         }
                     }
                 }
@@ -117,12 +142,7 @@ impl Decoder for StreamingDecoder {
 
                 match MessageLine::parse(ctx)(line) {
                     Ok((_, line)) => message_line = Some(line),
-                    Err(_) => {
-                        return Err(Error {
-                            status: Code::BAD_REQUEST,
-                            error: Some(anyhow!("Invalid Message Line")),
-                        })
-                    }
+                    Err(_) => return Err(Error::Malformed),
                 }
             } else {
                 match Line::parse(&src_bytes, line).finish() {
@@ -141,7 +161,7 @@ impl Decoder for StreamingDecoder {
         assert_eq!(content_len, body.len());
 
         Ok(Some(DecodedMessage {
-            line: message_line.status(Code::BAD_REQUEST)?,
+            line: message_line.ok_or(Error::Malformed)?,
             headers,
             body,
             buffer: src_bytes,

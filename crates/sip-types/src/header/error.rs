@@ -32,6 +32,13 @@ impl HeaderError {
         }
     }
 
+    pub fn malformed_adhoc(name: Name, error: &'static str) -> Self {
+        HeaderError {
+            name,
+            repr: Repr::Malformed(anyhow::Error::msg(error)),
+        }
+    }
+
     pub const fn is_missing(&self) -> bool {
         matches!(&self.repr, Repr::Missing)
     }

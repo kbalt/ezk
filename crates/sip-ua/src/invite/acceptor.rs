@@ -9,12 +9,21 @@ use bytesstr::BytesStr;
 use parking_lot as pl;
 use sip_core::transaction::consts::T1;
 use sip_core::transport::OutgoingResponse;
-use sip_core::{Endpoint, Error, IncomingRequest, LayerKey, Result, WithStatus};
+use sip_core::{Endpoint, IncomingRequest, LayerKey, Result};
 use sip_types::header::typed::{RSeq, Require, Supported};
 use sip_types::{Code, Method};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::time::timeout;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error(transparent)]
+    Core(#[from] sip_core::Error),
+
+    #[error("peer cancelled its request")]
+    RequestTerminated,
+}
 
 #[derive(Debug, thiserror::Error)]
 #[error("invite got cancelled")]
@@ -131,30 +140,38 @@ impl Acceptor {
         &self,
         code: Code,
         reason: Option<BytesStr>,
-    ) -> Result<OutgoingResponse> {
+    ) -> Result<OutgoingResponse, Error> {
         let mut state = self.inner.state.lock().await;
 
         if let InviteSessionState::Provisional { dialog, invite, .. } = &mut *state {
-            dialog.create_response(invite, code, reason).await
+            dialog
+                .create_response(invite, code, reason)
+                .await
+                .map_err(Error::Core)
         } else {
-            Err(Error::new(Code::REQUEST_TERMINATED))
+            Err(Error::RequestTerminated)
         }
     }
 
-    pub async fn respond_provisional(&mut self, mut response: OutgoingResponse) -> Result<()> {
+    pub async fn respond_provisional(
+        &mut self,
+        mut response: OutgoingResponse,
+    ) -> Result<(), Error> {
         let mut state = self.inner.state.lock().await;
 
         if let InviteSessionState::Provisional { tsx, .. } = &mut *state {
-            tsx.respond_provisional(&mut response).await
+            tsx.respond_provisional(&mut response)
+                .await
+                .map_err(Error::Core)
         } else {
-            Err(Error::new(Code::REQUEST_TERMINATED))
+            Err(Error::RequestTerminated)
         }
     }
 
     pub async fn respond_provisional_reliable(
         &mut self,
         mut response: OutgoingResponse,
-    ) -> Result<IncomingRequest> {
+    ) -> Result<IncomingRequest, Error> {
         // Ensure this message can be sent reliably
         assert!(
             self.peer_supports_100rel(),
@@ -203,16 +220,16 @@ impl Acceptor {
                 }
             }
 
-            prack.status(Code::REQUEST_TIMEOUT)
+            prack.ok_or(Error::RequestTerminated)
         } else {
-            Err(Error::new(Code::REQUEST_TERMINATED))
+            Err(Error::RequestTerminated)
         }
     }
 
     pub async fn respond_success(
         mut self,
         mut response: OutgoingResponse,
-    ) -> Result<(Session, IncomingRequest)> {
+    ) -> Result<(Session, IncomingRequest), Error> {
         // Lock the state over the duration of the responding process and
         // while waiting for the ACK. This avoids handling of other
         // requests that assume a completed session.
@@ -256,15 +273,18 @@ impl Acceptor {
 
             Ok((session, ack))
         } else {
-            Err(Error::new(Code::REQUEST_TERMINATED))
+            Err(Error::RequestTerminated)
         }
     }
 
-    pub async fn respond_failure(self, response: OutgoingResponse) -> Result<()> {
+    pub async fn respond_failure(self, response: OutgoingResponse) -> Result<(), Error> {
         if let Some((_, transaction, _)) = self.inner.state.lock().await.set_cancelled() {
-            transaction.respond_failure(response).await
+            transaction
+                .respond_failure(response)
+                .await
+                .map_err(Error::Core)
         } else {
-            Err(Error::new(Code::REQUEST_TERMINATED))
+            Err(Error::RequestTerminated)
         }
     }
 }

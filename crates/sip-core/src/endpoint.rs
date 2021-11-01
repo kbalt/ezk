@@ -4,7 +4,7 @@ use crate::transport::{
     Direction, Factory, OutgoingParts, OutgoingRequest, OutgoingResponse, ReceivedMessage,
     TargetTransportInfo, TpHandle, Transports, TransportsBuilder,
 };
-use crate::{BaseHeaders, IncomingRequest, Layer, MayTake, Request, Response, Result};
+use crate::{BaseHeaders, IncomingRequest, Layer, MayTake, Request, Response, Result, StunError};
 use bytes::{Bytes, BytesMut};
 use bytesstr::BytesStr;
 use sip_types::header::typed::{Accept, Allow, Supported, Via};
@@ -469,7 +469,7 @@ impl Endpoint {
         &self,
         stun_server: &[SocketAddr],
         transport: &TpHandle,
-    ) -> Result<SocketAddr> {
+    ) -> Result<SocketAddr, StunError> {
         self.transports()
             .discover_public_address(stun_server, transport)
             .await

@@ -1,14 +1,14 @@
 use self::managed::{DropNotifier, ManagedTransportState, MangedTransport, RefOwner, WeakRefOwner};
 use self::resolver::{Resolver, SystemResolver};
 use self::stun_user::StunUser;
-use crate::{Endpoint, Request, Response, Result, WithStatus};
+use crate::{Endpoint, Request, Response, Result};
 use bytes::Bytes;
 use parking_lot::Mutex;
 use sip_types::host::{Host, HostPort};
 use sip_types::msg::MessageLine;
 use sip_types::print::AppendCtx;
 use sip_types::uri::{Uri, UriInfo};
-use sip_types::{Code, Headers};
+use sip_types::Headers;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::mem::take;
@@ -301,11 +301,11 @@ pub(crate) struct Transports {
 }
 
 impl Transports {
-    pub async fn resolve(&self, name: &str, port: u16) -> Result<Vec<SocketAddr>> {
+    pub async fn resolve(&self, name: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
         self.resolver.resolve(name, port).await
     }
 
-    pub async fn resolve_host_port(&self, host: &Host, port: u16) -> Result<Vec<SocketAddr>> {
+    pub async fn resolve_host_port(&self, host: &Host, port: u16) -> io::Result<Vec<SocketAddr>> {
         match host {
             Host::IP6(ip) => Ok(vec![SocketAddr::from((*ip, port))]),
             Host::IP4(ip) => Ok(vec![SocketAddr::from((*ip, port))]),
@@ -313,7 +313,7 @@ impl Transports {
         }
     }
 
-    pub async fn resolve_uri(&self, info: &UriInfo<'_>) -> Result<Vec<SocketAddr>> {
+    pub async fn resolve_uri(&self, info: &UriInfo<'_>) -> io::Result<Vec<SocketAddr>> {
         let port = match info.host_port.port {
             Some(port) => port,
             None if info.secure => 5061,
@@ -335,7 +335,7 @@ impl Transports {
         let info = uri.info();
 
         // Resolve host_port to possible remote addresses
-        let addresses = self.resolve_uri(&info).await.status(Code::BAD_GATEWAY)?;
+        let addresses = self.resolve_uri(&info).await?;
 
         log::trace!("resolved addresses: {:?}", addresses);
 
