@@ -56,7 +56,6 @@ pub(super) struct CancellableKey {
 
 impl Acceptor {
     pub fn new(
-        endpoint: Endpoint,
         dialog: Dialog,
         invite_layer: LayerKey<InviteLayer>,
         invite: IncomingRequest,
@@ -66,6 +65,8 @@ impl Acceptor {
             Method::INVITE,
             "incoming request must be invite"
         );
+
+        let endpoint = dialog.endpoint.clone();
 
         let supported = invite
             .headers
