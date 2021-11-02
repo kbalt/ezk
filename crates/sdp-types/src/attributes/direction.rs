@@ -27,6 +27,15 @@ pub enum Direction {
 }
 
 impl Direction {
+    pub fn flipped(self) -> Self {
+        match self {
+            Direction::SendRecv => self,
+            Direction::RecvOnly => Direction::SendOnly,
+            Direction::SendOnly => Direction::RecvOnly,
+            Direction::Inactive => self,
+        }
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Direction::SendRecv => "sendrecv",

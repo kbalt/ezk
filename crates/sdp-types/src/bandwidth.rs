@@ -1,11 +1,11 @@
 use crate::token;
 use bytes::Bytes;
 use bytesstr::BytesStr;
+use internal::IResult;
 use nom::bytes::complete::{tag, take_while};
 use nom::character::complete::digit1;
 use nom::combinator::{map, map_res};
 use nom::sequence::tuple;
-use nom::IResult;
 use std::fmt;
 use std::str::FromStr;
 
@@ -26,20 +26,18 @@ pub struct Bandwidth {
 }
 
 impl Bandwidth {
-    pub fn parse(src: &Bytes) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
-        move |i| {
-            map(
-                tuple((
-                    map(take_while(token), |m| BytesStr::from_parse(src, m)),
-                    tag(":"),
-                    map_res(digit1, FromStr::from_str),
-                )),
-                |(modifier, _, value)| Bandwidth {
-                    type_: modifier,
-                    bandwidth: value,
-                },
-            )(i)
-        }
+    pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
+        map(
+            tuple((
+                map(take_while(token), |m| BytesStr::from_parse(src, m)),
+                tag(":"),
+                map_res(digit1, FromStr::from_str),
+            )),
+            |(modifier, _, value)| Bandwidth {
+                type_: modifier,
+                bandwidth: value,
+            },
+        )(i)
     }
 }
 
@@ -57,7 +55,7 @@ mod test {
     fn bandwidth() {
         let input = BytesStr::from_static("AS:96000");
 
-        let (rem, bandwidth) = Bandwidth::parse(input.as_ref())(&input).unwrap();
+        let (rem, bandwidth) = Bandwidth::parse(input.as_ref(), &input).unwrap();
 
         assert!(rem.is_empty());
 

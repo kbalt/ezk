@@ -3,13 +3,12 @@
 use crate::{ice_char, not_whitespace, probe_host6};
 use bytes::Bytes;
 use bytesstr::BytesStr;
-use internal::ws;
+use internal::{ws, IResult};
 use nom::bytes::complete::{tag, take_while, take_while1, take_while_m_n};
 use nom::character::complete::digit1;
 use nom::combinator::{map, map_res};
 use nom::multi::many0;
 use nom::sequence::{preceded, tuple};
-use nom::IResult;
 use std::fmt;
 use std::net::IpAddr;
 use std::str::FromStr;
@@ -99,9 +98,8 @@ pub struct Candidate {
 }
 
 impl Candidate {
-    pub fn parse(src: &Bytes) -> impl FnMut(&str) -> IResult<&str, Self> + '_ {
-        move |i| {
-            map_res(
+    pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
+        map_res(
                 preceded(
                     tag("candidate:"),
                     tuple((
@@ -159,9 +157,8 @@ impl Candidate {
                         rel_port,
                         unknown,
                     })
-                },
+                }
             )(i)
-        }
     }
 }
 
@@ -169,7 +166,7 @@ impl fmt::Display for Candidate {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "candidate:{} {} {} {} {} {} typ {}",
+            "a=candidate:{} {} {} {} {} {} typ {}",
             self.foundation,
             self.component,
             self.transport,
@@ -206,7 +203,7 @@ mod test {
             "candidate:12 2 TCP 2105458942 192.168.56.1 9 typ host raddr 192.168.1.22 rport 123 tcptype active",
         );
 
-        let (rem, candidate) = Candidate::parse(input.as_ref())(&input).unwrap();
+        let (rem, candidate) = Candidate::parse(input.as_ref(), &input).unwrap();
 
         assert_eq!(candidate.foundation, "12");
         assert_eq!(candidate.component, 2);
@@ -253,7 +250,7 @@ mod test {
 
         assert_eq!(
             candidate.to_string(),
-            "candidate:1 1 UDP 1 127.0.0.1 9 typ host"
+            "a=candidate:1 1 UDP 1 127.0.0.1 9 typ host"
         );
     }
 }

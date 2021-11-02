@@ -1,4 +1,4 @@
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use bytesstr::BytesStr;
 use std::fmt;
 
@@ -32,20 +32,11 @@ impl UnknownAttribute {
             },
         }
     }
-
-    pub fn print(&self, buf: &mut BytesMut) {
-        buf.extend_from_slice(self.name.as_ref());
-
-        if let Some(value) = &self.value {
-            buf.extend_from_slice(b":");
-            buf.extend_from_slice(value.as_ref());
-        }
-    }
 }
 
 impl fmt::Display for UnknownAttribute {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(self.name.as_str())?;
+        write!(f, "a={}", self.name)?;
 
         if let Some(value) = &self.value {
             write!(f, ":{}", value)?;

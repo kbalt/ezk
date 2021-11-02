@@ -1,10 +1,9 @@
 use crate::{not_whitespace, TaggedAddress};
 use bytes::Bytes;
 use bytesstr::BytesStr;
-use internal::ws;
+use internal::{ws, IResult};
 use nom::bytes::complete::take_while;
 use nom::combinator::map;
-use nom::IResult;
 use std::fmt;
 
 /// The origin of the message
@@ -26,27 +25,25 @@ pub struct Origin {
 }
 
 impl Origin {
-    pub fn parse(src: &Bytes) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
-        move |i| {
-            map(
-                ws((
-                    // username
-                    take_while(not_whitespace),
-                    // Session ID
-                    take_while(not_whitespace),
-                    // Session Version
-                    take_while(not_whitespace),
-                    // Origin transport address
-                    TaggedAddress::parse(src),
-                )),
-                |(username, session_id, session_version, address)| Origin {
-                    username: BytesStr::from_parse(src, username),
-                    session_id: BytesStr::from_parse(src, session_id),
-                    session_version: BytesStr::from_parse(src, session_version),
-                    address,
-                },
-            )(i)
-        }
+    pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
+        map(
+            ws((
+                // username
+                take_while(not_whitespace),
+                // Session ID
+                take_while(not_whitespace),
+                // Session Version
+                take_while(not_whitespace),
+                // Origin transport address
+                TaggedAddress::parse(src),
+            )),
+            |(username, session_id, session_version, address)| Origin {
+                username: BytesStr::from_parse(src, username),
+                session_id: BytesStr::from_parse(src, session_id),
+                session_version: BytesStr::from_parse(src, session_version),
+                address,
+            },
+        )(i)
     }
 }
 
@@ -69,7 +66,7 @@ mod test {
     fn origin() {
         let input = BytesStr::from_static("- 123456789 987654321 IN IP4 192.168.123.222");
 
-        let (rem, origin) = Origin::parse(input.as_ref())(&input).unwrap();
+        let (rem, origin) = Origin::parse(input.as_ref(), &input).unwrap();
 
         assert!(rem.is_empty());
 
