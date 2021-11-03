@@ -240,7 +240,7 @@ impl Acceptor {
         let (evt_sink, events) = mpsc::channel(4);
         let res = state.set_established(evt_sink);
 
-        if let Some((dialog, transaction, invite)) = res {
+        if let Some((mut dialog, transaction, invite)) = res {
             // We are going to respond with a successful response soon, register the cseq of
             // the initial invite invite `awaited_ack` where it will be used to match the
             // incoming ACK request to this transaction.
@@ -261,6 +261,10 @@ impl Acceptor {
             let accepted = transaction.respond_success(response).await?;
 
             let ack = super::receive_ack(accepted, ack_recv).await?;
+
+            // Set the dialogs transport target info from the incoming ACK request
+            dialog.target.transport = Some(ack.tp_info.transport.clone());
+            dialog.target.destination = vec![ack.tp_info.source];
 
             let session = Session::new(
                 self.endpoint.clone(),

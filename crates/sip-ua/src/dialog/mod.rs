@@ -3,7 +3,7 @@ use crate::util::{random_sequence_number, random_string};
 use bytesstr::BytesStr;
 use sip_core::transport::{OutgoingResponse, TargetTransportInfo};
 use sip_core::{Endpoint, Error, IncomingRequest, LayerKey, Request, Result};
-use sip_types::header::typed::{CSeq, CallID, Contact, FromTo, Routing};
+use sip_types::header::typed::{CSeq, CallID, Contact, FromTo, MaxForwards, Routing};
 use sip_types::header::HeaderError;
 use sip_types::{Code, Method, Name};
 
@@ -127,6 +127,7 @@ impl Dialog {
 
         request.headers.insert_type(Name::FROM, &self.local_fromto);
         request.headers.insert_type(Name::TO, &self.peer_fromto);
+        request.headers.insert_named(&MaxForwards(70));
         request.headers.insert_named(&self.call_id);
         request.headers.insert_named(&cseq);
         request.headers.insert_type(Name::ROUTE, &self.route_set);
