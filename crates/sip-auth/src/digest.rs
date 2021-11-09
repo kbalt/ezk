@@ -165,14 +165,14 @@ impl DigestAuthenticator {
         let (hash, is_session): (HashFn, bool) = match digest.algorithm {
             Algorithm::MD5 => {
                 if self.reject_md5 {
-                    return Err(Error::MD5IsNotAllowed);
+                    return Err(Error::UnsupportedAlgorithm(BytesStr::from_static("MD5")));
                 } else {
                     (hash_md5, false)
                 }
             }
             Algorithm::MD5Sess => {
                 if self.reject_md5 {
-                    return Err(Error::MD5IsNotAllowed);
+                    return Err(Error::UnsupportedAlgorithm(BytesStr::from_static("MD5")));
                 } else {
                     (hash_md5, true)
                 }

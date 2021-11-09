@@ -15,6 +15,4 @@ pub enum Error {
     UnsupportedQop,
     #[error("unsupported algorithm: {0}")]
     UnsupportedAlgorithm(BytesStr),
-    #[error("md5 is not allowed")]
-    MD5IsNotAllowed,
 }
