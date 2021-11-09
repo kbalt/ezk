@@ -11,7 +11,7 @@ keywords = ["sip"]
 readme = "README.md"
 
 [dependencies]
-internal = { package = "ezk-internal", path = "../internal" }
+internal = { package = "ezk-internal", path = "../internal", version = "0.1" }
 
 bytesstr = "1"
 downcast-rs = "1.2.0"

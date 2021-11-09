@@ -11,7 +11,8 @@ keywords = ["stun"]
 readme = "README.md"
 
 [dependencies]
-stun-types = { path = "../stun-types", package = "ezk-stun-types" }
+stun-types = { path = "../stun-types", package = "ezk-stun-types", version = "0.1" }
+
 tokio = { version = "1", features = ["time", "sync"] }
 bytes = "1"
 hmac = "0.11"

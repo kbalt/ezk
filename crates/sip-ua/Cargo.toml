@@ -3,7 +3,7 @@ name = "ezk-sip-ua"
 version = "0.1.0"
 edition = "2018"
 authors = ["Konstantin Baltruschat <konstantin.baltruschat@gmail.com>"]
-description = "SIP User Agent implementations"
+description = "Low level SIP user agent utilities"
 repository = "https://github.com/kbalt/ezk"
 license = "MIT"
 categories = ["network-programming", "multimedia"]
@@ -11,8 +11,8 @@ keywords = ["sip"]
 readme = "README.md"
 
 [dependencies]
-sip-types = { package = "ezk-sip-types", path = "../sip-types" }
-sip-core = { package = "ezk-sip-core", path = "../sip-core" }
+sip-types = { package = "ezk-sip-types", path = "../sip-types", version = "0.1" }
+sip-core = { package = "ezk-sip-core", path = "../sip-core", version = "0.1" }
 
 log = "0.4"
 bytesstr = "1"
