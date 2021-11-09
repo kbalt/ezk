@@ -8,6 +8,7 @@ repository = "https://github.com/kbalt/ezk"
 license = "MIT"
 categories = ["network-programming"]
 keywords = ["stun"]
+readme = "README.md"
 
 [dependencies]
 stun-types = { path = "../stun-types", package = "ezk-stun-types" }

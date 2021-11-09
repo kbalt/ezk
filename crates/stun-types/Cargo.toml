@@ -8,6 +8,7 @@ repository = "https://github.com/kbalt/ezk"
 license = "MIT"
 categories = ["network-programming"]
 keywords = ["stun", "turn"]
+readme = "README.md"
 
 
 [dependencies]

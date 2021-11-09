@@ -8,6 +8,7 @@ repository = "https://github.com/kbalt/ezk"
 license = "MIT"
 categories = ["network-programming", "multimedia"]
 keywords = ["sip"]
+readme = "README.md"
 
 [dependencies]
 internal = { package = "ezk-internal", path = "../internal" }
