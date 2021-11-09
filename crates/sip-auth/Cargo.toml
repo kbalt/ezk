@@ -6,7 +6,7 @@ authors = [
     "Konstantin Baltruschat <konstantin.baltruschat@gmail.com>",
     "Mervs <marvinankert@gmail.com>",
 ]
-description = "SIP auth crate to authenticate requests"
+description = "RFC8769 compliant SIP authentication"
 repository = "https://github.com/kbalt/ezk"
 license = "MIT"
 categories = ["network-programming", "multimedia"]
