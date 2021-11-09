@@ -11,6 +11,7 @@ repository = "https://github.com/kbalt/ezk"
 license = "MIT"
 categories = ["network-programming", "multimedia"]
 keywords = ["sip", "auth"]
+readme = "README.md"
 
 [dependencies]
 sip-types = { package = "ezk-sip-types", path = "../sip-types" }
