@@ -80,7 +80,7 @@ impl MangedTransport {
                 let owner = weak_tx.upgrade()?;
 
                 Some(TpHandle {
-                    ref_check: Some(owner),
+                    _ref_guard: Some(owner),
                     transport: self.transport.clone(),
                 })
             }
@@ -94,7 +94,7 @@ impl MangedTransport {
                     sender.send(notifier).ok()?;
 
                     Some(TpHandle {
-                        ref_check: Some(owner),
+                        _ref_guard: Some(owner),
                         transport: self.transport.clone(),
                     })
                 } else {

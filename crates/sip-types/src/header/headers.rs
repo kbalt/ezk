@@ -415,7 +415,7 @@ fn remove_where<T, F>(vec: &mut Vec<T>, f: F) -> Option<T>
 where
     F: Fn(&T) -> bool,
 {
-    vec.iter().position(|item| f(item)).map(|i| vec.remove(i))
+    vec.iter().position(f).map(|i| vec.remove(i))
 }
 
 #[cfg(test)]

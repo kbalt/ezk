@@ -44,6 +44,7 @@ struct Inner {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 enum InviteSessionState {
     /// Provisional state before a final response was sent
     Provisional {

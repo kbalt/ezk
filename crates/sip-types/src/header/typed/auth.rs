@@ -203,6 +203,7 @@ impl Print for DigestChallenge {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum AuthResponse {
     Digest(DigestResponse),
     Other(Auth),

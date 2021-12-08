@@ -95,7 +95,7 @@ pub trait Transport: Debug + Display + Send + Sync + 'static {
 ///
 #[derive(Debug, Clone)]
 pub struct TpHandle {
-    ref_check: Option<RefOwner>,
+    _ref_guard: Option<RefOwner>,
     transport: Arc<dyn Transport>,
 }
 
@@ -129,7 +129,7 @@ impl TpHandle {
     /// or lifetime like UDP.
     pub fn new<T: Transport>(transport: T) -> Self {
         Self {
-            ref_check: None,
+            _ref_guard: None,
             transport: Arc::new(transport),
         }
     }
@@ -145,7 +145,7 @@ impl TpHandle {
         let weak = owner.downgrade();
 
         let transport = Self {
-            ref_check: Some(owner),
+            _ref_guard: Some(owner),
             transport: Arc::new(transport),
         };
 
