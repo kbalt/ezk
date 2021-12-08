@@ -3,6 +3,7 @@ use super::Inner;
 use crate::dialog::{Dialog, UsageGuard};
 use crate::invite::AwaitedAck;
 use sip_core::transaction::{ServerInvTsx, ServerTsx, TsxResponse};
+use sip_core::transport::OutgoingResponse;
 use sip_core::{Endpoint, IncomingRequest, Result};
 use sip_types::header::typed::Refresher;
 use sip_types::{Code, CodeKind, Method};
@@ -83,14 +84,8 @@ pub struct ReInviteReceived<'s> {
 }
 
 impl ReInviteReceived<'_> {
-    /// Process the RE-INVITE
-    pub async fn process_default(self) -> Result<IncomingRequest> {
-        let response = self
-            .session
-            .dialog
-            .create_response(&self.invite, Code::OK, None)
-            .await?;
-
+    /// Respond with a successful response, returns the received ACK request
+    pub async fn respond_success(self, response: OutgoingResponse) -> Result<IncomingRequest> {
         let (ack_sender, ack_recv) = oneshot::channel();
 
         *self.session.inner.awaited_ack.lock() = Some(AwaitedAck {

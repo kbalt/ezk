@@ -52,7 +52,12 @@ impl Layer for InviteAcceptLayer {
                     event.process_default().await.unwrap();
                 }
                 Event::ReInviteReceived(event) => {
-                    event.process_default().await.unwrap();
+                    let response = endpoint
+                        .create_response(&event.invite, Code::OK, None)
+                        .await
+                        .unwrap();
+
+                    event.respond_success(response).await.unwrap();
                 }
                 Event::Bye(event) => {
                     event.process_default().await.unwrap();
