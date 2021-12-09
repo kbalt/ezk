@@ -130,7 +130,10 @@ impl Dialog {
         request.headers.insert_named(&MaxForwards(70));
         request.headers.insert_named(&self.call_id);
         request.headers.insert_named(&cseq);
-        request.headers.insert_type(Name::ROUTE, &self.route_set);
+
+        if !self.route_set.is_empty() {
+            request.headers.insert_type(Name::ROUTE, &self.route_set);
+        }
 
         request
     }
