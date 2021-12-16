@@ -111,8 +111,7 @@ impl ByeEvent<'_> {
         let response = self
             .session
             .dialog
-            .create_response(&self.bye, Code::OK, None)
-            .await?;
+            .create_response(&self.bye, Code::OK, None)?;
 
         self.transaction.respond(response).await
     }

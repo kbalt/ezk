@@ -138,13 +138,13 @@ impl Dialog {
         request
     }
 
-    pub async fn create_response(
+    pub fn create_response(
         &mut self,
         request: &IncomingRequest,
         code: Code,
         reason: Option<BytesStr>,
     ) -> Result<OutgoingResponse> {
-        let mut response = self.endpoint.create_response(request, code, reason).await?;
+        let mut response = self.endpoint.create_response(request, code, reason);
 
         if request.line.method == Method::INVITE {
             if !self.created {

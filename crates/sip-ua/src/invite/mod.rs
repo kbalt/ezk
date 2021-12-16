@@ -178,11 +178,10 @@ impl InviteLayer {
 
             if let Some((mut dialog, invite_tsx, invite)) = inner.state.lock().await.set_cancelled()
             {
-                let invite_response = dialog
-                    .create_response(&invite, Code::REQUEST_TERMINATED, None)
-                    .await?;
+                let invite_response =
+                    dialog.create_response(&invite, Code::REQUEST_TERMINATED, None)?;
 
-                let cancel_response = dialog.create_response(&cancel, Code::OK, None).await?;
+                let cancel_response = dialog.create_response(&cancel, Code::OK, None)?;
 
                 let (r1, r2) = tokio::join!(
                     invite_tsx.respond_failure(invite_response),
@@ -193,7 +192,7 @@ impl InviteLayer {
                 r2
             } else {
                 // TODO this response is outside the dialog, is that ok?
-                let response = endpoint.create_response(&cancel, Code::OK, None).await?;
+                let response = endpoint.create_response(&cancel, Code::OK, None);
 
                 cancel_tsx.respond(response).await
             }
@@ -306,12 +305,10 @@ impl InviteUsage {
         invite: IncomingRequest,
         bye: IncomingRequest,
     ) -> Result<()> {
-        let bye_response = dialog.create_response(&invite, Code::OK, None).await?;
+        let bye_response = dialog.create_response(&invite, Code::OK, None)?;
         let bye_tsx = endpoint.create_server_tsx(&bye);
 
-        let invite_response = dialog
-            .create_response(&invite, Code::REQUEST_TERMINATED, None)
-            .await?;
+        let invite_response = dialog.create_response(&invite, Code::REQUEST_TERMINATED, None)?;
 
         let (r1, r2) = tokio::join!(
             invite_tsx.respond_failure(invite_response),

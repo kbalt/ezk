@@ -147,7 +147,6 @@ impl Acceptor {
         if let InviteSessionState::Provisional { dialog, invite, .. } = &mut *state {
             dialog
                 .create_response(invite, code, reason)
-                .await
                 .map_err(Error::Core)
         } else {
             Err(Error::RequestTerminated)

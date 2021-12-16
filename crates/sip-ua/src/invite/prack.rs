@@ -40,7 +40,7 @@ impl InviteUsage {
 
         let prack_tsx = endpoint.create_server_tsx(&prack);
 
-        let response = endpoint.create_response(&prack, Code::OK, None).await?;
+        let response = endpoint.create_response(&prack, Code::OK, None);
 
         if awaited_prack.prack_sender.send(prack).is_err() {
             log::error!("prack receiver dropped prematurely");

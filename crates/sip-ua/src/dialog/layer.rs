@@ -152,9 +152,7 @@ impl DialogLayer {
             return Ok(());
         }
 
-        let response = endpoint
-            .create_response(&request, Code::NOT_FOUND, None)
-            .await?;
+        let response = endpoint.create_response(&request, Code::NOT_FOUND, None);
 
         if request.line.method == Method::INVITE {
             let tsx = endpoint.create_server_inv_tsx(&request);

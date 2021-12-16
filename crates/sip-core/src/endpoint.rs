@@ -267,14 +267,12 @@ impl Endpoint {
     }
 
     /// Create a response to an incoming request with a given status code and optional reason
-    ///
-    /// This is async as it may need to make a DNS lookup to calculate the response address
-    pub async fn create_response(
+    pub fn create_response(
         &self,
         request: &IncomingRequest,
         code: Code,
         reason: Option<BytesStr>,
-    ) -> Result<OutgoingResponse> {
+    ) -> OutgoingResponse {
         assert_ne!(request.line.method, Method::ACK);
 
         let mut headers = Headers::with_capacity(5);
@@ -307,13 +305,7 @@ impl Endpoint {
                 {
                     vec![SocketAddr::new(request.tp_info.source.ip(), rport)]
                 } else {
-                    let destination = self
-                        .transports()
-                        // TODO correctly guess default port
-                        .resolve_host_port(&via.sent_by.host, via.sent_by.port.unwrap_or(5060))
-                        .await?;
-
-                    destination
+                    vec![request.tp_info.source]
                 }
             }
             Direction::Outgoing(remote) | Direction::Incoming(remote) => {
@@ -322,7 +314,7 @@ impl Endpoint {
             }
         };
 
-        Ok(OutgoingResponse {
+        OutgoingResponse {
             msg: Response {
                 line: StatusLine {
                     code,
@@ -336,7 +328,7 @@ impl Endpoint {
                 destination,
                 buffer: Default::default(),
             },
-        })
+        }
     }
 
     /// Pass a received message to the endpoint for further processing
@@ -444,9 +436,8 @@ impl Endpoint {
             return Ok(());
         }
 
-        let response = self
-            .create_response(&request, Code::CALL_OR_TRANSACTION_DOES_NOT_EXIST, None)
-            .await?;
+        let response =
+            self.create_response(&request, Code::CALL_OR_TRANSACTION_DOES_NOT_EXIST, None);
 
         if request.line.method == Method::INVITE {
             let tsx = self.create_server_inv_tsx(&request);
