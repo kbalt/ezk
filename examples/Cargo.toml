@@ -8,6 +8,7 @@ publish = false
 sip-types = { path = "../crates/sip-types", package = "ezk-sip-types" }
 sip-core = { path = "../crates/sip-core", package = "ezk-sip-core" }
 sip-ua = { path = "../crates/sip-ua", package = "ezk-sip-ua" }
+sip-auth = { path = "../crates/sip-auth", package = "ezk-sip-auth" }
 
 tokio = { version = "1", features = ["rt", "macros"] }
 
@@ -22,3 +23,7 @@ path = "register.rs"
 [[example]]
 name = "accept_invite"
 path = "accept_invite.rs"
+
+[[example]]
+name = "send_invite"
+path = "send_invite.rs"

@@ -16,9 +16,8 @@
 Incomplete low level SIP user agent utilities.
 
 - Create/remove bindings via `REGISTER`
-- Does not yet support outgoing `INVITE`s
-- Create dialog from incoming `INVITE` & manage dialog
-- Supports `100rel` and `timer` extension
+- Create and tear down `INVITE` sessions
+- `100rel` and `timer` extensions built in
 
 Following RFCs were used:
 

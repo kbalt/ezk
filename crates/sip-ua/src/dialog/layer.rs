@@ -18,15 +18,15 @@ pub trait Usage: Send + Sync + 'static {
 
 pub(super) struct DialogEntry {
     backlog: BTreeMap<u32, IncomingRequest>,
-    next_peer_cseq: u32,
+    next_peer_cseq: Option<u32>,
     usages: SlotMap<DefaultKey, Arc<dyn Usage>>,
 }
 
 impl DialogEntry {
-    pub fn new(peer_cseq: u32) -> Self {
+    pub fn new(peer_cseq: Option<u32>) -> Self {
         Self {
             backlog: Default::default(),
-            next_peer_cseq: peer_cseq + 1,
+            next_peer_cseq: peer_cseq.map(|peer_cseq| peer_cseq + 1),
             usages: Default::default(),
         }
     }
@@ -62,14 +62,20 @@ impl Layer for DialogLayer {
             if let Some(dialog_entry) = dialogs.get_mut(&key) {
                 let request_cseq = request.base_headers.cseq.cseq;
 
-                match request_cseq.cmp(&dialog_entry.next_peer_cseq) {
+                // If no next peer cseq is set this is the first request received by the dialog.
+                //
+                // Initialize the next requested cseq with the incoming one to jump into the
+                // Ordering::Equal case which handles the message directly
+                let next_peer_cseq = dialog_entry.next_peer_cseq.get_or_insert(request_cseq);
+
+                match request_cseq.cmp(next_peer_cseq) {
                     Ordering::Less => {
                         // CSeq number is lower than expected. ACK requests have the CSeq number of the initial
                         // INVITE request they acknowledge as they are considered part of the transactions,
                         // but on the UA level and thus have their own transaction id.
                         // That is why we warn here if it's not an ACK request
                         if request.line.method != Method::ACK {
-                            log::warn!("Incoming request has CSeq number lower than expected.");
+                            log::warn!("Incoming request has CSeq number lower than expected");
                         }
 
                         (dialog_entry.usages.clone(), vec![request.take()])
@@ -96,7 +102,7 @@ impl Layer for DialogLayer {
 
                         // set the next expected cseq to the one of last message we handle + 1
                         dialog_entry.next_peer_cseq =
-                            requests.last().unwrap().base_headers.cseq.cseq + 1;
+                            Some(requests.last().unwrap().base_headers.cseq.cseq + 1);
 
                         (usages, requests)
                     }
@@ -115,7 +121,7 @@ impl Layer for DialogLayer {
 
         log::debug!("message matches {:?}", key);
 
-        for request in requests {
+        'outer: for request in requests {
             let mut request = Some(request);
 
             for usage in usages.values() {
@@ -127,7 +133,7 @@ impl Layer for DialogLayer {
                     .await;
 
                 if request.is_none() {
-                    return;
+                    continue 'outer;
                 }
             }
 
@@ -148,7 +154,7 @@ impl DialogLayer {
         request: IncomingRequest,
     ) -> Result<()> {
         if request.line.method == Method::ACK {
-            // Cannot respond to unwanted request
+            // Cannot respond to ACK request
             return Ok(());
         }
 
@@ -191,7 +197,7 @@ impl Drop for UsageGuard {
 
 /// Register the given `usage` inside the dialog with the `dialog_key`
 ///
-/// Returns `Some(Self)` when the usage was successfully registered inside the dialog
+/// Returns `Some` when the usage was successfully registered inside the dialog
 pub fn register_usage<U>(
     endpoint: Endpoint,
     dialog_layer: LayerKey<DialogLayer>,

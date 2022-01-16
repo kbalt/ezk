@@ -6,12 +6,16 @@ use sip_core::{Endpoint, Error, IncomingRequest, LayerKey, Request, Result};
 use sip_types::header::typed::{CSeq, CallID, Contact, FromTo, MaxForwards, Routing};
 use sip_types::header::HeaderError;
 use sip_types::{Code, Method, Name};
+use std::sync::atomic::{AtomicU32, Ordering};
 
+mod client_builder;
 mod key;
 mod layer;
 
+pub use client_builder::ClientDialogBuilder;
 pub use key::DialogKey;
 pub use layer::{register_usage, DialogLayer, Usage, UsageGuard};
+use tokio::sync::Mutex;
 
 #[derive(Debug)]
 pub struct Dialog {
@@ -19,14 +23,8 @@ pub struct Dialog {
 
     pub dialog_layer: LayerKey<DialogLayer>,
 
-    /// Flag which indicates if a success response has been sent yet
-    pub created: bool,
-
     /// Local CSeq number, increments with every request constructed using this dialog
-    pub local_cseq: u32,
-
-    /// Remote CSeq number as seen in first request
-    pub peer_cseq: u32,
+    pub local_cseq: AtomicU32,
 
     /// From header used to construct requests inside the dialog
     ///
@@ -57,7 +55,7 @@ pub struct Dialog {
     pub secure: bool,
 
     /// Target of the dialog peer
-    pub target: TargetTransportInfo,
+    pub target_tp_info: Mutex<TargetTransportInfo>,
 }
 
 impl Dialog {
@@ -66,7 +64,7 @@ impl Dialog {
         endpoint: Endpoint,
         dialog_layer: LayerKey<DialogLayer>,
         request: &IncomingRequest,
-        contact: Contact,
+        local_contact: Contact,
     ) -> Result<Self> {
         if request.base_headers.from.tag.is_none() {
             return Err(Error::Header(HeaderError::malformed_adhoc(
@@ -80,23 +78,21 @@ impl Dialog {
         let mut dialog = Self {
             endpoint,
             dialog_layer,
-            created: false,
-            local_cseq: random_sequence_number(),
-            peer_cseq: request.base_headers.cseq.cseq,
+            local_cseq: random_sequence_number().into(),
             local_fromto: request.base_headers.to.clone(),
             peer_fromto: request.base_headers.from.clone(),
-            local_contact: contact,
+            local_contact,
             peer_contact: request.headers.get_named()?,
             call_id: request.base_headers.call_id.clone(),
             route_set,
             // TODO check how this works exactly
             secure: request.line.uri.info().secure,
-            target: TargetTransportInfo::default(),
+            target_tp_info: Default::default(),
         };
 
         dialog.local_fromto.tag = Some(random_string());
 
-        let entry = DialogEntry::new(dialog.peer_cseq);
+        let entry = DialogEntry::new(Some(request.base_headers.cseq.cseq));
         dialog.endpoint[dialog_layer]
             .dialogs
             .lock()
@@ -119,11 +115,10 @@ impl Dialog {
         }
     }
 
-    pub fn create_request(&mut self, method: Method) -> Request {
+    pub fn create_request(&self, method: Method) -> Request {
         let mut request = Request::new(method.clone(), self.peer_contact.uri.uri.clone());
 
-        let cseq = CSeq::new(self.local_cseq, method);
-        self.local_cseq += 1;
+        let cseq = CSeq::new(self.local_cseq.fetch_add(1, Ordering::Relaxed), method);
 
         request.headers.insert_type(Name::FROM, &self.local_fromto);
         request.headers.insert_type(Name::TO, &self.peer_fromto);
@@ -139,7 +134,7 @@ impl Dialog {
     }
 
     pub fn create_response(
-        &mut self,
+        &self,
         request: &IncomingRequest,
         code: Code,
         reason: Option<BytesStr>,
@@ -147,12 +142,9 @@ impl Dialog {
         let mut response = self.endpoint.create_response(request, code, reason);
 
         if request.line.method == Method::INVITE {
-            if !self.created {
-                // Copy record route headers into response
-                let _ = request
-                    .headers
-                    .clone_into(&mut response.msg.headers, Name::RECORD_ROUTE);
-            }
+            let _ = request
+                .headers
+                .clone_into(&mut response.msg.headers, Name::RECORD_ROUTE);
 
             let code = code.into_u16();
 
@@ -167,9 +159,7 @@ impl Dialog {
             }
 
             if let 200..=299 = code {
-                if !self.created {
-                    self.created = true;
-
+                if request.base_headers.to.tag.is_none() {
                     // Add To-tag to success response to create dialog
                     response.msg.headers.edit(Name::TO, |to: &mut FromTo| {
                         to.tag = self.local_fromto.tag.clone();
