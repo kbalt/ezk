@@ -19,7 +19,8 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::time::timeout;
 
 pub mod acceptor;
-mod prack;
+pub mod initiator;
+pub mod prack;
 pub mod session;
 mod timer;
 
@@ -47,7 +48,7 @@ struct Inner {
 #[allow(clippy::large_enum_variant)]
 enum InviteSessionState {
     /// Provisional state before a final response was sent
-    Provisional {
+    UasProvisional {
         dialog: Dialog,
         tsx: ServerInvTsx,
         invite: IncomingRequest,
@@ -72,8 +73,8 @@ enum InviteSessionState {
 impl InviteSessionState {
     /// Set the state to Cancelled and return the pending transaction, if the current state is Provisional
     fn set_cancelled(&mut self) -> Option<(Dialog, ServerInvTsx, IncomingRequest)> {
-        if matches!(self, InviteSessionState::Provisional { .. }) {
-            if let InviteSessionState::Provisional {
+        if matches!(self, InviteSessionState::UasProvisional { .. }) {
+            if let InviteSessionState::UasProvisional {
                 dialog,
                 tsx,
                 invite,
@@ -94,8 +95,8 @@ impl InviteSessionState {
         &mut self,
         evt_sink: mpsc::Sender<session::UsageEvent>,
     ) -> Option<(Dialog, ServerInvTsx, IncomingRequest)> {
-        if matches!(self, InviteSessionState::Provisional { .. }) {
-            if let InviteSessionState::Provisional {
+        if matches!(self, InviteSessionState::UasProvisional { .. }) {
+            if let InviteSessionState::UasProvisional {
                 dialog,
                 tsx,
                 invite,
@@ -176,8 +177,7 @@ impl InviteLayer {
             let cancel = cancel.take();
             let cancel_tsx = endpoint.create_server_tsx(&cancel);
 
-            if let Some((mut dialog, invite_tsx, invite)) = inner.state.lock().await.set_cancelled()
-            {
+            if let Some((dialog, invite_tsx, invite)) = inner.state.lock().await.set_cancelled() {
                 let invite_response =
                     dialog.create_response(&invite, Code::REQUEST_TERMINATED, None)?;
 
@@ -248,7 +248,7 @@ impl Usage for InviteUsage {
                 let mut state = self.inner.state.lock().await;
 
                 match state.set_terminated() {
-                    InviteSessionState::Provisional {
+                    InviteSessionState::UasProvisional {
                         dialog,
                         tsx,
                         invite,
@@ -300,7 +300,7 @@ impl InviteUsage {
     async fn handle_bye_in_provisional_state(
         &self,
         endpoint: &Endpoint,
-        mut dialog: Dialog,
+        dialog: Dialog,
         invite_tsx: ServerInvTsx,
         invite: IncomingRequest,
         bye: IncomingRequest,
@@ -320,16 +320,18 @@ impl InviteUsage {
     }
 }
 
-async fn create_ack(dialog: &mut Dialog, cseq_num: u32) -> Result<OutgoingRequest> {
+async fn create_ack(dialog: &Dialog, cseq_num: u32) -> Result<OutgoingRequest> {
     let mut ack = dialog.create_request(Method::ACK);
 
     // Set CSeq
     ack.headers
         .edit_named(|cseq: &mut CSeq| cseq.cseq = cseq_num)?;
 
+    let mut target_tp_info = dialog.target_tp_info.lock().await;
+
     let mut ack = dialog
         .endpoint
-        .create_outgoing(ack, &mut dialog.target)
+        .create_outgoing(ack, &mut target_tp_info)
         .await?;
 
     // Create temporary transaction key to create Via, but never register it
@@ -339,7 +341,7 @@ async fn create_ack(dialog: &mut Dialog, cseq_num: u32) -> Result<OutgoingReques
         // wrap
         &ack.parts.transport,
         &tsx_key,
-        dialog.target.via_host_port.clone(),
+        target_tp_info.via_host_port.clone(),
     );
 
     ack.msg.headers.insert_named_front(&via);

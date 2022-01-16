@@ -91,7 +91,7 @@ impl Acceptor {
         let tsx = endpoint.create_server_inv_tsx(&invite);
         let inner = Arc::new(Inner {
             invite_layer,
-            state: Mutex::new(InviteSessionState::Provisional {
+            state: Mutex::new(InviteSessionState::UasProvisional {
                 dialog,
                 tsx,
                 invite,
@@ -144,7 +144,7 @@ impl Acceptor {
     ) -> Result<OutgoingResponse, Error> {
         let mut state = self.inner.state.lock().await;
 
-        if let InviteSessionState::Provisional { dialog, invite, .. } = &mut *state {
+        if let InviteSessionState::UasProvisional { dialog, invite, .. } = &mut *state {
             dialog
                 .create_response(invite, code, reason)
                 .map_err(Error::Core)
@@ -159,7 +159,7 @@ impl Acceptor {
     ) -> Result<(), Error> {
         let mut state = self.inner.state.lock().await;
 
-        if let InviteSessionState::Provisional { tsx, .. } = &mut *state {
+        if let InviteSessionState::UasProvisional { tsx, .. } = &mut *state {
             tsx.respond_provisional(&mut response)
                 .await
                 .map_err(Error::Core)
@@ -185,7 +185,7 @@ impl Acceptor {
 
         let mut state = self.inner.state.lock().await;
 
-        if let InviteSessionState::Provisional { tsx, dialog, .. } = &mut *state {
+        if let InviteSessionState::UasProvisional { tsx, invite, .. } = &mut *state {
             let rack = random_sequence_number();
 
             response.msg.headers.insert_named(&Require("100rel".into()));
@@ -195,7 +195,7 @@ impl Acceptor {
 
             *self.inner.awaited_prack.lock() = Some(AwaitedPrack {
                 prack_sender,
-                cseq: dialog.peer_cseq,
+                cseq: invite.base_headers.cseq.cseq,
                 rack,
             });
 
@@ -239,7 +239,7 @@ impl Acceptor {
         let (evt_sink, events) = mpsc::channel(4);
         let res = state.set_established(evt_sink);
 
-        if let Some((mut dialog, transaction, invite)) = res {
+        if let Some((dialog, transaction, invite)) = res {
             // We are going to respond with a successful response soon, register the cseq of
             // the initial invite invite `awaited_ack` where it will be used to match the
             // incoming ACK request to this transaction.
@@ -262,8 +262,10 @@ impl Acceptor {
             let ack = super::receive_ack(accepted, ack_recv).await?;
 
             // Set the dialogs transport target info from the incoming ACK request
-            dialog.target.transport = Some(ack.tp_info.transport.clone());
-            dialog.target.destination = vec![ack.tp_info.source];
+            let mut target_tp_info = dialog.target_tp_info.lock().await;
+            target_tp_info.transport = Some(ack.tp_info.transport.clone());
+            target_tp_info.destination = vec![ack.tp_info.source];
+            drop(target_tp_info);
 
             let session = Session::new(
                 self.endpoint.clone(),

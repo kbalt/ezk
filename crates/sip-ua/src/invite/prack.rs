@@ -1,11 +1,13 @@
 use super::InviteUsage;
-use sip_core::{Endpoint, IncomingRequest, MayTake, Result};
-use sip_types::header::typed::RAck;
-use sip_types::Code;
+use crate::dialog::Dialog;
+use sip_core::transaction::TsxResponse;
+use sip_core::{Endpoint, IncomingRequest, MayTake, Request, Result};
+use sip_types::header::typed::{RAck, RSeq, Require};
+use sip_types::{Code, Method};
 use tokio::sync::oneshot;
 
 #[derive(Debug)]
-pub struct AwaitedPrack {
+pub(super) struct AwaitedPrack {
     /// Channel to send the PRack request to the acceptor
     pub prack_sender: oneshot::Sender<IncomingRequest>,
 
@@ -48,4 +50,39 @@ impl InviteUsage {
 
         prack_tsx.respond(response).await
     }
+}
+
+pub fn get_rseq(response: &TsxResponse) -> Option<RSeq> {
+    if let Some(Ok(requires)) = response.headers.try_get_named::<Vec<Require>>() {
+        if requires.iter().any(|r| r.0 == "100rel") {
+            return response.headers.get_named().ok();
+        }
+    }
+
+    None
+}
+
+pub fn create_prack(dialog: &Dialog, response: &mut TsxResponse, rack: u32) -> Request {
+    let mut request = dialog.create_request(Method::PRACK);
+
+    request.headers.insert_named(&RAck {
+        rack,
+        cseq: response.base_headers.cseq.cseq,
+        method: Method::INVITE,
+    });
+
+    request
+}
+
+pub async fn send_prack(dialog: &Dialog, request: Request) -> Result<TsxResponse, sip_core::Error> {
+    let mut target_tp_info = dialog.target_tp_info.lock().await;
+
+    let mut transaction = dialog
+        .endpoint
+        .send_request(request, &mut target_tp_info)
+        .await?;
+
+    drop(target_tp_info);
+
+    transaction.receive_final().await
 }

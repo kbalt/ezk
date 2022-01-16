@@ -32,7 +32,7 @@ pub struct Session {
 
     // drop usage before dialog
     _usage_guard: UsageGuard,
-    pub dialog: Dialog,
+    pub dialog: Arc<Dialog>,
 }
 
 pub struct RefreshNeeded<'s> {
@@ -43,11 +43,15 @@ impl RefreshNeeded<'_> {
     pub async fn process_default(self) -> Result<()> {
         let invite = self.session.dialog.create_request(Method::INVITE);
 
+        let mut target_tp_info = self.session.dialog.target_tp_info.lock().await;
+
         let mut transaction = self
             .session
             .endpoint
-            .send_invite(invite, &mut self.session.dialog.target)
+            .send_invite(invite, &mut target_tp_info)
             .await?;
+
+        drop(target_tp_info);
 
         let mut ack = None;
 
@@ -59,7 +63,7 @@ impl RefreshNeeded<'_> {
                         ack
                     } else {
                         let ack_req = super::create_ack(
-                            &mut self.session.dialog,
+                            &self.session.dialog,
                             response.base_headers.cseq.cseq,
                         )
                         .await?;
@@ -142,7 +146,7 @@ impl Session {
             usage_events,
             session_timer,
             _usage_guard: usage_guard,
-            dialog,
+            dialog: Arc::new(dialog),
         }
     }
 
@@ -162,10 +166,15 @@ impl Session {
         state.set_terminated();
 
         let request = self.dialog.create_request(Method::BYE);
+
+        let mut target_tp_info = self.dialog.target_tp_info.lock().await;
+
         let mut transaction = self
             .endpoint
-            .send_request(request, &mut self.dialog.target)
+            .send_request(request, &mut target_tp_info)
             .await?;
+
+        drop(target_tp_info);
 
         transaction.receive_final().await
     }

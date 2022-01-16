@@ -1,6 +1,11 @@
-use sip_core::{transport::OutgoingResponse, IncomingRequest};
+use sip_core::transaction::TsxResponse;
+use sip_core::transport::OutgoingResponse;
+use sip_core::{IncomingRequest, Request};
 use sip_types::header::typed::{MinSe, Refresher, Require, SessionExpires};
-use std::{future::pending, pin::Pin, time::Duration};
+use sip_types::header::HeaderError;
+use std::future::pending;
+use std::pin::Pin;
+use std::time::Duration;
 use tokio::time::{sleep, Sleep};
 
 /// Config of the `timer` extension used by the acceptor
@@ -60,6 +65,61 @@ impl AcceptorTimerConfig {
             refresher: self.refresher,
             real_delta_secs,
             interval: RefreshInterval::Sleeping(Box::pin(sleep)),
+        }
+    }
+}
+
+/// Config of the `timer` extension used by the initiator
+#[derive(Debug, Clone, Copy)]
+pub struct InitiatorTimerConfig {
+    pub expires_secs: Option<u32>,
+    pub refresher: Refresher,
+    pub expires_secs_min: u32,
+}
+
+impl InitiatorTimerConfig {
+    pub fn populate_request(&self, request: &mut Request) {
+        if let Some(expires_secs) = self.expires_secs {
+            request.headers.insert_named(&SessionExpires {
+                delta_secs: expires_secs,
+                refresher: self.refresher,
+            });
+        }
+
+        request.headers.insert_named(&MinSe(self.expires_secs_min));
+    }
+
+    pub fn create_timer_from_response(
+        &self,
+        response: &TsxResponse,
+    ) -> Result<SessionTimer, HeaderError> {
+        if let Some(se) = response
+            .headers
+            .try_get_named::<SessionExpires>()
+            .transpose()?
+        {
+            let real_delta_secs;
+
+            let refresher = match se.refresher {
+                Refresher::Uas => {
+                    real_delta_secs = se.delta_secs - 10;
+                    Refresher::Uas
+                }
+                Refresher::Unspecified | Refresher::Uac => {
+                    real_delta_secs = se.delta_secs + 10;
+                    Refresher::Uac
+                }
+            };
+
+            let sleep = sleep(Duration::from_secs(real_delta_secs as u64));
+
+            Ok(SessionTimer {
+                refresher,
+                real_delta_secs,
+                interval: RefreshInterval::Sleeping(Box::pin(sleep)),
+            })
+        } else {
+            Ok(SessionTimer::new_unsupported())
         }
     }
 }
