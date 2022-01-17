@@ -4,8 +4,9 @@ use sip_core::transport::udp::Udp;
 use sip_core::{Endpoint, Result};
 use sip_types::header::typed::Contact;
 use sip_types::uri::NameAddr;
-use sip_ua::dialog::DialogLayer;
-use sip_ua::invite::InviteLayer;
+use sip_ua::internal::dialog::DialogLayer;
+use sip_ua::internal::invite::initiator::{Initiator, Response};
+use sip_ua::internal::invite::InviteLayer;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -24,7 +25,7 @@ async fn main() -> Result<()> {
     let local_uri = endpoint.parse_uri("sip:127.0.0.1").unwrap();
     let target = endpoint.parse_uri("sip:127.0.0.1").unwrap();
 
-    let mut initiator = sip_ua::invite::initiator::Initiator::new(
+    let mut initiator = Initiator::new(
         endpoint,
         dialog_layer,
         invite_layer,
@@ -47,8 +48,8 @@ async fn main() -> Result<()> {
 
         loop {
             match initiator.receive().await.unwrap() {
-                sip_ua::invite::initiator::Response::Provisional(_) => todo!(),
-                sip_ua::invite::initiator::Response::Failure(response) => {
+                Response::Provisional(_) => todo!(),
+                Response::Failure(response) => {
                     if response.line.code.into_u16() != 401 {
                         return Ok(());
                     }
@@ -70,13 +71,13 @@ async fn main() -> Result<()> {
 
                     break;
                 }
-                sip_ua::invite::initiator::Response::Early(..) => {
+                Response::Early(..) => {
                     unimplemented!()
                 }
-                sip_ua::invite::initiator::Response::Session(mut x, _response) => {
+                Response::Session(mut x, _response) => {
                     x.terminate().await.unwrap();
                 }
-                sip_ua::invite::initiator::Response::Finished => break,
+                Response::Finished => break,
             }
         }
     }

@@ -4,7 +4,7 @@ use sip_core::{Endpoint, Result};
 use sip_types::uri::sip::SipUri;
 use sip_types::uri::NameAddr;
 use sip_types::CodeKind;
-use sip_ua::register::Registration;
+use sip_ua::internal::register::Registration;
 
 #[tokio::main]
 async fn main() -> Result<()> {

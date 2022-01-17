@@ -1,5 +1,5 @@
 use super::InviteUsage;
-use crate::dialog::Dialog;
+use crate::internal::dialog::Dialog;
 use sip_core::transaction::TsxResponse;
 use sip_core::{Endpoint, IncomingRequest, MayTake, Request, Result};
 use sip_types::header::typed::{RAck, RSeq, Require};

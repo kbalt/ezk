@@ -1,6 +1,6 @@
 use super::{Dialog, DialogLayer};
-use crate::dialog::layer::DialogEntry;
-use crate::util::{random_sequence_number, random_string};
+use crate::internal::dialog::layer::DialogEntry;
+use crate::internal::util::{random_sequence_number, random_string};
 use bytes::Bytes;
 use sip_core::transaction::TsxResponse;
 use sip_core::transport::TargetTransportInfo;

@@ -5,7 +5,7 @@ use super::prack::get_rseq;
 use super::session::{Role, Session};
 use super::timer::InitiatorTimerConfig;
 use super::{Inner, InviteLayer, InviteSessionState, InviteUsage};
-use crate::dialog::{ClientDialogBuilder, Dialog, DialogLayer};
+use crate::internal::dialog::{ClientDialogBuilder, Dialog, DialogLayer};
 use bytesstr::BytesStr;
 use parking_lot as pl;
 use sip_core::transaction::{ClientInvTsx, TsxResponse};

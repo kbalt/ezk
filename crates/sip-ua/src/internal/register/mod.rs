@@ -1,4 +1,4 @@
-use crate::util::{random_sequence_number, random_string};
+use crate::internal::util::{random_sequence_number, random_string};
 use sip_core::transaction::TsxResponse;
 use sip_core::Request;
 use sip_types::header::typed::{CSeq, CallID, Contact, Expires, FromTo};

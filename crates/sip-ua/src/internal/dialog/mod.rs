@@ -1,5 +1,5 @@
 use self::layer::DialogEntry;
-use crate::util::{random_sequence_number, random_string};
+use crate::internal::util::{random_sequence_number, random_string};
 use bytesstr::BytesStr;
 use sip_core::transport::{OutgoingResponse, TargetTransportInfo};
 use sip_core::{Endpoint, Error, IncomingRequest, LayerKey, Request, Result};

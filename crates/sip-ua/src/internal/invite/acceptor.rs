@@ -1,10 +1,10 @@
 use super::session::Session;
 use super::timer::{AcceptorTimerConfig, SessionTimer};
 use super::{AwaitedAck, AwaitedPrack, Inner, InviteLayer};
-use crate::dialog::{register_usage, Dialog, UsageGuard};
-use crate::invite::session::Role;
-use crate::invite::{InviteSessionState, InviteUsage};
-use crate::util::random_sequence_number;
+use crate::internal::dialog::{register_usage, Dialog, UsageGuard};
+use crate::internal::invite::session::Role;
+use crate::internal::invite::{InviteSessionState, InviteUsage};
+use crate::internal::util::random_sequence_number;
 use bytesstr::BytesStr;
 use parking_lot as pl;
 use sip_core::transaction::consts::T1;

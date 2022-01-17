@@ -4,10 +4,10 @@ use sip_types::header::typed::Contact;
 use sip_types::uri::sip::SipUri;
 use sip_types::uri::NameAddr;
 use sip_types::{Code, Method};
-use sip_ua::dialog::{Dialog, DialogLayer};
-use sip_ua::invite::acceptor::Acceptor;
-use sip_ua::invite::session::Event;
-use sip_ua::invite::InviteLayer;
+use sip_ua::internal::dialog::{Dialog, DialogLayer};
+use sip_ua::internal::invite::acceptor::Acceptor;
+use sip_ua::internal::invite::session::Event;
+use sip_ua::internal::invite::InviteLayer;
 use std::time::Duration;
 use tokio::time::sleep;
 

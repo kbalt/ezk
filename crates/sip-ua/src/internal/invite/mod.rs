@@ -1,4 +1,4 @@
-use crate::dialog::{Dialog, Usage};
+use crate::internal::dialog::{Dialog, Usage};
 use acceptor::CancellableKey;
 use parking_lot as pl;
 use prack::AwaitedPrack;
