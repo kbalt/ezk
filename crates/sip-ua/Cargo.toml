@@ -13,7 +13,9 @@ readme = "README.md"
 [dependencies]
 sip-types = { package = "ezk-sip-types", path = "../sip-types", version = "0.1" }
 sip-core = { package = "ezk-sip-core", path = "../sip-core", version = "0.1" }
+sip-auth = { package = "ezk-sip-auth", path = "../sip-auth", version = "0.1" }
 
+flume = "0.10"
 log = "0.4"
 bytesstr = "1"
 async-trait = "0.1"

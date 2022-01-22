@@ -1,39 +1,38 @@
-use sip_core::transport::udp::Udp;
-use sip_core::transport::TargetTransportInfo;
-use sip_core::{Endpoint, Result};
+use anyhow::Result;
+use sip_auth::digest::DigestCredentials;
 use sip_types::uri::sip::SipUri;
-use sip_types::uri::NameAddr;
-use sip_types::CodeKind;
-use sip_ua::internal::register::Registration;
+use sip_ua::account::AccountConfig;
+use sip_ua::UserAgent;
+use std::str::FromStr;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
-    let mut builder = Endpoint::builder();
+    // Build the user agent
+    let user_agent = UserAgent::builder()
+        .with_udp_transport("0.0.0.0:5060")
+        .await?
+        .build()
+        .await;
 
-    Udp::spawn(&mut builder, "127.0.0.1:5060").await?;
+    // Build account config and add some credentials
+    let mut config = AccountConfig::new("alice".into(), SipUri::from_str("sip:example.org")?);
+    config
+        .credentials
+        .add_for_realm("example.org", DigestCredentials::new("alice", "password2"));
 
-    let endpoint = builder.build();
+    // Create account using the config
+    let account_id = user_agent.create_account(config);
 
-    let id: SipUri = "sip:alice@example.com".parse().unwrap();
-    let registrar: SipUri = "sip:example.com".parse().unwrap();
+    // Try to register the account at the specified registrar
+    user_agent.register(account_id).await?;
 
-    let mut target = TargetTransportInfo::default();
-    let mut registration = Registration::new(NameAddr::uri(id), registrar.into());
+    // Wait for CTRL-C/SIGINT
+    tokio::signal::ctrl_c().await?;
 
-    loop {
-        let request = registration.create_register(false);
-        let mut transaction = endpoint.send_request(request, &mut target).await?;
-        let response = transaction.receive_final().await?;
+    // Unregister and quit
+    user_agent.unregister(account_id).await?;
 
-        match response.line.code.kind() {
-            CodeKind::Success => {}
-            _ => panic!("registration failed!"),
-        }
-
-        registration.receive_success_response(response);
-
-        registration.wait_for_expiry().await;
-    }
+    Ok(())
 }

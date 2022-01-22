@@ -25,8 +25,8 @@ pub struct Registration {
 }
 
 impl Registration {
-    pub fn new(id: NameAddr, registrar: Box<dyn Uri>) -> Self {
-        let duration_secs = 300;
+    pub fn new(id: NameAddr, registrar: Box<dyn Uri>, expires: Duration) -> Self {
+        let expires = expires.as_secs() as u32;
 
         Self {
             registrar,
@@ -36,9 +36,18 @@ impl Registration {
             call_id: CallID::new(random_string()),
             contact: Contact::new(id),
 
-            expires: duration_secs,
-            register_interval: create_reg_interval(duration_secs),
+            expires,
+            register_interval: create_reg_interval(expires),
         }
+    }
+
+    pub fn set_id(&mut self, id: NameAddr) {
+        self.to = FromTo::new(id.clone(), self.to.tag.take());
+        self.from = FromTo::new(id, self.from.tag.take());
+    }
+
+    pub fn set_contact(&mut self, contact: Contact) {
+        self.contact = contact;
     }
 
     pub fn create_register(&mut self, remove_binding: bool) -> Request {

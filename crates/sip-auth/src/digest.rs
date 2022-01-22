@@ -7,6 +7,7 @@ use sip_types::header::typed::{
 };
 use sip_types::print::{AppendCtx, PrintCtx, UriContext};
 
+#[derive(Clone)]
 pub struct DigestCredentials {
     user: String,
     password: String,
@@ -105,7 +106,7 @@ impl UacAuthenticator for DigestAuthenticator {
         if authenticate {
             self.handle_digest_challenge(credentials, challenge, request_parts)
         } else {
-            Err(Error::FailedToAuthenticate(challenge.realm))
+            Err(Error::FailedToAuthenticate(vec![challenge.realm]))
         }
     }
 

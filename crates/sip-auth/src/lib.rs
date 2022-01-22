@@ -21,13 +21,25 @@ pub struct RequestParts<'s> {
 /// A HashMap wrapper that holds credentials mapped to their respective realm
 ///
 /// Default credentials can be set to attempt authentication for unknown realms
-#[derive(Default)]
+#[derive(Clone)]
 pub struct CredentialStore<C = DigestCredentials>
 where
     C: Send + Sync,
 {
     default: Option<C>,
     map: HashMap<String, C>,
+}
+
+impl<C> Default for CredentialStore<C>
+where
+    C: Send + Sync,
+{
+    fn default() -> Self {
+        Self {
+            default: None,
+            map: HashMap::new(),
+        }
+    }
 }
 
 impl<C> CredentialStore<C>
@@ -203,16 +215,7 @@ impl<A: UacAuthenticator> UacAuthSession<A> {
         }
 
         if !failed_realms.is_empty() {
-            let mut dst = String::new();
-            let mut iter = failed_realms.into_iter();
-            let first = iter.next().unwrap();
-            dst.push_str(&first);
-            for realm in iter {
-                dst.push_str(", ");
-                dst.push_str(&realm);
-            }
-
-            return Err(Error::FailedToAuthenticate(dst.into()));
+            return Err(Error::FailedToAuthenticate(failed_realms));
         }
 
         Ok(())

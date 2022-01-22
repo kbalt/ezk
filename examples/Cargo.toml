@@ -10,7 +10,9 @@ sip-core = { path = "../crates/sip-core", package = "ezk-sip-core" }
 sip-ua = { path = "../crates/sip-ua", package = "ezk-sip-ua" }
 sip-auth = { path = "../crates/sip-auth", package = "ezk-sip-auth" }
 
-tokio = { version = "1", features = ["rt", "macros"] }
+anyhow = "1"
+
+tokio = { version = "1", features = ["rt", "macros", "signal"] }
 
 async-trait = "0.1"
 bytesstr = "1"
