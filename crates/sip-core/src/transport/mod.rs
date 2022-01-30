@@ -347,7 +347,11 @@ impl Transports {
                 .map(|tp_name| tp.matches_transport_param(tp_name))
                 .unwrap_or(true);
 
-            tp_allowed && info.allows_security_level(tp.secure())
+            let addr_family_supported = addresses
+                .iter()
+                .any(|addr| tp.bound().is_ipv4() == addr.is_ipv4());
+
+            tp_allowed && addr_family_supported && info.allows_security_level(tp.secure())
         }) {
             log::trace!("selected connectionless: {}", transport);
 
