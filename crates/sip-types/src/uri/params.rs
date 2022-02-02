@@ -115,9 +115,12 @@ impl<S: ParamsSpec> Params<S> {
                 opt(map(
                     ws((
                         tag(S::FIRST_DELIMITER),
-                        Param::do_parse(ctx.src, S::CHAR_SPEC),
+                        Param::do_parse(ctx.src, S::NAME_CHAR_SPEC, S::VALUE_CHAR_SPEC),
                         many0(map(
-                            ws((tag(S::DELIMITER), Param::do_parse(ctx.src, S::CHAR_SPEC))),
+                            ws((
+                                tag(S::DELIMITER),
+                                Param::do_parse(ctx.src, S::NAME_CHAR_SPEC, S::VALUE_CHAR_SPEC),
+                            )),
                             |(_, param)| param,
                         )),
                     )),
@@ -179,7 +182,7 @@ where
                 f.write_str(S::DELIMITER)?;
             }
 
-            param.write(f, S::ENCODE_SET())?;
+            param.write(f, S::VALUE_ENCODE_SET())?;
         }
 
         Ok(())
@@ -199,8 +202,9 @@ impl<S> Default for Params<S> {
 pub trait ParamsSpec {
     const FIRST_DELIMITER: &'static str;
     const DELIMITER: &'static str;
-    const CHAR_SPEC: fn(char) -> bool;
-    const ENCODE_SET: fn() -> &'static AsciiSet;
+    const NAME_CHAR_SPEC: fn(char) -> bool;
+    const VALUE_CHAR_SPEC: fn(char) -> bool;
+    const VALUE_ENCODE_SET: fn() -> &'static AsciiSet;
 }
 
 /// Header Param Specification in uris (?SomeHeader=SomeValue&SomeOtherHeader=SomeOtherValue)
@@ -215,8 +219,9 @@ encode_set!(header_char, HPS_SET);
 impl ParamsSpec for HPS {
     const FIRST_DELIMITER: &'static str = "?";
     const DELIMITER: &'static str = "&";
-    const CHAR_SPEC: fn(char) -> bool = header_char;
-    const ENCODE_SET: fn() -> &'static AsciiSet = || &HPS_SET;
+    const NAME_CHAR_SPEC: fn(char) -> bool = header_char;
+    const VALUE_CHAR_SPEC: fn(char) -> bool = header_char;
+    const VALUE_ENCODE_SET: fn() -> &'static AsciiSet = || &HPS_SET;
 }
 
 /// Common Param Specification for URIs (;some=value;other=value)
@@ -231,8 +236,9 @@ encode_set!(param_char, CPS_SET);
 impl ParamsSpec for CPS {
     const FIRST_DELIMITER: &'static str = ";";
     const DELIMITER: &'static str = ";";
-    const CHAR_SPEC: fn(char) -> bool = param_char;
-    const ENCODE_SET: fn() -> &'static AsciiSet = || &CPS_SET;
+    const NAME_CHAR_SPEC: fn(char) -> bool = header_char;
+    const VALUE_CHAR_SPEC: fn(char) -> bool = param_char;
+    const VALUE_ENCODE_SET: fn() -> &'static AsciiSet = || &CPS_SET;
 }
 
 /// Represents a Parameter `name[=(value|"value")]`
@@ -280,13 +286,14 @@ impl Param {
 
     pub(crate) fn do_parse(
         src: &Bytes,
-        spec: fn(char) -> bool,
+        name_spec: fn(char) -> bool,
+        value_spec: fn(char) -> bool,
     ) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
         move |i| {
             map_res(
                 ws((
-                    take_while(spec),
-                    opt(ws((tag("="), alt((parse_quoted, take_while(spec)))))),
+                    take_while(name_spec),
+                    opt(ws((tag("="), alt((parse_quoted, take_while(value_spec)))))),
                 )),
                 move |(name, value)| -> Result<_, Utf8Error> {
                     Ok(Param {

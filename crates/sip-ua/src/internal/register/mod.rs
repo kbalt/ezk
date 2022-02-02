@@ -2,13 +2,14 @@ use crate::internal::util::{random_sequence_number, random_string};
 use sip_core::transaction::TsxResponse;
 use sip_core::Request;
 use sip_types::header::typed::{CSeq, CallID, Contact, Expires, FromTo};
-use sip_types::uri::{NameAddr, Uri};
+use sip_types::uri::sip::SipUri;
+use sip_types::uri::NameAddr;
 use sip_types::{CodeKind, Method, Name};
 use std::time::Duration;
 use tokio::time::{interval_at, Instant, Interval};
 
 pub struct Registration {
-    registrar: Box<dyn Uri>,
+    registrar: SipUri,
 
     to: FromTo,
     from: FromTo,
@@ -25,7 +26,7 @@ pub struct Registration {
 }
 
 impl Registration {
-    pub fn new(id: NameAddr, registrar: Box<dyn Uri>, expires: Duration) -> Self {
+    pub fn new(id: NameAddr, registrar: SipUri, expires: Duration) -> Self {
         let expires = expires.as_secs() as u32;
 
         Self {

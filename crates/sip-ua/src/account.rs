@@ -1,16 +1,15 @@
 //! All account and registration related types
 
+use crate::auth::{AuthenticationConfig, SharedAuthentication};
 use crate::internal::register::Registration;
 use crate::UserAgent;
-use flume::bounded;
-use sip_auth::digest::DigestCredentials;
-use sip_auth::{CredentialStore, RequestParts, UacAuthSession};
+use sip_auth::{RequestParts, UacAuthSession};
 use sip_core::transaction::TsxResponse;
 use sip_core::transport::TargetTransportInfo;
 use sip_core::Endpoint;
 use sip_types::header::typed::Contact;
 use sip_types::uri::sip::SipUri;
-use sip_types::uri::{NameAddr, Uri};
+use sip_types::uri::NameAddr;
 use sip_types::{Code, CodeKind};
 use std::mem::replace;
 use std::net::{IpAddr, SocketAddr};
@@ -25,23 +24,17 @@ slotmap::new_key_type! {
 /// Configuration for a SIP account which can be registered on some registrar
 pub struct AccountConfig {
     username: String,
-    registrar: Box<dyn Uri>,
 
-    /// Credentials related to this account
+    /// Configuration for registration at an registrar
     ///
-    /// Used to authenticate all requests related to this account.
-    ///
-    /// If empty or containing invalid credentials when trying to register this account
-    /// the callback API will be probed ([`AccountRegistrationCallbacks`]).
-    pub credentials: CredentialStore,
+    /// Optional to support local accounts which are not being  registered anywhere
+    pub registrar: Option<AccountRegistrarConfig>,
+
+    /// Configuration of the authorization of all requests related to this account
+    pub auth: AuthenticationConfig,
 
     /// Optional display name for this account
     pub display_name: Option<String>,
-
-    /// Time between REGISTER requests
-    ///
-    /// Default: 300s
-    pub registration_delta: Duration,
 
     /// Set a custom public socket address to use for this account
     ///
@@ -54,26 +47,42 @@ pub struct AccountConfig {
     /// Note, that if this `pub_addr` is set that that address is locked in and
     /// will not be overwritten by the application.
     pub pub_addr: Option<SocketAddr>,
+}
 
-    /// Enforce quality of protection for authentications related to this account
+/// Config of an account's registration
+pub struct AccountRegistrarConfig {
+    /// Uri to a registrar at which this account can be registered
+    pub uri: SipUri,
+
+    /// Time between REGISTER requests
     ///
-    /// Enabling the option all Digest challenges will be treated as if they sent qop="auth"
-    ///
-    /// Disabled by default for backwards compatibility but recommended if compatible
-    pub enforce_qop: bool,
+    /// Default: 300s
+    pub registration_delta: Duration,
 }
 
 impl AccountConfig {
-    /// Create a new account config with its minimum of required configuration
-    pub fn new(username: String, registrar: impl Into<Box<dyn Uri>>) -> Self {
+    /// Create a new account config with a registrar uri to register at
+    pub fn new(username: String, registrar: SipUri) -> Self {
         Self {
             username,
-            registrar: registrar.into(),
-            credentials: CredentialStore::new(),
-            registration_delta: Duration::from_secs(300),
+            registrar: Some(AccountRegistrarConfig {
+                uri: registrar,
+                registration_delta: Duration::from_secs(300),
+            }),
+            auth: AuthenticationConfig::default(),
             display_name: None,
             pub_addr: None,
-            enforce_qop: false,
+        }
+    }
+
+    /// Create a new account config with its minimum of required configuration
+    pub fn new_local(username: String) -> Self {
+        Self {
+            username,
+            registrar: None,
+            auth: AuthenticationConfig::default(),
+            display_name: None,
+            pub_addr: None,
         }
     }
 }
@@ -108,16 +117,6 @@ pub trait AccountRegistrationCallbacks: Send + Sync + 'static {
         _new: &RegistrationState,
     ) {
     }
-
-    /// Prompts for credentials when registration failed because of missing or invalid credentials
-    ///
-    /// Can be used for prompting a user.
-    ///
-    /// Should avoid returning the same values for a realm as that will only result in this function being called again.
-    /// Use the [`CredentialStore`] in the [`AccountConfig`] instead, to store/prepare credentials.
-    async fn query_credentials(&mut self, _realm: &str) -> Option<DigestCredentials> {
-        None
-    }
 }
 
 struct DefaultAccountRegistrationCallbacks;
@@ -127,26 +126,32 @@ enum Command {
     Stop(flume::Sender<Result<(), RegistrationError>>),
 }
 
-pub(crate) struct AccountState {
-    shared_state: Arc<Mutex<AccountSharedState>>,
+pub(crate) struct UaLayerAccountData {
+    pub(crate) shared: Arc<Mutex<AccountSharedState>>,
+    pub(crate) auth: Arc<SharedAuthentication>,
     reg_task_cmd_sender: Option<flume::Sender<Command>>,
 }
 
-impl AccountState {
+impl UaLayerAccountData {
     pub(crate) fn new(config: AccountConfig) -> Self {
         Self {
-            shared_state: Arc::new(Mutex::new(AccountSharedState {
+            auth: Arc::new(SharedAuthentication::from(config.auth)),
+            shared: Arc::new(Mutex::new(AccountSharedState {
+                username: config.username,
+                display_name: config.display_name,
+                registrar_config: config.registrar,
                 pub_addr: config.pub_addr,
                 pub_addr_locked: config.pub_addr.is_some(),
-                config,
             })),
             reg_task_cmd_sender: None,
         }
     }
 }
 
-struct AccountSharedState {
-    config: AccountConfig,
+pub(crate) struct AccountSharedState {
+    username: String,
+    display_name: Option<String>,
+    registrar_config: Option<AccountRegistrarConfig>,
     pub_addr: Option<SocketAddr>,
     pub_addr_locked: bool,
 }
@@ -154,9 +159,9 @@ struct AccountSharedState {
 impl AccountSharedState {
     pub(crate) fn public_id(&self) -> NameAddr {
         let uri = SipUri::new(self.pub_addr.expect("pub_addr must be set").into())
-            .user(self.config.username.clone().into());
+            .user(self.username.clone().into());
 
-        if let Some(display_name) = &self.config.display_name {
+        if let Some(display_name) = &self.display_name {
             NameAddr::new(display_name.as_str(), uri)
         } else {
             NameAddr::uri(uri)
@@ -167,14 +172,14 @@ impl AccountSharedState {
 struct AccountRegistrationTask<CB> {
     endpoint: Endpoint,
     callbacks: CB,
-    shared_state: Arc<Mutex<AccountSharedState>>,
+    shared: Arc<Mutex<AccountSharedState>>,
+    auth: Arc<SharedAuthentication>,
 
     state: RegistrationState,
     task_state: RegistrationTaskState,
 
     command_recv: flume::Receiver<Command>,
 
-    credentials: CredentialStore,
     auth_session: UacAuthSession,
     registration: Registration,
 
@@ -195,53 +200,64 @@ where
 {
     async fn create(
         endpoint: Endpoint,
-        shared_state: Arc<Mutex<AccountSharedState>>,
+        shared: Arc<Mutex<AccountSharedState>>,
+        auth: Arc<SharedAuthentication>,
         callbacks: CB,
         command_recv: flume::Receiver<Command>,
-        result_send: flume::Sender<Result<(), RegistrationError>>,
+        result_send: flume::Sender<Result<(), RegisterError>>,
     ) {
-        let mut state = shared_state.lock().await;
-
+        let registration;
         let mut target_transport_info = TargetTransportInfo::default();
 
-        if state.pub_addr.is_none() {
-            match endpoint.select_transport(&*state.config.registrar).await {
-                Ok((transport, destination)) => {
-                    state.pub_addr = Some(transport.bound());
+        {
+            let mut state = &mut *shared.lock().await;
 
-                    target_transport_info.destination = destination;
-                    target_transport_info.transport = Some(transport);
-                }
-                Err(e) => {
-                    log::error!("failed to select transport for registration task, {}", e);
-                    result_send
-                        .try_send(Err(RegistrationError::Core(e)))
-                        .unwrap();
-                    return;
-                }
+            let registrar_config = if let Some(config) = &state.registrar_config {
+                config
+            } else {
+                result_send
+                    .try_send(Err(RegisterError::NoRegistrarConfig))
+                    .expect("result receiver dropped");
+                return;
             };
-        };
 
-        let credentials = state.config.credentials.clone();
-        let registration = Registration::new(
-            state.public_id(),
-            state.config.registrar.clone(),
-            state.config.registration_delta,
-        );
+            if state.pub_addr.is_none() {
+                match endpoint.select_transport(&registrar_config.uri).await {
+                    Ok((transport, destination)) => {
+                        state.pub_addr = Some(transport.bound());
+
+                        target_transport_info.destination = destination;
+                        target_transport_info.transport = Some(transport);
+                    }
+                    Err(e) => {
+                        log::error!("failed to select transport for registration task, {}", e);
+                        result_send
+                            .try_send(Err(RegisterError::Registration(RegistrationError::Core(e))))
+                            .unwrap();
+                        return;
+                    }
+                };
+            };
+
+            registration = Registration::new(
+                state.public_id(),
+                registrar_config.uri.clone(),
+                registrar_config.registration_delta,
+            );
+        }
 
         let mut auth_session: UacAuthSession = Default::default();
-        auth_session.get_authenticator().enforce_qop = state.config.enforce_qop;
-
-        drop(state);
+        auth_session.get_authenticator().enforce_qop = auth.enforce_qop;
+        auth_session.get_authenticator().reject_md5 = auth.reject_md5;
 
         Self {
             endpoint,
             callbacks,
-            shared_state,
+            shared,
+            auth,
             state: RegistrationState::Null,
             task_state: RegistrationTaskState::Waiting,
             command_recv,
-            credentials,
             auth_session,
             registration,
             target_transport_info,
@@ -250,12 +266,12 @@ where
         .await
     }
 
-    async fn run(mut self, result_send: flume::Sender<Result<(), RegistrationError>>) {
+    async fn run(mut self, result_send: flume::Sender<Result<(), RegisterError>>) {
         let response = match self.send_register(false).await {
             Ok(response) => response,
             Err(e) => {
                 result_send
-                    .try_send(Err(e))
+                    .try_send(Err(RegisterError::Registration(e)))
                     .expect("result receiver dropped");
                 return;
             }
@@ -279,7 +295,9 @@ where
             }
             _ => {
                 result_send
-                    .try_send(Err(RegistrationError::Failed(response.line.code)))
+                    .try_send(Err(RegisterError::Registration(RegistrationError::Failed(
+                        response.line.code,
+                    ))))
                     .expect("result receiver dropped");
             }
         }
@@ -385,9 +403,9 @@ where
             ) {
                 let request = transaction.request();
 
-                let res = self.auth_session.handle_authenticate(
+                let result = self.auth_session.handle_authenticate(
                     &response.headers,
-                    &self.credentials,
+                    &self.auth.credentials.read(),
                     RequestParts {
                         line: &request.msg.line,
                         headers: &request.msg.headers,
@@ -395,22 +413,7 @@ where
                     },
                 );
 
-                match res {
-                    Ok(..) => { /* ok */ }
-                    Err(sip_auth::Error::FailedToAuthenticate(realms)) => {
-                        for realm in &realms {
-                            if let Some(credentials) = self.callbacks.query_credentials(realm).await
-                            {
-                                self.credentials.add_for_realm(realm.as_str(), credentials)
-                            } else {
-                                return Err(RegistrationError::Auth(
-                                    sip_auth::Error::FailedToAuthenticate(realms),
-                                ));
-                            }
-                        }
-                    }
-                    Err(e) => return Err(RegistrationError::Auth(e)),
-                }
+                self.auth.query_credentials_if_possible(result).await?;
 
                 match replace(&mut self.task_state, RegistrationTaskState::Waiting) {
                     RegistrationTaskState::ReBindWithNewIdNeeded { new_id }
@@ -432,6 +435,8 @@ where
             }
         }
 
+        log::warn!("tried 12 times to satisfy auth challenge for REGISTER request, aborting");
+
         Err(RegistrationError::Failed(Code::UNAUTHORIZED))
     }
 
@@ -446,7 +451,7 @@ where
             .and_then(|v| v.parse().ok());
 
         if received.is_some() || rport.is_some() {
-            let mut state = self.shared_state.lock().await;
+            let mut state = self.shared.lock().await;
 
             if !state.pub_addr_locked {
                 let mut addr = state.pub_addr.unwrap_or_else(|| {
@@ -509,6 +514,8 @@ pub enum RegisterError {
     InvalidAccountId,
     #[error("account is already registering")]
     AlreadyRegistering,
+    #[error("account has no registrar config")]
+    NoRegistrarConfig,
     #[error(transparent)]
     Registration(RegistrationError),
 }
@@ -533,7 +540,7 @@ impl UserAgent {
         self.endpoint[self.ua_layer]
             .accounts
             .lock()
-            .insert(AccountState::new(config))
+            .insert(UaLayerAccountData::new(config))
     }
 
     /// Delete the account of the given `account_id`  
@@ -569,40 +576,39 @@ impl UserAgent {
     where
         CB: AccountRegistrationCallbacks,
     {
-        let receiver = self.do_register_with_callbacks(account_id, callbacks)?;
-
-        receiver
+        self.do_register_with_callbacks(account_id, callbacks)?
             .recv_async()
             .await
             .unwrap()
-            .map_err(RegisterError::Registration)
     }
 
     fn do_register_with_callbacks<CB>(
         &self,
         account_id: AccountId,
         callbacks: CB,
-    ) -> Result<flume::Receiver<Result<(), RegistrationError>>, RegisterError>
+    ) -> Result<flume::Receiver<Result<(), RegisterError>>, RegisterError>
     where
         CB: AccountRegistrationCallbacks,
     {
         let ua_layer = &self.endpoint[self.ua_layer];
         let mut accounts = ua_layer.accounts.lock();
-        let state = accounts
+        let acc_data = accounts
             .get_mut(account_id)
             .ok_or(RegisterError::InvalidAccountId)?;
 
-        if state.reg_task_cmd_sender.is_some() {
+        if acc_data.reg_task_cmd_sender.is_some() {
             return Err(RegisterError::AlreadyRegistering);
         }
 
-        let (reg_task_cmd_sender, command_recv) = bounded(4);
-        state.reg_task_cmd_sender = Some(reg_task_cmd_sender);
+        let (reg_task_cmd_sender, command_recv) = flume::bounded(4);
+        acc_data.reg_task_cmd_sender = Some(reg_task_cmd_sender);
 
-        let (result_send, result_recv) = bounded(1);
+        let (result_send, result_recv) = flume::bounded(1);
+
         let task = AccountRegistrationTask::create(
             self.endpoint.clone(),
-            state.shared_state.clone(),
+            acc_data.shared.clone(),
+            acc_data.auth.clone(),
             callbacks,
             command_recv,
             result_send,

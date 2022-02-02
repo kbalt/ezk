@@ -11,22 +11,31 @@ async fn main() -> Result<()> {
 
     // Build the user agent
     let user_agent = UserAgent::builder()
-        .with_udp_transport("0.0.0.0:5060")
+        .with_udp_transport("[::1]:5070")
         .await?
         .build()
         .await;
 
     // Build account config and add some credentials
-    let mut config = AccountConfig::new("alice".into(), SipUri::from_str("sip:example.org")?);
+    let mut config = AccountConfig::new("6001".into(), SipUri::from_str("sip:localhost")?);
     config
+        .auth
         .credentials
-        .add_for_realm("example.org", DigestCredentials::new("alice", "password2"));
+        .add_for_realm("asterisk", DigestCredentials::new("6001", "6001"));
 
     // Create account using the config
     let account_id = user_agent.create_account(config);
 
     // Try to register the account at the specified registrar
     user_agent.register(account_id).await?;
+
+    user_agent
+        .make_call(
+            account_id,
+            SipUri::from_str("sip:6001@localhost")?,
+            Default::default(),
+        )
+        .await?;
 
     // Wait for CTRL-C/SIGINT
     tokio::signal::ctrl_c().await?;

@@ -13,7 +13,7 @@
 [docs-badge]: https://img.shields.io/docsrs/ezk-sip-ua/latest
 [docs-url]: https://docs.rs/ezk-sip-ua/latest
 
-Incomplete low level SIP user agent utilities.
+High level SIP User Agent library
 
 - Create/remove bindings via `REGISTER`
 - Create and tear down `INVITE` sessions

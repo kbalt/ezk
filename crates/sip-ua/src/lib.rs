@@ -12,6 +12,7 @@ use std::io;
 use tokio::net::ToSocketAddrs;
 
 pub mod account;
+mod auth;
 mod call;
 pub mod internal;
 mod layer;
@@ -23,8 +24,8 @@ pub struct UserAgent {
 
     runtime: tokio::runtime::Handle,
 
-    _dialog_layer: LayerKey<DialogLayer>,
-    _invite_layer: LayerKey<InviteLayer>,
+    dialog_layer: LayerKey<DialogLayer>,
+    invite_layer: LayerKey<InviteLayer>,
     ua_layer: LayerKey<UserAgentLayer>,
 }
 
@@ -116,8 +117,8 @@ impl UserAgentBuilder {
         UserAgent {
             endpoint,
             runtime: tokio::runtime::Handle::current(),
-            _dialog_layer: self.dialog_layer.unwrap(),
-            _invite_layer: self.invite_layer.unwrap(),
+            dialog_layer: self.dialog_layer.unwrap(),
+            invite_layer: self.invite_layer.unwrap(),
             ua_layer: self.ua_layer.unwrap(),
         }
     }

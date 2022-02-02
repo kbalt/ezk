@@ -11,6 +11,7 @@ use std::fmt;
 pub mod params;
 mod name_addr;
 pub mod sip;
+pub mod tel;
 
 pub use name_addr::NameAddr;
 
