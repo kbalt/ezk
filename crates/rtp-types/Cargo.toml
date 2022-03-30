@@ -1,0 +1,21 @@
+[package]
+name = "ezk-rtp-types"
+version = "0.1.0"
+edition = "2021"
+authors = [
+    "Konstantin Baltruschat <konstantin.baltruschat@gmail.com>",
+]
+description = "RTP Types"
+repository = "https://github.com/kbalt/ezk"
+license = "MIT"
+categories = ["network-programming", "multimedia"]
+keywords = ["rtp", "rtcp"]
+readme = "README.md"
+
+[dependencies]
+bytesstr = "1"
+bytes = "1"
+thiserror = "1"
+byte-slice-cast = "1"
+arrayvec = "0.7.2"
+smallvec = "1.8"

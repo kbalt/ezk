@@ -11,13 +11,13 @@ async fn main() -> Result<()> {
 
     // Build the user agent
     let user_agent = UserAgent::builder()
-        .with_udp_transport("[::1]:5070")
+        .with_udp_transport("172.30.16.1:5070")
         .await?
         .build()
         .await;
 
     // Build account config and add some credentials
-    let mut config = AccountConfig::new("6001".into(), SipUri::from_str("sip:localhost")?);
+    let mut config = AccountConfig::new("6001".into(), SipUri::from_str("sip:172.30.26.151")?);
     config
         .auth
         .credentials
@@ -32,7 +32,7 @@ async fn main() -> Result<()> {
     user_agent
         .make_call(
             account_id,
-            SipUri::from_str("sip:6001@localhost")?,
+            SipUri::from_str("sip:6001@172.30.26.151")?,
             Default::default(),
         )
         .await?;

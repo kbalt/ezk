@@ -501,10 +501,10 @@ impl fmt::Display for Message {
         write!(
             f,
             "\
-v=0\r\n\
-{}\r\n\
-s={}\r\n\
-",
+            v=0\r\n\
+            {}\r\n\
+            s={}\r\n\
+            ",
             self.origin, self.name
         )?;
 
