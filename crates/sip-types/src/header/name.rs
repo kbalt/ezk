@@ -27,31 +27,27 @@ impl Name {
     pub const fn unknown(name: BytesStr) -> Self {
         Self(Repr::Unknown(name))
     }
+
+    pub fn matches(&self, v: &str) -> bool {
+        if self.as_print_str().eq_ignore_ascii_case(v) {
+            return true;
+        }
+
+        self.as_parse_strs()
+            .map(|strs| strs.iter().any(|str| str.eq_ignore_ascii_case(v)))
+            .unwrap_or_default()
+    }
 }
 
 impl PartialEq for Name {
     fn eq(&self, other: &Self) -> bool {
-        let other_print_str = other.as_print_str();
-
-        if self == other_print_str {
+        if self.matches(other.as_print_str()) {
             return true;
         }
 
         other
             .as_parse_strs()
-            .map(|strs| strs.iter().any(|&str| self.eq(str)))
-            .unwrap_or_default()
-    }
-}
-
-impl PartialEq<str> for Name {
-    fn eq(&self, other: &str) -> bool {
-        if self.as_print_str().eq_ignore_ascii_case(other) {
-            return true;
-        }
-
-        self.as_parse_strs()
-            .map(|strs| strs.iter().any(|str| str.eq_ignore_ascii_case(other)))
+            .map(|strs| strs.iter().any(|&str| self.matches(str)))
             .unwrap_or_default()
     }
 }

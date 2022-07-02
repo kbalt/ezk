@@ -38,7 +38,9 @@ impl Via {
         Via {
             transport: transport.into(),
             sent_by: sent_by.into(),
-            params: Params::new().with(Param::value("branch", branch)),
+            params: Params::new()
+                .with(Param::value("branch", branch))
+                .with(Param::name("rport")),
         }
     }
 }
@@ -132,7 +134,7 @@ mod test {
 
         assert_eq!(
             via.default_print_ctx().to_string(),
-            "SIP/2.0/TCP 192.168.123.222:53983;branch=abc123"
+            "SIP/2.0/TCP 192.168.123.222:53983;branch=abc123;rport"
         );
     }
 }

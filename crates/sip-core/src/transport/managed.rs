@@ -16,6 +16,7 @@
 //! Alternatively the transport can also just instantly be destroyed.
 
 use super::{TpHandle, Transport};
+use std::fmt;
 use std::future::Future;
 use std::mem::replace;
 use std::sync::{Arc, Weak};
@@ -32,8 +33,16 @@ pub fn ref_counter() -> (RefOwner, DropNotifier) {
     (RefOwner(Arc::new(tx)), DropNotifier(rx))
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RefOwner(Arc<mpsc::Sender<Never>>);
+
+impl fmt::Debug for RefOwner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("RefOwner")
+            .field(&Arc::strong_count(&self.0))
+            .finish()
+    }
+}
 
 impl RefOwner {
     pub fn downgrade(&self) -> WeakRefOwner {

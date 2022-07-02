@@ -1,7 +1,7 @@
 [package]
 name = "ezk-sip-ua"
 version = "0.1.3"
-edition = "2018"
+edition = "2021"
 authors = ["Konstantin Baltruschat <konstantin.baltruschat@gmail.com>"]
 description = "Low level SIP user agent utilities"
 repository = "https://github.com/kbalt/ezk"

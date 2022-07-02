@@ -36,6 +36,10 @@ impl<S: ParamsSpec> Params<S> {
         }
     }
 
+    fn sort(&mut self) {
+        self.params.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+    }
+
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.params.is_empty()
@@ -44,28 +48,14 @@ impl<S: ParamsSpec> Params<S> {
     #[inline]
     pub fn with(mut self, param: Param) -> Self {
         self.push(param);
+        self.sort();
         self
     }
 
     #[inline]
     pub fn push(&mut self, param: Param) {
         self.params.push(param);
-    }
-
-    #[inline]
-    pub fn get<N>(&self, name: N) -> Option<&Param>
-    where
-        N: AsRef<str>,
-    {
-        self.params.iter().find(|p| p.name == name.as_ref())
-    }
-
-    #[inline]
-    pub fn get_mut<N>(&mut self, name: N) -> Option<&mut Param>
-    where
-        N: AsRef<str>,
-    {
-        self.params.iter_mut().find(|p| p.name == name.as_ref())
+        self.sort();
     }
 
     #[inline]
@@ -73,7 +63,43 @@ impl<S: ParamsSpec> Params<S> {
     where
         N: AsRef<str>,
     {
-        self.get(name.as_ref()).and_then(|p| p.value.as_ref())
+        self.params
+            .iter()
+            .find(|p| p.name == name.as_ref())
+            .and_then(|p| p.value.as_ref())
+    }
+
+    #[inline]
+    pub fn get<N>(&self, name: N) -> Option<&Option<BytesStr>>
+    where
+        N: AsRef<str>,
+    {
+        self.params
+            .iter()
+            .find(|p| p.name == name.as_ref())
+            .map(|p| &p.value)
+    }
+
+    #[inline]
+    pub fn get_mut<N>(&mut self, name: N) -> Option<&mut Option<BytesStr>>
+    where
+        N: AsRef<str>,
+    {
+        self.params
+            .iter_mut()
+            .find(|p| p.name == name.as_ref())
+            .map(|p| &mut p.value)
+    }
+
+    #[inline]
+    pub fn get_val_mut<N>(&mut self, name: N) -> Option<&mut BytesStr>
+    where
+        N: AsRef<str>,
+    {
+        self.params
+            .iter_mut()
+            .find(|p| p.name == name.as_ref())
+            .and_then(|p| p.value.as_mut())
     }
 
     #[inline]
@@ -92,10 +118,11 @@ impl<S: ParamsSpec> Params<S> {
         N: Into<BytesStr> + AsRef<str>,
         V: Into<BytesStr>,
     {
-        if let Some(param) = self.get_mut(name.as_ref()) {
+        if let Some(param) = self.params.iter_mut().find(|p| p.name == name.as_ref()) {
             param.value = Some(value.into());
         } else {
             self.push(Param::value(name, value));
+            self.sort();
         }
     }
 
@@ -372,7 +399,7 @@ mod test {
             .with(Param::name("some_single_key"))
             .with(Param::value("some_key", "with_value"));
 
-        assert_eq!(params.to_string(), ";some_single_key;some_key=with_value");
+        assert_eq!(params.to_string(), ";some_key=with_value;some_single_key");
     }
 
     #[test]
@@ -421,6 +448,6 @@ mod test {
             .with(Param::name("some_single_key"))
             .with(Param::value("some_key", "with_value"));
 
-        assert_eq!(params.to_string(), "?some_single_key&some_key=with_value");
+        assert_eq!(params.to_string(), "?some_key=with_value&some_single_key");
     }
 }

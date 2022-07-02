@@ -153,8 +153,8 @@ async fn handle_msg(
                 body,
             ));
         }
-        Err(_e) => {
-            // ignore for now
+        Err(e) => {
+            log::error!("udp transport failed to parse: {e}");
         }
     };
 

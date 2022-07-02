@@ -413,7 +413,7 @@ where
                     },
                 );
 
-                self.auth.query_credentials_if_possible(result).await?;
+                self.auth.try_query_credentials(result).await?;
 
                 match replace(&mut self.task_state, RegistrationTaskState::Waiting) {
                     RegistrationTaskState::ReBindWithNewIdNeeded { new_id }

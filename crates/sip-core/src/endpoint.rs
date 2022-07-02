@@ -339,7 +339,6 @@ impl Endpoint {
         tokio::spawn(self.clone().do_receive(message));
     }
 
-    #[tracing::instrument(level = "debug", skip(self, message), fields(%message))]
     async fn do_receive(self, message: ReceivedMessage) {
         log::trace!(
             "Received message from {}: \n{:?}",
@@ -487,8 +486,8 @@ fn add_received_rport(via: &mut Via, source: SocketAddr) {
         via.params.push_or_edit("received", source.ip().to_string());
     }
 
-    if let Some(rport) = via.params.get_mut("rport") {
-        rport.value = Some(source.port().to_string().into());
+    if let Some(value) = via.params.get_mut("rport") {
+        *value = Some(source.port().to_string().into());
     }
 }
 

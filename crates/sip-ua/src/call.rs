@@ -161,7 +161,7 @@ where
                             },
                         );
 
-                        if let Err(e) = self.auth.query_credentials_if_possible(result).await {
+                        if let Err(e) = self.auth.try_query_credentials(result).await {
                             result_send
                                 .try_send(Err(MakeCallError::Auth(e)))
                                 .expect("dropped result_recv");

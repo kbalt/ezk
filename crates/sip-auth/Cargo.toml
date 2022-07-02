@@ -1,7 +1,7 @@
 [package]
 name = "ezk-sip-auth"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
 authors = [
     "Konstantin Baltruschat <konstantin.baltruschat@gmail.com>",
     "Mervs <marvinankert@gmail.com>",

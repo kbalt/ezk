@@ -1,7 +1,7 @@
 [package]
 name = "ezk-stun-types"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
 authors = ["Konstantin Baltruschat <konstantin.baltruschat@gmail.com>"]
 description = "STUN/TURN message types"
 repository = "https://github.com/kbalt/ezk"

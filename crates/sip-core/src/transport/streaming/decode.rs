@@ -3,7 +3,7 @@ use bytes::{Bytes, BytesMut};
 use internal::Finish;
 use sip_types::msg::{Line, MessageLine, PullParser};
 use sip_types::parse::{ParseCtx, Parser};
-use sip_types::Headers;
+use sip_types::{Headers, Name};
 use std::io;
 use std::mem::replace;
 use std::str::{from_utf8, Utf8Error};
@@ -77,8 +77,10 @@ impl Decoder for StreamingDecoder {
                 // so the complete message size can be calculated
                 let mut split = line.splitn(2, |&c| c == b':');
 
-                if let Some(name) = split.next() {
-                    if name.eq_ignore_ascii_case(b"content-length") || name.starts_with(b"l") {
+                if let Some(name) = split.next().and_then(|name| from_utf8(name).ok()) {
+                    let name = name.trim_end();
+
+                    if Name::CONTENT_LENGTH.matches(name) {
                         let value = split.next().ok_or(Error::Malformed)?;
                         let value = from_utf8(value)?;
 

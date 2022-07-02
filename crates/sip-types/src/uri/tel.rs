@@ -5,14 +5,12 @@ use internal::IResult;
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_while1};
 use nom::character::complete::char;
-use nom::combinator::{map, map_res};
+use nom::combinator::map;
 use nom::sequence::{preceded, tuple};
 use percent_encoding::AsciiSet;
 use std::fmt;
 
-#[derive(Debug, thiserror::Error)]
-pub enum TelUriParseError {}
-
+// TODO: this is clearly incomplete
 #[derive(Clone)]
 
 pub struct TelUri {
@@ -24,7 +22,7 @@ pub struct TelUri {
 impl TelUri {
     pub fn parse(ctx: ParseCtx<'_>) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
         move |i| {
-            map_res(
+            map(
                 preceded(
                     tag("tel:"),
                     tuple((
@@ -35,12 +33,12 @@ impl TelUri {
                         Params::parse(ctx),
                     )),
                 ),
-                |((is_global, number), params)| -> Result<Self, TelUriParseError> {
-                    Ok(Self {
+                |((is_global, number), params)| -> Self {
+                    Self {
                         number: BytesStr::from_parse(ctx.src, number),
                         is_global,
                         params,
-                    })
+                    }
                 },
             )(i)
         }

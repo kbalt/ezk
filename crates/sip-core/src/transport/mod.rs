@@ -91,8 +91,8 @@ pub trait Transport: Debug + Display + Send + Sync + 'static {
 
 /// Wrapper over implementations of [`Transport`].
 ///
-/// Provides reference counting of connection based
-///
+/// Provides reference counting for connections based transports
+/// that must be torn down after idling some time.  
 #[derive(Debug, Clone)]
 pub struct TpHandle {
     _ref_guard: Option<RefOwner>,

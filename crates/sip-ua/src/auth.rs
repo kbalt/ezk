@@ -42,14 +42,14 @@ impl From<AuthenticationConfig> for SharedAuthentication {
 
 impl SharedAuthentication {
     // TODO: function name
-    pub(crate) async fn query_credentials_if_possible(
+    pub(crate) async fn try_query_credentials(
         &self,
         result: Result<(), sip_auth::Error>,
     ) -> Result<(), sip_auth::Error> {
         match result {
             Ok(()) => Ok(()),
             Err(sip_auth::Error::FailedToAuthenticate(realms)) => {
-                let callbacks = self.callbacks.lock().await;
+                let mut callbacks = self.callbacks.lock().await;
 
                 for realm in &realms {
                     if let Some(credentials) = callbacks.query_credentials(realm).await {
@@ -76,15 +76,15 @@ pub trait CredentialCallbacks: Send + Sync + 'static {
     ///
     /// Should avoid returning the same values for a realm as that will only result in this function being called again.
     /// Use the [`CredentialStore`] in the [`AuthenticationConfig`] instead, to store/prepare credentials.
-    async fn query_credentials(&self, _realm: &str) -> Option<DigestCredentials> {
+    async fn query_credentials(&mut self, _realm: &str) -> Option<DigestCredentials> {
         None
     }
 }
 
+impl CredentialCallbacks for () {}
+
 impl Default for Box<dyn CredentialCallbacks> {
     fn default() -> Self {
-        struct DefaultCredentialCallbacks;
-        impl CredentialCallbacks for DefaultCredentialCallbacks {}
-        Box::new(DefaultCredentialCallbacks)
+        Box::new(())
     }
 }
