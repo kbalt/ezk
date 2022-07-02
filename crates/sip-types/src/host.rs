@@ -241,6 +241,7 @@ mod test {
         expect_ip4("1.100.1.100");
         expect_hostname("123.123.123.321");
         expect_hostname("123456");
+        expect_hostname("123456.");
         expect_hostname("example.org");
         expect_hostname("example.org.");
         expect_hostname("very.long.hostname.example.org.");
@@ -250,7 +251,6 @@ mod test {
         expect_ip6("[::]");
         expect_ip6("[::1]");
         expect_ip6("[2001:db8::1:2]");
-        expect_ip6("[2001:db8::1:2:3306]");
         expect_ip6("[0001:0002:0003:0004:0005:0006:0007:0008]");
         expect_ip6("[001:2:3:4:5:6:7:8]");
         expect_ip6("[2001:db8::1:2]");

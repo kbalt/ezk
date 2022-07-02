@@ -265,7 +265,7 @@ pub struct PullParser<'i> {
 }
 
 /// semi-error type that just signals that the input is incomplete
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Incomplete(());
 
 impl<'i> PullParser<'i> {

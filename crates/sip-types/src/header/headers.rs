@@ -157,7 +157,7 @@ impl Headers {
     /// Returns a parsed header `H` and removes it from the map.
     #[inline]
     pub fn take_named<H: ConstNamed + DecodeValues>(&mut self) -> Option<H> {
-        self.try_take_named().map(Result::ok).flatten()
+        self.try_take_named().and_then(Result::ok)
     }
 
     /// Returns a parsed header `H` and removes it from the map.
@@ -201,7 +201,7 @@ impl Headers {
     /// Returns a parsed header `H` and removes it from the map.
     #[inline]
     pub fn take<H: DecodeValues>(&mut self, name: Name) -> Option<H> {
-        self.try_take(name).map(Result::ok).flatten()
+        self.try_take(name).and_then(Result::ok)
     }
 
     /// Returns a parsed header `H` and removes it from the map.
@@ -368,7 +368,7 @@ struct Entry {
     values: OneOrMore,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum OneOrMore {
     One(BytesStr),
     More(Vec<BytesStr>),

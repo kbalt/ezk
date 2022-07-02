@@ -14,7 +14,7 @@ use std::num::ParseIntError;
 use std::str::FromStr;
 
 /// `CSeq` header
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CSeq {
     pub cseq: u32,
     pub method: Method,

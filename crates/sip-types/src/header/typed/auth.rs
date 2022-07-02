@@ -14,14 +14,15 @@ use nom::sequence::{preceded, tuple};
 use nom::Finish;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use std::borrow::Cow;
-use std::fmt::{self, Display, Write};
+use std::fmt;
+use std::fmt::{Display, Write};
 
 // TODO: auth info header (https://datatracker.ietf.org/doc/html/rfc2617#section-3.2.3)
 
 /// Param contained inside [Auth].
 ///
 /// Has some special printing rules. Might not be hardcoded in the future.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthParam {
     pub name: BytesStr,
     pub value: BytesStr,
@@ -245,7 +246,7 @@ impl Print for AuthResponse {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Username {
     Username(BytesStr),
     UsernameNonASCII(BytesStr),
@@ -428,14 +429,14 @@ impl Print for DigestResponse {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QopResponse {
     pub qop: QopOption,
     pub cnonce: BytesStr,
     pub nc: u32,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QopOption {
     Auth,
     AuthInt,
@@ -462,7 +463,7 @@ impl Display for QopOption {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Algorithm {
     MD5,
     MD5Sess,

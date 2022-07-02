@@ -14,10 +14,18 @@ use std::marker::PhantomData;
 use std::str::Utf8Error;
 
 /// A list of parameters
-#[derive(Clone)]
 pub struct Params<S> {
     params: Vec<Param>,
     marker: PhantomData<S>,
+}
+
+impl<S> Clone for Params<S> {
+    fn clone(&self) -> Self {
+        Self {
+            params: self.params.clone(),
+            marker: self.marker,
+        }
+    }
 }
 
 impl<S: ParamsSpec> Params<S> {
@@ -188,7 +196,7 @@ impl<S> Default for Params<S> {
 }
 
 /// Specification how the parameter in params are to be parsed / printed
-pub trait ParamsSpec: std::fmt::Debug {
+pub trait ParamsSpec {
     const FIRST_DELIMITER: &'static str;
     const DELIMITER: &'static str;
     const CHAR_SPEC: fn(char) -> bool;
@@ -196,7 +204,6 @@ pub trait ParamsSpec: std::fmt::Debug {
 }
 
 /// Header Param Specification in uris (?SomeHeader=SomeValue&SomeOtherHeader=SomeOtherValue)
-#[derive(Debug, Clone, PartialEq)]
 pub enum HPS {}
 
 fn header_char(c: char) -> bool {
@@ -213,7 +220,6 @@ impl ParamsSpec for HPS {
 }
 
 /// Common Param Specification for URIs (;some=value;other=value)
-#[derive(Debug, Clone, PartialEq)]
 pub enum CPS {}
 
 fn param_char(c: char) -> bool {
@@ -230,7 +236,7 @@ impl ParamsSpec for CPS {
 }
 
 /// Represents a Parameter `name[=(value|"value")]`
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Param {
     pub name: BytesStr,
     pub value: Option<BytesStr>,
@@ -314,7 +320,7 @@ macro_rules! impl_with_params {
         where
             N: Into<bytesstr::BytesStr> + AsRef<str>,
         {
-            self.$field.push(crate::uri::params::Param::name(name));
+            self.$field.push($crate::uri::params::Param::name(name));
             self
         }
 

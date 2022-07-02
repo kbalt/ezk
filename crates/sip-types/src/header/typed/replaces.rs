@@ -14,7 +14,7 @@ use nom::combinator::map_res;
 use nom::Finish;
 use std::fmt;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Replaces {
     pub call_id: BytesStr,
     pub from_tag: BytesStr,

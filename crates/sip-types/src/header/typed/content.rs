@@ -14,7 +14,7 @@ from_str_header! {
 }
 
 /// `Content-Type` header
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentType(pub BytesStr);
 
 impl ConstNamed for ContentType {

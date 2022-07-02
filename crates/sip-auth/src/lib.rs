@@ -59,7 +59,7 @@ where
     /// Returns the default credentials when no credentials where set for the
     /// requested `realm`
     pub fn get_for_realm(&self, realm: &str) -> Option<&C> {
-        self.map.get(realm).or_else(|| self.default.as_ref())
+        self.map.get(realm).or(self.default.as_ref())
     }
 
     /// Remove credentials for the specified `realm`

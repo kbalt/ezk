@@ -40,7 +40,7 @@ impl fmt::Display for MediaType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransportProtocol {
     Unspecified,
 

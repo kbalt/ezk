@@ -16,13 +16,13 @@ use std::fmt;
 use std::str::{FromStr, Utf8Error};
 use thiserror::Error;
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct UserPw {
     pub user: BytesStr,
     pub password: BytesStr,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum UserPart {
     Empty,
     User(BytesStr),
