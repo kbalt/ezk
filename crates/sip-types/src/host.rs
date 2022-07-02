@@ -7,15 +7,15 @@ use crate::print::{Print, PrintCtx, UriContext};
 use bytesstr::BytesStr;
 use internal::IResult;
 use nom::branch::alt;
-use nom::bytes::complete::{is_not, tag, take_while};
-use nom::combinator::{map_res, opt};
+use nom::bytes::complete::{tag, take_while, take_while1};
+use nom::character::complete::{char, u8};
+use nom::combinator::{map, map_res, opt, recognize, verify};
+use nom::multi::many0;
 use nom::sequence::{delimited, preceded, tuple};
 use nom::AsChar;
 use std::fmt;
 use std::hash::Hash;
-use std::net::{
-    AddrParseError, IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6,
-};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::num::ParseIntError;
 
 /// Either IP address or FQDN
@@ -30,23 +30,45 @@ impl Host {
     pub fn parse(ctx: ParseCtx<'_>) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
         move |i| {
             alt((
-                map_res(
-                    delimited(tag("["), is_not("]"), tag("]")),
-                    |ip: &str| -> Result<Host, AddrParseError> { Ok(Host::IP6(ip.parse()?)) },
-                ),
-                map_res(
-                    take_while(probe_host),
-                    |host: &str| -> Result<Host, AddrParseError> {
-                        if host.chars().any(|c| !(c.is_numeric() || c == '.')) {
-                            Ok(Host::Name(BytesStr::from_parse(ctx.src, host)))
-                        } else {
-                            Ok(Host::IP4(host.parse()?))
-                        }
-                    },
-                ),
+                map_res(ip6_reference, |ip6| ip6.parse().map(Self::IP6)),
+                map_res(ip4_address, |ip4| ip4.parse().map(Self::IP4)),
+                map(hostname, |hostname| {
+                    Self::Name(BytesStr::from_parse(ctx.src, hostname))
+                }),
             ))(i)
         }
     }
+}
+
+/// IPv4addresses =  1*3DIGIT "." 1*3DIGIT "." 1*3DIGIT "." 1*3DIGIT
+fn ip4_address(i: &str) -> IResult<&str, &str> {
+    recognize(tuple((u8, char('.'), u8, char('.'), u8, char('.'), u8)))(i)
+}
+
+/// IPv6reference  =  "[" IPv6address "]"
+fn ip6_reference(i: &str) -> IResult<&str, &str> {
+    delimited(char('['), ip6_address, char(']'))(i)
+}
+
+fn ip6_address(i: &str) -> IResult<&str, &str> {
+    take_while1(|c: char| c.is_hex_digit() || matches!(c, ':' | '.'))(i)
+}
+
+/// Pretty relaxed hostname parsing.
+/// SIP ABNF is too strict for modern definitions of allowed DNS names.
+fn hostname(i: &str) -> IResult<&str, &str> {
+    recognize(tuple((
+        label,
+        many0(tuple((char('.'), label))),
+        opt(char('.')),
+    )))(i)
+}
+
+fn label(i: &str) -> IResult<&str, &str> {
+    verify(
+        take_while1(|c: char| c.is_alphanum() || c == '-'),
+        |label: &str| !(label.starts_with('-') || label.ends_with('-')),
+    )(i)
 }
 
 impl From<IpAddr> for Host {
@@ -78,10 +100,6 @@ impl fmt::Display for Host {
             Host::Name(name) => f.write_str(name),
         }
     }
-}
-
-pub(crate) fn probe_host(c: char) -> bool {
-    lookup_table!(c => alpha; num; '_', '-', '.')
 }
 
 // ==== HOST PORT ====
@@ -176,45 +194,65 @@ impl Print for HostPort {
 mod test {
     use super::*;
 
-    #[test]
-    fn host_ip4() {
-        let input = BytesStr::from_static("192.168.123.222");
+    #[track_caller]
+    fn parse(i: &'static str) -> HostPort {
+        let input = BytesStr::from_static(i);
 
-        let (rem, host) = Host::parse(ParseCtx::default(&input))(&input).unwrap();
+        let (rem, out) = HostPort::parse(ParseCtx::default(&input))(&input).unwrap();
 
-        assert!(rem.is_empty());
+        assert_eq!(
+            rem, "",
+            "expected rem to be empty\ninput={input:?}\noutput={out:?}"
+        );
 
-        match host {
-            Host::IP4(ip) => assert_eq!(ip, Ipv4Addr::new(192, 168, 123, 222)),
-            other => panic!("{:?}", other),
-        }
+        out
+    }
+
+    #[track_caller]
+    fn expect_hostname(i: &'static str) {
+        let got = parse(i);
+        assert_eq!(got, HostPort::host_name(i));
+    }
+
+    #[track_caller]
+    fn expect_ip4(i: &'static str) {
+        let expected = HostPort {
+            host: Host::IP4(i.parse().unwrap()),
+            port: None,
+        };
+        let got = parse(i);
+        assert_eq!(got, expected);
+    }
+
+    #[track_caller]
+    fn expect_ip6(i: &'static str) {
+        let expected = HostPort {
+            host: Host::IP6(i[1..i.len() - 1].parse().unwrap()),
+            port: None,
+        };
+        let got = parse(i);
+        assert_eq!(got, expected);
     }
 
     #[test]
-    fn host_ip6() {
-        let input = BytesStr::from_static("[::1]");
-
-        let (rem, host) = Host::parse(ParseCtx::default(&input))(&input).unwrap();
-
-        assert!(rem.is_empty());
-
-        match host {
-            Host::IP6(ip) => assert_eq!(ip, Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)),
-            other => panic!("{:?}", other),
-        }
-    }
-
-    #[test]
-    fn host_name() {
-        let input = BytesStr::from_static("example.com");
-
-        let (rem, host) = Host::parse(ParseCtx::default(&input))(&input).unwrap();
-
-        assert!(rem.is_empty());
-
-        match host {
-            Host::Name(name) => assert_eq!(name, "example.com"),
-            other => panic!("{:?}", other),
-        }
+    fn host() {
+        expect_ip4("123.123.123.123");
+        expect_ip4("1.1.1.1");
+        expect_ip4("1.100.1.100");
+        expect_hostname("123.123.123.321");
+        expect_hostname("123456");
+        expect_hostname("example.org");
+        expect_hostname("example.org.");
+        expect_hostname("very.long.hostname.example.org.");
+        expect_ip6("[0:1:2:3:4:5:6:7]");
+        expect_ip6("[0::7]");
+        expect_ip6("[::7]");
+        expect_ip6("[::]");
+        expect_ip6("[::1]");
+        expect_ip6("[2001:db8::1:2]");
+        expect_ip6("[2001:db8::1:2:3306]");
+        expect_ip6("[0001:0002:0003:0004:0005:0006:0007:0008]");
+        expect_ip6("[001:2:3:4:5:6:7:8]");
+        expect_ip6("[2001:db8::1:2]");
     }
 }
