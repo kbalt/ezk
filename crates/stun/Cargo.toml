@@ -15,7 +15,7 @@ stun-types = { path = "../stun-types", package = "ezk-stun-types", version = "0.
 
 tokio = { version = "1", features = ["time", "sync"] }
 bytes = "1"
-hmac = "0.11"
-parking_lot = "0.11"
+hmac = "0.12"
+parking_lot = "0.12"
 async-trait = "0.1"
 thiserror = "1"

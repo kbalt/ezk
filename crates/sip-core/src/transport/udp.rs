@@ -111,7 +111,7 @@ async fn receive_task(
     loop {
         let result = inner.socket.recv_from(&mut buffer).await;
 
-        if let Err(e) = handle_msg(&endpoint, &*inner, &handle, result, &buffer).await {
+        if let Err(e) = handle_msg(&endpoint, &inner, &handle, result, &buffer).await {
             log::error!("UDP recv error {:?}", e);
         }
     }

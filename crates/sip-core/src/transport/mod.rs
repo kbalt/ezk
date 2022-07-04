@@ -425,29 +425,6 @@ impl Transports {
         Err(last_err.into())
     }
 
-    /// Try to claim a transport with that key from the endpoint.
-    /// Sometimes a transport might still be in use from a previous transaction,
-    /// this will wait until the transport is released again.
-    #[tracing::instrument(skip(self))]
-    pub async fn claim(&self, key: &TpKey) -> Option<TpHandle> {
-        match key.direction {
-            Direction::None => {
-                let transport = self
-                    .unmanaged
-                    .iter()
-                    .find(|t| t.name() == key.name && t.bound() == key.bound)?;
-
-                log::trace!("claimed transport {}", transport);
-
-                Some(transport.clone())
-            }
-            Direction::Incoming(_) | Direction::Outgoing(_) => {
-                let mut transports = self.transports.lock();
-                transports.get_mut(key)?.try_get()
-            }
-        }
-    }
-
     /// Adds the given connected transport and return a strong tp-handle and notifier
     pub fn add_managed_used<T>(&self, transport: T) -> (TpHandle, DropNotifier)
     where

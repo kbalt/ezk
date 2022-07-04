@@ -36,7 +36,7 @@ fn hash_sha256(i: &[u8]) -> String {
 }
 
 fn hash_sha512_trunc256(i: &[u8]) -> String {
-    let mut hasher = sha2::Sha512Trunc256::new();
+    let mut hasher = sha2::Sha512_256::new();
     hasher.update(i);
     format!("{:x}", hasher.finalize())
 }
@@ -197,7 +197,7 @@ impl DigestAuthenticator {
         is_session: bool,
         hash: HashFn,
     ) -> Result<DigestResponse, Error> {
-        let cnonce = BytesStr::from(uuid::Uuid::new_v4().to_simple().to_string());
+        let cnonce = BytesStr::from(uuid::Uuid::new_v4().simple().to_string());
 
         let mut ha1 = hash(
             format!(

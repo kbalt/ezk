@@ -2,9 +2,9 @@ use super::Attribute;
 use crate::builder::MessageBuilder;
 use crate::parse::{ParsedAttr, ParsedMessage};
 use crate::Error;
-use hmac::digest::generic_array::ArrayLength;
-use hmac::digest::{BlockInput, Digest, FixedOutput, Reset, Update};
-use hmac::{Hmac, Mac, NewMac};
+use hmac::digest::core_api::BlockSizeUser;
+use hmac::digest::{Digest, Update};
+use hmac::{Mac, SimpleHmac};
 use sha1::Sha1;
 use sha2::Sha256;
 use std::borrow::Cow;
@@ -51,8 +51,8 @@ impl<'k> Attribute<'_> for MessageIntegrity<'k> {
         msg: &mut ParsedMessage,
         attr: ParsedAttr,
     ) -> Result<Self, Error> {
-        let hmac: Hmac<Sha1> =
-            Hmac::new_from_slice(&ctx.0).map_err(|_| Error::InvalidData("invalid key length"))?;
+        let hmac: SimpleHmac<Sha1> = SimpleHmac::new_from_slice(&ctx.0)
+            .map_err(|_| Error::InvalidData("invalid key length"))?;
 
         message_integrity_decode(hmac, msg, attr)?;
 
@@ -60,8 +60,8 @@ impl<'k> Attribute<'_> for MessageIntegrity<'k> {
     }
 
     fn encode(&self, ctx: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
-        let hmac: Hmac<Sha1> =
-            Hmac::new_from_slice(&ctx.0).map_err(|_| Error::InvalidData("invalid key length"))?;
+        let hmac: SimpleHmac<Sha1> = SimpleHmac::new_from_slice(&ctx.0)
+            .map_err(|_| Error::InvalidData("invalid key length"))?;
 
         message_integrity_encode(hmac, builder);
 
@@ -86,8 +86,8 @@ impl<'k> Attribute<'_> for MessageIntegritySha256<'k> {
         msg: &mut ParsedMessage,
         attr: ParsedAttr,
     ) -> Result<Self, Error> {
-        let hmac: Hmac<Sha256> =
-            Hmac::new_from_slice(&ctx.0).map_err(|_| Error::InvalidData("invalid key length"))?;
+        let hmac: SimpleHmac<Sha256> = SimpleHmac::new_from_slice(&ctx.0)
+            .map_err(|_| Error::InvalidData("invalid key length"))?;
 
         message_integrity_decode(hmac, msg, attr)?;
 
@@ -95,8 +95,8 @@ impl<'k> Attribute<'_> for MessageIntegritySha256<'k> {
     }
 
     fn encode(&self, ctx: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
-        let hmac: Hmac<Sha256> =
-            Hmac::new_from_slice(&ctx.0).map_err(|_| Error::InvalidData("invalid key length"))?;
+        let hmac: SimpleHmac<Sha256> = SimpleHmac::new_from_slice(&ctx.0)
+            .map_err(|_| Error::InvalidData("invalid key length"))?;
 
         message_integrity_encode(hmac, builder);
 
@@ -109,19 +109,18 @@ impl<'k> Attribute<'_> for MessageIntegritySha256<'k> {
 }
 
 fn message_integrity_decode<D>(
-    mut hmac: Hmac<D>,
+    mut hmac: SimpleHmac<D>,
     msg: &mut ParsedMessage,
     attr: ParsedAttr,
 ) -> Result<(), Error>
 where
-    D: Update + BlockInput + FixedOutput + Reset + Default + Clone,
-    D::BlockSize: ArrayLength<u8>,
+    D: Digest + BlockSizeUser,
 {
     msg.with_msg_len(u16::try_from(attr.padding_end - 20)?, |msg| {
         let value = attr.get_value(msg.buffer());
         let message = &msg.buffer()[..attr.begin - 4];
 
-        hmac.update(message);
+        Update::update(&mut hmac, message);
 
         let result = hmac.finalize().into_bytes();
 
@@ -133,15 +132,14 @@ where
     })
 }
 
-fn message_integrity_encode<D>(mut hmac: Hmac<D>, builder: &mut MessageBuilder)
+fn message_integrity_encode<D>(mut hmac: SimpleHmac<D>, builder: &mut MessageBuilder)
 where
-    D: Update + BlockInput + FixedOutput + Reset + Default + Clone,
-    D::BlockSize: ArrayLength<u8>,
+    D: Digest + BlockSizeUser,
 {
     let data = builder.buffer();
     let data = &data[..data.len() - 4];
 
-    hmac.update(data);
+    Update::update(&mut hmac, data);
 
     let raw = hmac.finalize().into_bytes();
 
