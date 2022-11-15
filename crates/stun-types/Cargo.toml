@@ -1,6 +1,6 @@
 [package]
 name = "ezk-stun-types"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2018"
 authors = ["Konstantin Baltruschat <konstantin.baltruschat@gmail.com>"]
 description = "STUN/TURN message types"
@@ -14,7 +14,7 @@ readme = "README.md"
 [dependencies]
 byteorder = "1.4"
 rand = "0.8"
-bitfield = "0.13"
+bitfield = "0.14"
 bytes = "1"
 hmac = "0.12"
 sha-1 = "0.10"
