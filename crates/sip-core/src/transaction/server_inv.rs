@@ -63,6 +63,11 @@ impl ServerInvTsx {
     pub async fn respond_success(self, mut response: OutgoingResponse) -> Result<Accepted> {
         assert_eq!(response.msg.line.code.kind(), CodeKind::Success);
 
+        // Responding with a success message!
+        // Add filter to reject any ACK messages as some implementations seem to re-use the transaction-id for the ACK
+        // sent by the UAC.
+        self.registration.add_filter(|tsx_msg| !matches!(&tsx_msg.line, MessageLine::Request(line) if line.method == Method::ACK));
+
         self.registration
             .endpoint
             .send_outgoing_response(&mut response)

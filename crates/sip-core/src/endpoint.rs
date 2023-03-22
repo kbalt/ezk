@@ -340,7 +340,7 @@ impl Endpoint {
     }
 
     #[tracing::instrument(level = "debug", skip(self, message), fields(%message))]
-    async fn do_receive(self, message: ReceivedMessage) {
+    async fn do_receive(self, mut message: ReceivedMessage) {
         log::trace!(
             "Received message from {}: \n{:?}",
             message.tp_info.source,
@@ -367,66 +367,76 @@ impl Endpoint {
             }
         };
 
-        match self.transactions().get_tsx_handler(&tsx_key) {
-            Some(handler) => {
-                let tsx_message = TsxMessage {
-                    tp_info: message.tp_info,
-                    line: message.line,
-                    base_headers,
-                    headers: message.headers,
-                    body: message.body,
+        // Try to find a transaction that might be able to handle the message
+        if let Some(handler) = self.transactions().get_handler(&tsx_key) {
+            let tsx_message = TsxMessage {
+                tp_info: message.tp_info,
+                line: message.line,
+                base_headers,
+                headers: message.headers,
+                body: message.body,
+            };
+
+            log::debug!("delegating message to transaction {}", tsx_key);
+
+            if let Some(rejected_tsx_message) = handler(tsx_message) {
+                log::trace!("transaction {} rejected message", tsx_key);
+
+                // TsxMessage was rejected, restore previous state
+                base_headers = rejected_tsx_message.base_headers;
+                message = ReceivedMessage {
+                    tp_info: rejected_tsx_message.tp_info,
+                    line: rejected_tsx_message.line,
+                    headers: rejected_tsx_message.headers,
+                    body: rejected_tsx_message.body,
                 };
-
-                log::debug!("delegating message to transaction {}", tsx_key);
-
-                if handler.send(tsx_message).is_err() {
-                    log::error!("transaction vanished without unregistering");
-
-                    self.transactions().remove_transaction(&tsx_key);
-                }
+            } else {
+                // Handled
+                return;
             }
-            None => {
-                let line = match message.line {
-                    MessageLine::Request(line) => line,
-                    _ => {
-                        log::warn!("the received message is an orphaned response");
-                        return;
-                    }
-                };
+        }
 
-                let incoming = IncomingRequest {
-                    tp_info: message.tp_info,
-                    line,
-                    base_headers,
-                    headers: message.headers,
-                    body: message.body,
-                    tsx_key,
-                };
+        // No transaction found - handle it as a new incoming request
 
-                let mut request = Some(incoming);
-
-                for layer in self.inner.layer.iter() {
-                    let span = tracing::info_span!("receive", layer = %layer.name());
-
-                    layer
-                        .receive(&self, MayTake::new(&mut request))
-                        .instrument(span)
-                        .await;
-
-                    if request.is_none() {
-                        return;
-                    }
-                }
-
-                log::debug!("No layer handled the request");
-
-                // Safe unwrap. Loop checks every iteration if request is none
-                let request = request.unwrap();
-
-                if let Err(e) = self.handle_unwanted_request(request).await {
-                    log::error!("Failed to respond to unhandled incoming request, {:?}", e);
-                }
+        let line = match message.line {
+            MessageLine::Request(line) => line,
+            _ => {
+                log::warn!("the received message is an orphaned response");
+                return;
             }
+        };
+
+        let incoming = IncomingRequest {
+            tp_info: message.tp_info,
+            line,
+            base_headers,
+            headers: message.headers,
+            body: message.body,
+            tsx_key,
+        };
+
+        let mut request = Some(incoming);
+
+        for layer in self.inner.layer.iter() {
+            let span = tracing::info_span!("receive", layer = %layer.name());
+
+            layer
+                .receive(&self, MayTake::new(&mut request))
+                .instrument(span)
+                .await;
+
+            if request.is_none() {
+                return;
+            }
+        }
+
+        log::debug!("No layer handled the request");
+
+        // Safe unwrap. Loop checks every iteration if request is none
+        let request = request.unwrap();
+
+        if let Err(e) = self.handle_unwanted_request(request).await {
+            log::error!("Failed to respond to unhandled incoming request, {:?}", e);
         }
     }
 

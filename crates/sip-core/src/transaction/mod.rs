@@ -2,12 +2,11 @@ use crate::transport::MessageTpInfo;
 use crate::BaseHeaders;
 use bytes::Bytes;
 use bytesstr::BytesStr;
-use parking_lot::RwLock;
+use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
 use registration::TsxRegistration;
 use sip_types::msg::{MessageLine, StatusLine};
 use sip_types::Headers;
 use std::collections::HashMap;
-use tokio::sync::mpsc::UnboundedSender;
 
 mod client;
 mod client_inv;
@@ -32,18 +31,24 @@ pub use key::TsxKey;
 pub use server::ServerTsx;
 pub use server_inv::{Accepted, ServerInvTsx};
 
+pub(crate) type TsxHandler = Box<dyn Fn(TsxMessage) -> Option<TsxMessage> + Send + Sync>;
+
 #[derive(Default)]
 pub(crate) struct Transactions {
-    map: RwLock<HashMap<TsxKey, UnboundedSender<TsxMessage>>>,
+    map: RwLock<HashMap<TsxKey, TsxHandler>>,
 }
 
 impl Transactions {
-    pub fn get_tsx_handler(&self, key: &TsxKey) -> Option<UnboundedSender<TsxMessage>> {
-        self.map.read().get(key).cloned()
+    pub fn get_handler<'a: 'k, 'k>(
+        &'a self,
+        tsx_key: &TsxKey,
+    ) -> Option<MappedRwLockReadGuard<'a, TsxHandler>> {
+        let map = self.map.read();
+        RwLockReadGuard::try_map(map, |map| map.get(tsx_key)).ok()
     }
 
-    pub fn register_transaction(&self, key: TsxKey, sender: UnboundedSender<TsxMessage>) {
-        self.map.write().insert(key, sender);
+    pub fn register_transaction(&self, key: TsxKey, handler: TsxHandler) {
+        self.map.write().insert(key, handler);
     }
 
     pub fn remove_transaction(&self, key: &TsxKey) {
