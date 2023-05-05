@@ -26,6 +26,12 @@ mod parse;
 pub mod resolver;
 pub mod streaming;
 mod stun_user;
+
+#[cfg(feature = "tls-native-tls")]
+pub mod native_tls;
+#[cfg(feature = "tls-rustls")]
+pub mod rustls;
+pub mod tcp;
 pub mod udp;
 
 /// Abstraction over a transport factory.
@@ -51,6 +57,7 @@ pub trait Factory: Send + Sync + 'static {
     async fn create(
         &self,
         endpoint: Endpoint,
+        uri_info: &UriInfo,
         addrs: &[SocketAddr],
     ) -> io::Result<(TpHandle, SocketAddr)>;
 }
@@ -410,7 +417,7 @@ impl Transports {
                 continue;
             }
 
-            match factory.create(endpoint.clone(), &addresses).await {
+            match factory.create(endpoint.clone(), &info, &addresses).await {
                 Ok((transport, remote)) => {
                     log::trace!("created new transport {}", transport);
 

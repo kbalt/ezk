@@ -2,31 +2,28 @@ use super::decode::StreamingDecoder;
 use crate::transport::managed::DropNotifier;
 use crate::transport::{Direction, Factory, ReceivedMessage, TpHandle, TpKey, Transport};
 use crate::{Endpoint, EndpointBuilder};
+use sip_types::uri::UriInfo;
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::time::Duration;
 use std::{fmt, io};
 use tokio::io::{split, AsyncRead, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::ToSocketAddrs;
 use tokio::sync::{broadcast, oneshot, Mutex};
 use tokio::time::{sleep, Sleep};
-use tokio_stream::{Stream, StreamExt};
+use tokio_stream::StreamExt;
 use tokio_util::codec::FramedRead;
 
+/// Helper trait to implement the transport specific behavior of binding to an address
 #[async_trait::async_trait]
-pub trait StreamingTransport: Sized + Send + Sync + 'static {
-    type Streaming: Streaming;
-    type Incoming: Stream<Item = io::Result<(Self::Streaming, SocketAddr)>> + Unpin + Send + Sync;
+pub trait StreamingListenerBuilder: Sized + Send + Sync + 'static {
+    type Transport: StreamingTransport;
+    type StreamingListener: StreamingListener<Transport = Self::Transport>;
 
-    const NAME: &'static str;
-    const SECURE: bool;
-
-    async fn connect<A: ToSocketAddrs + Send>(&self, addr: A) -> io::Result<Self::Streaming>;
     async fn bind<A: ToSocketAddrs + Send>(
-        &self,
+        self,
         addr: A,
-    ) -> io::Result<(Self::Incoming, SocketAddr)>;
+    ) -> io::Result<(Self::StreamingListener, SocketAddr)>;
 
     async fn spawn<A: ToSocketAddrs + Send>(
         self,
@@ -35,70 +32,83 @@ pub trait StreamingTransport: Sized + Send + Sync + 'static {
     ) -> io::Result<()> {
         let (listener, bound) = self.bind(addr).await?;
 
-        log::info!("Accepting {} connections on {}", Self::NAME, bound);
+        log::info!(
+            "Accepting {} connections on {}",
+            Self::Transport::NAME,
+            bound
+        );
 
-        let factory: Arc<dyn Factory> = Arc::new(StreamingFactory::<Self> { inner: self, bound });
-
-        endpoint.add_transport_factory(factory);
-
-        tokio::spawn(task_accept::<Self>(endpoint.subscribe(), listener, bound));
+        tokio::spawn(task_accept(endpoint.subscribe(), listener));
 
         Ok(())
     }
 }
 
-pub trait Streaming: fmt::Debug + AsyncWrite + AsyncRead + Send + Sync {
+#[async_trait::async_trait]
+pub trait StreamingFactory: Send + Sync + 'static {
+    type Transport: StreamingTransport;
+
+    async fn connect<A: ToSocketAddrs + Send>(
+        &self,
+        uri_info: &UriInfo,
+        addr: A,
+    ) -> io::Result<Self::Transport>;
+}
+
+pub trait StreamingTransport: AsyncWrite + AsyncRead + Send + Sync + 'static {
+    const NAME: &'static str;
+    const SECURE: bool;
+
+    fn matches_transport_param(name: &str) -> bool {
+        name.eq_ignore_ascii_case(Self::NAME)
+    }
+
     fn local_addr(&self) -> io::Result<SocketAddr>;
     fn peer_addr(&self) -> io::Result<SocketAddr>;
 }
 
-pub struct StreamingWrite<T>
-where
-    T: StreamingTransport,
-{
-    listener: SocketAddr,
+#[async_trait::async_trait]
+pub trait StreamingListener: Send + Sync {
+    type Transport: StreamingTransport;
+
+    async fn accept(&mut self) -> io::Result<(Self::Transport, SocketAddr)>;
+}
+
+pub struct StreamingWrite<T> {
     bound: SocketAddr,
     remote: SocketAddr,
     incoming: bool,
 
-    socket: Mutex<WriteHalf<T::Streaming>>,
+    socket: Mutex<WriteHalf<T>>,
 }
 
-impl<T> fmt::Debug for StreamingWrite<T>
-where
-    T: StreamingTransport,
-{
+impl<T: StreamingTransport> fmt::Debug for StreamingWrite<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StreamingWrite")
-            .field("listener", &self.listener)
             .field("bound", &self.bound)
             .field("remote", &self.remote)
             .field("incoming", &self.incoming)
-            .field("socket", &self.socket)
             .finish()
     }
 }
 
-impl<T> fmt::Display for StreamingWrite<T>
-where
-    T: StreamingTransport,
-{
+impl<T: StreamingTransport> fmt::Display for StreamingWrite<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}:bound={}:remote={}:listener={}",
-            T::NAME,
-            self.bound,
-            self.remote,
-            self.listener
-        )
+        write!(f, "{}:bound={}:remote={}", T::NAME, self.bound, self.remote,)
     }
 }
 
 #[async_trait::async_trait]
-impl<T: StreamingTransport> Transport for StreamingWrite<T> {
+impl<T> Transport for StreamingWrite<T>
+where
+    T: StreamingTransport,
+{
     fn name(&self) -> &'static str {
         T::NAME
+    }
+
+    fn matches_transport_param(&self, name: &str) -> bool {
+        T::matches_transport_param(name)
     }
 
     fn secure(&self) -> bool {
@@ -114,7 +124,7 @@ impl<T: StreamingTransport> Transport for StreamingWrite<T> {
     }
 
     fn sent_by(&self) -> SocketAddr {
-        self.listener
+        self.bound
     }
 
     fn direction(&self) -> Direction {
@@ -128,35 +138,32 @@ impl<T: StreamingTransport> Transport for StreamingWrite<T> {
     async fn send(&self, bytes: &[u8], _target: &[SocketAddr]) -> io::Result<()> {
         let mut socket = self.socket.lock().await;
         socket.write_all(bytes).await?;
+        socket.flush().await?;
         Ok(())
     }
 }
 
-#[derive(Debug)]
-pub struct StreamingFactory<T>
-where
-    T: StreamingTransport,
-{
-    inner: T,
-    bound: SocketAddr,
-}
-
 #[async_trait::async_trait]
-impl<T> Factory for StreamingFactory<T>
+impl<T> Factory for T
 where
-    T: StreamingTransport,
+    T: StreamingFactory,
 {
     fn name(&self) -> &'static str {
-        T::NAME
+        T::Transport::NAME
     }
 
     fn secure(&self) -> bool {
-        T::SECURE
+        T::Transport::SECURE
+    }
+
+    fn matches_transport_param(&self, name: &str) -> bool {
+        T::Transport::matches_transport_param(name)
     }
 
     async fn create(
         &self,
         endpoint: Endpoint,
+        uri_info: &UriInfo,
         addrs: &[SocketAddr],
     ) -> io::Result<(TpHandle, SocketAddr)> {
         let mut last_err = io::Error::new(io::ErrorKind::Other, "empty addrs");
@@ -164,15 +171,14 @@ where
         for &addr in addrs {
             log::trace!("trying to connect to {}", addr);
 
-            match self.inner.connect(addr).await {
+            match self.connect(uri_info, addr).await {
                 Ok(stream) => {
                     let local = stream.local_addr()?;
                     let remote = stream.peer_addr()?;
 
                     let (read, write) = split(stream);
 
-                    let transport = StreamingWrite::<T> {
-                        listener: self.bound,
+                    let transport = StreamingWrite {
                         bound: local,
                         remote,
                         socket: Mutex::new(write),
@@ -183,7 +189,7 @@ where
 
                     let (transport, notifier) = endpoint.transports().add_managed_used(transport);
 
-                    tokio::spawn(receive_task::<T>(
+                    tokio::spawn(receive_task(
                         endpoint.clone(),
                         framed,
                         ReceiveTaskState::InUse(notifier),
@@ -202,12 +208,9 @@ where
     }
 }
 
-async fn task_accept<T>(
-    mut endpoint: broadcast::Receiver<Endpoint>,
-    mut incoming: T::Incoming,
-    bound: SocketAddr,
-) where
-    T: StreamingTransport,
+async fn task_accept<I>(mut endpoint: broadcast::Receiver<Endpoint>, mut incoming: I)
+where
+    I: StreamingListener,
 {
     let endpoint = match endpoint.recv().await.ok() {
         Some(endpoint) => endpoint,
@@ -215,8 +218,8 @@ async fn task_accept<T>(
     };
 
     loop {
-        match incoming.next().await {
-            Some(Ok((stream, remote))) => {
+        match incoming.accept().await {
+            Ok((stream, remote)) => {
                 let local = match stream.local_addr() {
                     Ok(local) => local,
                     Err(e) => {
@@ -229,8 +232,7 @@ async fn task_accept<T>(
 
                 let (read, write) = split(stream);
 
-                let transport = StreamingWrite::<T> {
-                    listener: bound,
+                let transport = StreamingWrite {
                     bound: local,
                     remote,
                     socket: Mutex::new(write),
@@ -241,7 +243,7 @@ async fn task_accept<T>(
 
                 let framed = FramedRead::new(read, StreamingDecoder::new(endpoint.parser()));
 
-                tokio::spawn(receive_task::<T>(
+                tokio::spawn(receive_task(
                     endpoint.clone(),
                     framed,
                     ReceiveTaskState::Unused(Box::pin(sleep(Duration::from_secs(32))), rx),
@@ -250,8 +252,7 @@ async fn task_accept<T>(
                     true,
                 ));
             }
-            Some(Err(e)) => log::error!("Error accepting connection, {}", e),
-            None => log::error!("Error accepting connection"),
+            Err(e) => log::error!("Error accepting connection, {}", e),
         }
     }
 }
@@ -263,7 +264,7 @@ enum ReceiveTaskState {
 
 async fn receive_task<T>(
     endpoint: Endpoint,
-    mut framed: FramedRead<ReadHalf<T::Streaming>, StreamingDecoder>,
+    mut framed: FramedRead<ReadHalf<T>, StreamingDecoder>,
     mut state: ReceiveTaskState,
     local: SocketAddr,
     remote: SocketAddr,

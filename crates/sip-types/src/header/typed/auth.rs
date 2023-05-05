@@ -133,7 +133,6 @@ impl DigestChallenge {
                     param
                         .value
                         .split(',')
-                        .into_iter()
                         .map(|v| QopOption::from(param.value.slice_ref(v.trim()))),
                 ),
                 "userhash" => userhash = param.value.eq_ignore_ascii_case("true"),

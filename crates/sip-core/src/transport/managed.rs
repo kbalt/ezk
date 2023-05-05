@@ -3,8 +3,8 @@
 //! Connection based transports must be closed after some time, when not being referenced
 //! anywhere, to not pool up a bunch of connections.
 //!
-//! When a transport is created it is  stored and a reference  is returned to the creator.
-//! The transport is now usable to the entire stack and will stay alive as long as any outside
+//! When a transport is created it is stored and a reference is returned to the creator.
+//! The transport is now available to the entire stack and will stay alive as long as any outside
 //! references exist.
 //!
 //! The cleanup process must be handled by the transport implementation itself. A notifier

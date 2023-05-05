@@ -34,3 +34,10 @@ parking_lot = "0.12"
 rand = "0.8"
 bytesstr = "1"
 downcast-rs = "1"
+
+tokio-rustls = { version = "0.24", optional = true }
+tokio-native-tls = { version = "0.3", optional = true }
+
+[features]
+tls-rustls = ["dep:tokio-rustls"]
+tls-native-tls = ["dep:tokio-native-tls"]

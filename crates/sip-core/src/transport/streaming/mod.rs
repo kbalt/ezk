@@ -1,3 +1,7 @@
-pub mod decode;
-pub mod generalized;
-pub mod tcp;
+mod decode;
+mod generalized;
+
+pub use decode::StreamingDecoder;
+pub use generalized::{
+    StreamingFactory, StreamingListener, StreamingListenerBuilder, StreamingTransport,
+};
