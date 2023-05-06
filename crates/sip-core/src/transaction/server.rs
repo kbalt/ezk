@@ -49,40 +49,41 @@ impl ServerTsx {
     /// Respond with a final response (2XX-6XX)
     ///
     /// # Panics
-    /// Panics if the given response is not a final response
+    /// `response` must contain a final status code.
+    /// For provisional responses [`ServerTsx::respond_provisional`] must be used.
     pub async fn respond(mut self, mut response: OutgoingResponse) -> Result<()> {
-        assert_ne!(response.msg.line.code.kind(), CodeKind::Provisional);
+        assert_ne!(
+            response.msg.line.code.kind(),
+            CodeKind::Provisional,
+            "ServerTsx::respond must only be used for final responses, use ServerTsx::respond_provisional instead"
+        );
 
         self.registration
             .endpoint
             .send_outgoing_response(&mut response)
             .await?;
 
-        if response.msg.line.code.kind() == CodeKind::Provisional {
-            Ok(())
-        } else {
-            if response.parts.transport.reliable() {
-                return Ok(());
-            }
+        if response.parts.transport.reliable() {
+            return Ok(());
+        }
 
-            let abandon = Instant::now() + T1 * 64;
+        let abandon = Instant::now() + T1 * 64;
 
-            tokio::spawn(async move {
-                while let Ok(msg) = timeout_at(abandon.into(), self.registration.receive()).await {
-                    if msg.line.is_request() {
-                        if let Err(e) = self
-                            .registration
-                            .endpoint
-                            .send_outgoing_response(&mut response)
-                            .await
-                        {
-                            log::warn!("Failed to retransmit message, {}", e);
-                        }
+        tokio::spawn(async move {
+            while let Ok(msg) = timeout_at(abandon.into(), self.registration.receive()).await {
+                if msg.line.is_request() {
+                    if let Err(e) = self
+                        .registration
+                        .endpoint
+                        .send_outgoing_response(&mut response)
+                        .await
+                    {
+                        log::warn!("Failed to retransmit message, {}", e);
                     }
                 }
-            });
+            }
+        });
 
-            Ok(())
-        }
+        Ok(())
     }
 }
