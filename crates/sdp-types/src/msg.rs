@@ -439,7 +439,7 @@ pub fn parse<B: ParseBuilder>(src: &BytesStr) -> Result<B::Message, Error<B::Err
                         }
                         "candidate" => {
                             let (_, ice_candidate) =
-                                Candidate::parse(src.as_ref(), attr_v).finish()?;
+                                Candidate::parse(src.as_ref(), line).finish()?;
                             builder
                                 .add_ice_candidate(ice_candidate)
                                 .map_err(Error::Builder)?;
