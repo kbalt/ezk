@@ -6,7 +6,7 @@ use byteorder::ReadBytesExt;
 use bytes::BufMut;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
-const XOR16: u16 = (COOKIE & 0xFFFF) as u16;
+const XOR16: u16 = (COOKIE >> 16) as u16;
 
 fn decode_addr(mut buf: &[u8], xor16: u16, xor32: u32, xor128: u128) -> Result<SocketAddr, Error> {
     if buf.read_u8()? != 0 {
@@ -83,7 +83,7 @@ impl Attribute<'_> for MappedAddress {
     }
 }
 
-/// [RFC8489](https://datatracker.ietf.org/doc/html/rfc8489#section-14.3)
+/// [RFC8489](https://datatracker.ietf.org/doc/html/rfc8489#section-14.2)
 pub struct XorMappedAddress(pub SocketAddr);
 
 impl Attribute<'_> for XorMappedAddress {
