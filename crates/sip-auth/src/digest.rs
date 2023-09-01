@@ -485,9 +485,7 @@ mod test {
             .get::<AuthResponse>(Name::AUTHORIZATION)
             .unwrap();
 
-        let resp_value;
-
-        match response {
+        let resp_value = match response {
             AuthResponse::Digest(DigestResponse {
                 username,
                 realm,
@@ -511,10 +509,10 @@ mod test {
                 assert_eq!(qop_response.nc, 1);
                 assert!(!userhash);
                 assert_eq!(other, vec![]);
-                resp_value = response;
+                response
             }
             _ => panic!("Expected digest"),
-        }
+        };
 
         let mut response_headers = Headers::new();
         session.authorize_request(&mut response_headers);

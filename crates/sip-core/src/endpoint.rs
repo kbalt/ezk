@@ -646,10 +646,7 @@ impl<L> fmt::Debug for LayerKey<L> {
 
 impl<L> Clone for LayerKey<L> {
     fn clone(&self) -> Self {
-        Self {
-            index: self.index,
-            m: self.m,
-        }
+        *self
     }
 }
 
