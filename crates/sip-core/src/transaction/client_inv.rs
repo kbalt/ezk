@@ -222,7 +222,7 @@ fn create_ack(
         },
         parts: OutgoingParts {
             transport: request.parts.transport.clone(),
-            destination: request.parts.destination.clone(),
+            destination: request.parts.destination,
             buffer: Default::default(),
         },
     })

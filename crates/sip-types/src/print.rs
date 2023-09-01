@@ -37,7 +37,7 @@ pub struct WithPrintCtx<'a, T: ?Sized> {
     _self: &'a T,
 }
 
-impl<T: Print> fmt::Display for WithPrintCtx<'_, T> {
+impl<T: Print + ?Sized> fmt::Display for WithPrintCtx<'_, T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         Print::print(self._self, f, self.ctx)
     }
@@ -52,7 +52,7 @@ impl<T> Deref for WithPrintCtx<'_, T> {
 }
 
 /// Helper trait to wrap types that implement [`Print`] into [`WithPrintCtx`]
-pub trait AppendCtx: Sized {
+pub trait AppendCtx {
     /// Wrap a type inside a [`WithPrintCtx`] so it implements display
     fn print_ctx<'a>(&'a self, ctx: PrintCtx<'a>) -> WithPrintCtx<'a, Self> {
         WithPrintCtx { ctx, _self: self }

@@ -6,7 +6,9 @@ publish = false
 
 [dev-dependencies]
 sip-types = { path = "../crates/sip-types", package = "ezk-sip-types" }
-sip-core = { path = "../crates/sip-core", package = "ezk-sip-core" }
+sip-core = { path = "../crates/sip-core", package = "ezk-sip-core", features = [
+    "tls-native-tls",
+] }
 sip-ua = { path = "../crates/sip-ua", package = "ezk-sip-ua" }
 sip-auth = { path = "../crates/sip-auth", package = "ezk-sip-auth" }
 
@@ -15,6 +17,8 @@ tokio = { version = "1", features = ["rt", "macros"] }
 async-trait = "0.1"
 bytesstr = "1"
 tracing-subscriber = "0.3"
+
+tokio-native-tls = { version = "0.3" }
 
 [[example]]
 name = "register"

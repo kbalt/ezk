@@ -137,7 +137,7 @@ impl Endpoint {
 
     /// Try to find or create a suitable transport for a given uri and return a non-empty list
     /// of resolved socket addresses
-    pub async fn select_transport(&self, uri: &dyn Uri) -> Result<(TpHandle, Vec<SocketAddr>)> {
+    pub async fn select_transport(&self, uri: &dyn Uri) -> Result<(TpHandle, SocketAddr)> {
         self.transports().select(self, uri).await
     }
 
@@ -148,21 +148,11 @@ impl Endpoint {
         request: Request,
         target: &mut TargetTransportInfo,
     ) -> Result<OutgoingRequest> {
-        let (transport, destination) = if let Some(transport) = &target.transport {
-            if target.destination.is_empty() {
-                target.destination = self
-                    .transports()
-                    .resolve_uri(&request.line.uri.info())
-                    .await?;
-            }
-
-            (transport.clone(), target.destination.clone())
+        let (transport, destination) = if let Some((transport, destination)) = &target.transport {
+            (transport.clone(), *destination)
         } else {
             let (transport, destination) = self.select_transport(&*request.line.uri).await?;
-
-            target.transport = Some(transport.clone());
-            target.destination = destination.clone();
-
+            target.transport = Some((transport.clone(), destination));
             (transport, destination)
         };
 
@@ -216,7 +206,7 @@ impl Endpoint {
         message
             .parts
             .transport
-            .send(&message.parts.buffer, &message.parts.destination)
+            .send(&message.parts.buffer, message.parts.destination)
             .await
     }
 
@@ -251,18 +241,16 @@ impl Endpoint {
             message.parts.buffer = buffer.freeze();
         }
 
-        let target = message.parts.destination[0];
-
         log::trace!(
             "Sending response to {}\n{:?}",
-            target,
+            message.parts.destination,
             BytesPrint(&message.parts.buffer)
         );
 
         message
             .parts
             .transport
-            .send(&message.parts.buffer, &message.parts.destination)
+            .send(&message.parts.buffer, message.parts.destination)
             .await
     }
 
@@ -297,20 +285,20 @@ impl Endpoint {
                     .and_then(|maddr| maddr.parse::<IpAddr>().ok())
                 {
                     // TODO maddr default port guessing (currently defaulting to 5060)
-                    vec![SocketAddr::new(maddr, via.sent_by.port.unwrap_or(5060))]
+                    SocketAddr::new(maddr, via.sent_by.port.unwrap_or(5060))
                 } else if let Some(rport) = via
                     .params
                     .get_val("rport")
                     .and_then(|rport| rport.parse::<u16>().ok())
                 {
-                    vec![SocketAddr::new(request.tp_info.source.ip(), rport)]
+                    SocketAddr::new(request.tp_info.source.ip(), rport)
                 } else {
-                    vec![request.tp_info.source]
+                    request.tp_info.source
                 }
             }
             Direction::Outgoing(remote) | Direction::Incoming(remote) => {
                 // Use the transport from the request, same remote addr
-                vec![remote]
+                remote
             }
         };
 
@@ -473,7 +461,7 @@ impl Endpoint {
     /// Discover the public address of the transport given the ip of a stun server
     pub async fn discover_public_address(
         &self,
-        stun_server: &[SocketAddr],
+        stun_server: SocketAddr,
         transport: &TpHandle,
     ) -> Result<SocketAddr, StunError> {
         self.transports()
@@ -566,6 +554,13 @@ impl EndpointBuilder {
     pub fn add_transport_factory(&mut self, factory: Arc<dyn Factory>) -> &mut Self {
         self.transports.insert_factory(factory);
         self
+    }
+
+    /// Set a `trust-dns-resolver` DNS resolver for the endpoint to use.
+    ///
+    /// Uses the system config by default.
+    pub fn set_dns_resolver(&mut self, dns_resolver: trust_dns_resolver::TokioAsyncResolver) {
+        self.transports.set_dns_resolver(dns_resolver)
     }
 
     /// Add a implementation of [`Layer`] to the endpoint.

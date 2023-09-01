@@ -17,7 +17,7 @@ impl StunEndpointUser for StunUser {
     async fn send_to(
         &self,
         bytes: &[u8],
-        target: &[SocketAddr],
+        target: SocketAddr,
         transport: &Self::Transport,
     ) -> io::Result<()> {
         transport.send(bytes, target).await
@@ -37,7 +37,7 @@ impl stun::TransportInfo for TpHandle {
 impl Transports {
     pub async fn discover_public_address(
         &self,
-        stun_server: &[SocketAddr],
+        stun_server: SocketAddr,
         transport: &TpHandle,
     ) -> Result<SocketAddr, StunError> {
         if transport.reliable() {

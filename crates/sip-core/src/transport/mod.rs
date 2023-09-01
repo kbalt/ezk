@@ -1,5 +1,5 @@
 use self::managed::{DropNotifier, ManagedTransportState, MangedTransport, RefOwner, WeakRefOwner};
-use self::resolver::{Resolver, SystemResolver};
+use self::resolver::ServerEntry;
 use self::stun_user::StunUser;
 use crate::{Endpoint, Request, Response, Result};
 use bytes::Bytes;
@@ -23,7 +23,7 @@ use tokio::sync::oneshot;
 
 mod managed;
 mod parse;
-pub mod resolver;
+mod resolver;
 pub mod streaming;
 mod stun_user;
 
@@ -58,8 +58,8 @@ pub trait Factory: Send + Sync + 'static {
         &self,
         endpoint: Endpoint,
         uri_info: &UriInfo,
-        addrs: &[SocketAddr],
-    ) -> io::Result<(TpHandle, SocketAddr)>;
+        addrs: SocketAddr,
+    ) -> io::Result<TpHandle>;
 }
 
 /// Abstraction over a transport
@@ -93,7 +93,7 @@ pub trait Transport: Debug + Display + Send + Sync + 'static {
     /// Use the given transport to send `message` to `target`.
     ///
     /// Connection oriented transports may discard the `target` parameter.
-    async fn send(&self, message: &[u8], target: &[SocketAddr]) -> io::Result<()>;
+    async fn send(&self, message: &[u8], target: SocketAddr) -> io::Result<()>;
 }
 
 /// Wrapper over implementations of [`Transport`].
@@ -175,20 +175,17 @@ pub enum Direction {
 
 /// Information saved for subsequent request to the same target
 ///
-/// Used to save the transport & resolved socket addrs of an uri.
+/// Used to save the transport & resolved socket address of an uri.
 /// Can also be used to configure the via_host_port if it needs rewriting.
 #[derive(Debug, Default, Clone)]
 pub struct TargetTransportInfo {
     /// optional host port to use in the via header
     pub via_host_port: Option<HostPort>,
 
-    /// Optional transport to use
-    pub transport: Option<TpHandle>,
-
-    /// Addresses to send the request to.
-    /// If empty the request-uri will be used
-    /// to resolve addresses
-    pub destination: Vec<SocketAddr>,
+    /// Transport and remote address used to send
+    /// requests to. If not set the request-uri
+    /// will be used to populate there accordingly.
+    pub transport: Option<(TpHandle, SocketAddr)>,
 }
 
 /// Transport related info for a message
@@ -269,8 +266,8 @@ pub struct OutgoingParts {
     /// Transport the message will be sent with
     pub transport: TpHandle,
 
-    /// One or more addresses the message will be sent to
-    pub destination: Vec<SocketAddr>,
+    /// Adress the message will be sent to
+    pub destination: SocketAddr,
 
     /// Buffer the message got printed into
     pub buffer: Bytes,
@@ -304,23 +301,20 @@ pub(crate) struct Transports {
     transports: Mutex<HashMap<TpKey, MangedTransport>>,
 
     stun: StunEndpoint<StunUser>,
-    resolver: Box<dyn Resolver>,
+
+    dns_resolver: trust_dns_resolver::TokioAsyncResolver,
 }
 
 impl Transports {
-    pub async fn resolve(&self, name: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
-        self.resolver.resolve(name, port).await
-    }
-
-    pub async fn resolve_host_port(&self, host: &Host, port: u16) -> io::Result<Vec<SocketAddr>> {
+    async fn resolve_host_port(&self, host: &Host, port: u16) -> io::Result<Vec<ServerEntry>> {
         match host {
-            Host::IP6(ip) => Ok(vec![SocketAddr::from((*ip, port))]),
-            Host::IP4(ip) => Ok(vec![SocketAddr::from((*ip, port))]),
-            Host::Name(n) => self.resolve(n, port).await,
+            Host::IP6(ip) => Ok(vec![ServerEntry::from((*ip, port))]),
+            Host::IP4(ip) => Ok(vec![ServerEntry::from((*ip, port))]),
+            Host::Name(name) => resolver::resolve_host(&self.dns_resolver, name, port).await,
         }
     }
 
-    pub async fn resolve_uri(&self, info: &UriInfo<'_>) -> io::Result<Vec<SocketAddr>> {
+    async fn resolve_uri(&self, info: &UriInfo<'_>) -> io::Result<Vec<ServerEntry>> {
         let port = match info.host_port.port {
             Some(port) => port,
             None if info.secure => 5061,
@@ -336,100 +330,138 @@ impl Transports {
         &self,
         endpoint: &Endpoint,
         uri: &dyn Uri,
-    ) -> Result<(TpHandle, Vec<SocketAddr>)> {
+    ) -> Result<(TpHandle, SocketAddr)> {
         log::trace!("select transport for {:?}", uri);
 
         let info = uri.info();
 
         // Resolve host_port to possible remote addresses
-        let addresses = self.resolve_uri(&info).await?;
+        let servers = self.resolve_uri(&info).await?;
 
-        log::trace!("resolved addresses: {:?}", addresses);
+        for server in servers {
+            // Search unmanaged ones (connectionless, e.g. udp)
+            if let Some(transport) = self.find_matching_unmanaged_transport(&info, &server) {
+                log::trace!("selected connectionless: {}", transport);
 
-        // Try to find a fitting connectionless transport
-        if let Some(transport) = self.unmanaged.iter().find(|tp| {
-            let tp_allowed = info
+                return Ok((transport.clone(), server.address));
+            }
+
+            // Search managed idling transports (connections, e.g. tcp / tls)
+            if let Some(found) = self.find_matching_idling_transport(&info, &server) {
+                return Ok((found, server.address));
+            }
+
+            // No existing transport found, try and connect a new one
+
+            if let Some(found) = self.connect(endpoint, &info, &server).await {
+                return Ok((found, server.address));
+            }
+        }
+
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("Failed to select transport for {uri:?}"),
+        )
+        .into())
+    }
+
+    fn find_matching_unmanaged_transport(
+        &self,
+        uri: &UriInfo<'_>,
+        server: &ServerEntry,
+    ) -> Option<&TpHandle> {
+        self.unmanaged.iter().find(|tp| {
+            let addr_familiy_supported = tp.bound().is_ipv4() == server.address.is_ipv4();
+
+            let transport_name_matches = server
                 .transport
-                .as_ref()
-                .map(|tp_name| tp.matches_transport_param(tp_name))
+                .map(|t| t.as_str() == tp.name())
                 .unwrap_or(true);
 
-            let addr_family_supported = addresses
-                .iter()
-                .any(|addr| tp.bound().is_ipv4() == addr.is_ipv4());
+            let security_level_matches = uri.allows_security_level(tp.secure());
 
-            tp_allowed && addr_family_supported && info.allows_security_level(tp.secure())
-        }) {
-            log::trace!("selected connectionless: {}", transport);
+            addr_familiy_supported && transport_name_matches && security_level_matches
+        })
+    }
 
-            return Ok((transport.clone(), addresses));
-        }
+    fn find_matching_idling_transport(
+        &self,
+        uri: &UriInfo<'_>,
+        server: &ServerEntry,
+    ) -> Option<TpHandle> {
+        // TODO: do something about this lock
+        let mut transports = self.transports.lock();
 
-        // Try to find any idling transport to use
-        {
-            let mut transports = self.transports.lock();
-
-            for (_, managed) in transports.iter_mut() {
-                let remote = match managed.transport.direction() {
-                    Direction::None => unreachable!(),
-                    Direction::Incoming(_) => continue,
-                    Direction::Outgoing(remote) => remote,
-                };
-
-                if let Some(tp_name) = &info.transport {
-                    if !managed.transport.matches_transport_param(tp_name) {
-                        continue;
-                    }
-                }
-
-                if !addresses.contains(&remote) {
-                    continue;
-                }
-
-                if !info.allows_security_level(managed.transport.secure()) {
-                    continue;
-                }
-
-                log::trace!("selected transport: {}", managed.transport);
-
-                if let Some(transport) = managed.try_get() {
-                    return Ok((transport, vec![remote]));
-                } else {
-                    log::warn!("bug: failed to use transport {}", managed.transport)
-                }
-            }
-        }
-
-        let mut last_err = io::Error::new(
-            io::ErrorKind::Other,
-            "no suitable transport or factory found",
-        );
-
-        // Try to build new transport with a factory
-        for factory in self.factories.iter() {
-            if let Some(tp_name) = &info.transport {
-                if !factory.matches_transport_param(tp_name) {
+        for (_, managed) in transports.iter_mut() {
+            if let Some(transport) = server.transport {
+                if transport.as_str() != managed.transport.name() {
                     continue;
                 }
             }
 
-            if !info.allows_security_level(factory.secure()) {
+            // Check if the transport is connected to the server's address
+            let remote = match managed.transport.direction() {
+                Direction::None => unreachable!(),
+                Direction::Incoming(_) => continue,
+                Direction::Outgoing(remote) => remote,
+            };
+
+            if server.address != remote {
                 continue;
             }
 
-            match factory.create(endpoint.clone(), &info, &addresses).await {
-                Ok((transport, remote)) => {
-                    log::trace!("created new transport {}", transport);
+            // Check if the transport security is sufficient
+            if !uri.allows_security_level(managed.transport.secure()) {
+                continue;
+            }
 
-                    return Ok((transport, vec![remote]));
+            log::trace!("selected transport: {}", managed.transport);
+
+            if let Some(transport) = managed.try_get() {
+                return Some(transport);
+            } else {
+                log::warn!("bug: failed to use transport {}", managed.transport)
+            }
+        }
+
+        None
+    }
+
+    async fn connect(
+        &self,
+        endpoint: &Endpoint,
+        uri: &UriInfo<'_>,
+        server: &ServerEntry,
+    ) -> Option<TpHandle> {
+        // Try to build new transport with a factory
+        for factory in self.factories.iter() {
+            if let Some(transport) = server.transport {
+                if transport.as_str() != factory.name() {
+                    continue;
+                }
+            }
+
+            if !uri.allows_security_level(factory.secure()) {
+                continue;
+            }
+
+            match factory.create(endpoint.clone(), uri, server.address).await {
+                Ok(transport) => {
+                    log::debug!("created new transport {}", transport);
+
+                    return Some(transport);
                 }
                 Err(e) => {
-                    last_err = e;
+                    log::debug!(
+                        "Failed to connect to {} with {}, reason = {e}",
+                        server.address,
+                        factory.name()
+                    );
                 }
             }
         }
 
-        Err(last_err.into())
+        None
     }
 
     /// Adds the given connected transport and return a strong tp-handle and notifier
@@ -529,30 +561,39 @@ impl Transports {
 pub(crate) struct TransportsBuilder {
     unmanaged: Vec<TpHandle>,
     factories: Vec<Arc<dyn Factory>>,
-    resolver: Option<Box<dyn Resolver>>,
+    dns_resolver: Option<trust_dns_resolver::TokioAsyncResolver>,
 }
 
 impl TransportsBuilder {
-    pub fn insert_unmanaged(&mut self, transport: TpHandle) {
+    pub(crate) fn insert_unmanaged(&mut self, transport: TpHandle) {
         assert_eq!(transport.direction(), Direction::None);
 
         self.unmanaged.push(transport);
     }
 
-    pub fn insert_factory(&mut self, factory: Arc<dyn Factory>) {
+    pub(crate) fn insert_factory(&mut self, factory: Arc<dyn Factory>) {
         self.factories.push(factory);
     }
 
-    pub fn build(&mut self) -> Transports {
+    pub(crate) fn set_dns_resolver(
+        &mut self,
+        dns_resolver: trust_dns_resolver::TokioAsyncResolver,
+    ) {
+        self.dns_resolver = Some(dns_resolver);
+    }
+
+    pub(crate) fn build(&mut self) -> Transports {
+        let dns_resolver = self.dns_resolver.take().unwrap_or_else(|| {
+            trust_dns_resolver::TokioAsyncResolver::tokio_from_system_conf()
+                .expect("Failed to create default system DNS resolver")
+        });
+
         Transports {
             unmanaged: take(&mut self.unmanaged).into_boxed_slice(),
             factories: take(&mut self.factories).into_boxed_slice(),
             stun: StunEndpoint::new(StunUser),
             transports: Default::default(),
-            resolver: self
-                .resolver
-                .take()
-                .unwrap_or_else(|| Box::new(SystemResolver)),
+            dns_resolver,
         }
     }
 }

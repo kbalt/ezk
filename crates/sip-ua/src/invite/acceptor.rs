@@ -263,8 +263,7 @@ impl Acceptor {
 
             // Set the dialogs transport target info from the incoming ACK request
             let mut target_tp_info = dialog.target_tp_info.lock().await;
-            target_tp_info.transport = Some(ack.tp_info.transport.clone());
-            target_tp_info.destination = vec![ack.tp_info.source];
+            target_tp_info.transport = Some((ack.tp_info.transport.clone(), ack.tp_info.source));
             drop(target_tp_info);
 
             let session = Session::new(

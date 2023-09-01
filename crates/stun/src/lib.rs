@@ -40,7 +40,7 @@ pub trait StunEndpointUser: Send + Sync {
     async fn send_to(
         &self,
         bytes: &[u8],
-        target: &[SocketAddr],
+        target: SocketAddr,
         transport: &Self::Transport,
     ) -> io::Result<()>;
 
@@ -79,7 +79,7 @@ impl<U: StunEndpointUser> StunEndpoint<U> {
     pub async fn send_request(
         &self,
         request: Request<'_, U::Transport>,
-        target: &[SocketAddr],
+        target: SocketAddr,
     ) -> io::Result<Option<ParsedMessage>> {
         struct DropGuard<'s, U>(&'s StunEndpoint<U>, u128)
         where

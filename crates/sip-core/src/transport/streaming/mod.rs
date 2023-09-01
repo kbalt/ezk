@@ -137,7 +137,7 @@ where
         }
     }
 
-    async fn send(&self, bytes: &[u8], _target: &[SocketAddr]) -> io::Result<()> {
+    async fn send(&self, bytes: &[u8], _target: SocketAddr) -> io::Result<()> {
         let mut socket = self.socket.lock().await;
         socket.write_all(bytes).await?;
         socket.flush().await?;
@@ -166,47 +166,37 @@ where
         &self,
         endpoint: Endpoint,
         uri_info: &UriInfo,
-        addrs: &[SocketAddr],
-    ) -> io::Result<(TpHandle, SocketAddr)> {
-        let mut last_err = io::Error::new(io::ErrorKind::Other, "empty addrs");
+        addr: SocketAddr,
+    ) -> io::Result<TpHandle> {
+        log::trace!("{} trying to connect to {}", self.name(), addr);
 
-        for &addr in addrs {
-            log::trace!("trying to connect to {}", addr);
+        let stream = self.connect(uri_info, addr).await?;
+        let local = stream.local_addr()?;
+        let remote = stream.peer_addr()?;
 
-            match self.connect(uri_info, addr).await {
-                Ok(stream) => {
-                    let local = stream.local_addr()?;
-                    let remote = stream.peer_addr()?;
+        let (read, write) = split(stream);
 
-                    let (read, write) = split(stream);
+        let transport = StreamingWrite {
+            bound: local,
+            remote,
+            socket: Mutex::new(write),
+            incoming: false,
+        };
 
-                    let transport = StreamingWrite {
-                        bound: local,
-                        remote,
-                        socket: Mutex::new(write),
-                        incoming: false,
-                    };
+        let framed = FramedRead::new(read, StreamingDecoder::new(endpoint.parser()));
 
-                    let framed = FramedRead::new(read, StreamingDecoder::new(endpoint.parser()));
+        let (transport, notifier) = endpoint.transports().add_managed_used(transport);
 
-                    let (transport, notifier) = endpoint.transports().add_managed_used(transport);
+        tokio::spawn(receive_task(
+            endpoint.clone(),
+            framed,
+            ReceiveTaskState::InUse(notifier),
+            local,
+            remote,
+            false,
+        ));
 
-                    tokio::spawn(receive_task(
-                        endpoint.clone(),
-                        framed,
-                        ReceiveTaskState::InUse(notifier),
-                        local,
-                        remote,
-                        false,
-                    ));
-
-                    return Ok((transport, remote));
-                }
-                Err(e) => last_err = e,
-            };
-        }
-
-        Err(last_err)
+        return Ok(transport);
     }
 }
 

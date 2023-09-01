@@ -1,3 +1,4 @@
+use sip_core::transport::tcp::TcpConnector;
 use sip_core::transport::udp::Udp;
 use sip_core::transport::TargetTransportInfo;
 use sip_core::{Endpoint, Result};
@@ -5,14 +6,26 @@ use sip_types::uri::sip::SipUri;
 use sip_types::uri::NameAddr;
 use sip_types::CodeKind;
 use sip_ua::register::Registration;
+use std::sync::Arc;
+use tokio_native_tls::{native_tls::TlsConnector as NativeTlsConnector, TlsConnector};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
+    // Create the endpoint
     let mut builder = Endpoint::builder();
 
-    Udp::spawn(&mut builder, "127.0.0.1:5060").await?;
+    // Add a IPv4 UDP Socket
+    Udp::spawn(&mut builder, "0.0.0.0:5060").await?;
+
+    // Add a TCP connector
+    builder.add_transport_factory(Arc::new(TcpConnector::default()));
+
+    // Add a TLS connector using (tokio-)native-tls
+    builder.add_transport_factory(Arc::new(TlsConnector::from(
+        NativeTlsConnector::new().unwrap(),
+    )));
 
     let endpoint = builder.build();
 
