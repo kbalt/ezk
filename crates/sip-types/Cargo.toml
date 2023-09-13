@@ -1,6 +1,6 @@
 [package]
 name = "ezk-sip-types"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2018"
 authors = ["Konstantin Baltruschat <konstantin.baltruschat@gmail.com>"]
 description = "SIP types providing parsing & serialization"
