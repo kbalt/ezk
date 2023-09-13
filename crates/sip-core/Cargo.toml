@@ -1,6 +1,6 @@
 [package]
 name = "ezk-sip-core"
-version = "0.1.3"
+version = "0.2.0"
 edition = "2018"
 authors = ["Konstantin Baltruschat <konstantin.baltruschat@gmail.com>"]
 description = "SIP core crate providing abstrations over transport and transactions"
@@ -14,7 +14,7 @@ readme = "README.md"
 internal = { package = "ezk-internal", path = "../internal", version = "0.1" }
 sip-types = { package = "ezk-sip-types", path = "../sip-types", version = "0.1" }
 stun-types = { package = "ezk-stun-types", path = "../stun-types", version = "0.1.1" }
-stun = { package = "ezk-stun", path = "../stun", version = "0.1.1" }
+stun = { package = "ezk-stun", path = "../stun", version = "0.2.0" }
 
 tracing = "0.1"
 bytes = "1"

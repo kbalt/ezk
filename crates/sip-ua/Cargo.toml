@@ -1,6 +1,6 @@
 [package]
 name = "ezk-sip-ua"
-version = "0.1.4"
+version = "0.2.0"
 edition = "2018"
 authors = ["Konstantin Baltruschat <konstantin.baltruschat@gmail.com>"]
 description = "Low level SIP user agent utilities"
@@ -12,7 +12,7 @@ readme = "README.md"
 
 [dependencies]
 sip-types = { package = "ezk-sip-types", path = "../sip-types", version = "0.1" }
-sip-core = { package = "ezk-sip-core", path = "../sip-core", version = "0.1" }
+sip-core = { package = "ezk-sip-core", path = "../sip-core", version = "0.2" }
 
 log = "0.4"
 bytesstr = "1"
