@@ -1,7 +1,7 @@
 use crate::util::{random_sequence_number, random_string};
 use sip_core::transaction::TsxResponse;
 use sip_core::Request;
-use sip_types::header::typed::{CSeq, CallID, Contact, Expires, FromTo};
+use sip_types::header::typed::{CSeq, CallID, Contact, Expires, FromTo, MinExpires};
 use sip_types::uri::{NameAddr, Uri};
 use sip_types::{CodeKind, Method, Name};
 use std::time::Duration;
@@ -78,6 +78,21 @@ impl Registration {
         if self.to.tag.is_none() {
             self.to.tag = response.base_headers.to.tag;
         }
+    }
+
+    pub fn receive_error_response(&mut self, response: TsxResponse) -> bool {
+        if !matches!(response.line.code.kind(), CodeKind::RequestFailure) {
+            return false;
+        }
+
+        let Ok(expires) = response.headers.get_named::<MinExpires>() else {
+            return false;
+        };
+
+        self.expires = expires.0;
+        self.register_interval = create_reg_interval(self.expires);
+
+        true
     }
 
     pub async fn wait_for_expiry(&mut self) {

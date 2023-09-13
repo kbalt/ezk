@@ -25,7 +25,7 @@ pub use call_id::CallID;
 pub use contact::Contact;
 pub use content::{ContentLength, ContentType};
 pub use cseq::CSeq;
-pub use expires::Expires;
+pub use expires::{Expires, MinExpires};
 pub use extensions::{Require, Supported};
 pub use from_to::FromTo;
 pub use max_fwd::MaxForwards;
