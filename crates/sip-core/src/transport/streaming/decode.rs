@@ -58,7 +58,10 @@ impl Decoder for StreamingDecoder {
     type Error = Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        // TODO check for CRLF and discard
+        if &src[..] == b"\r\n" {
+            src.clear();
+            return Ok(None);
+        }
 
         if src.len() > 4096 {
             // do not allow a message head larger than that
