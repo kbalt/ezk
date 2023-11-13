@@ -270,16 +270,18 @@ impl Username {
     ///
     /// Determines the variant and encodes non ascii usernames with utf8 percentage encoding.
     pub fn new(username: BytesStr) -> Self {
-        let maybe_encoded = utf8_percent_encode(&username, CHARSET).into();
+        Username::Username(username)
 
-        match maybe_encoded {
-            Cow::Borrowed(_) => Username::Username(username),
-            Cow::Owned(encoded) => {
-                let username_encoded = format!("UTF-8''{}", encoded).into();
+        // let maybe_encoded = utf8_percent_encode(&username, CHARSET).into();
 
-                Username::UsernameNonASCII(username_encoded)
-            }
-        }
+        // match maybe_encoded {
+        //     Cow::Borrowed(_) => Username::Username(username),
+        //     Cow::Owned(encoded) => {
+        //         let username_encoded = format!("UTF-8''{}", encoded).into();
+
+        //         Username::UsernameNonASCII(username_encoded)
+        //     }
+        // }
     }
 }
 
