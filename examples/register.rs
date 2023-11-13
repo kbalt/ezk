@@ -7,6 +7,7 @@ use sip_types::uri::NameAddr;
 use sip_types::CodeKind;
 use sip_ua::register::Registration;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio_native_tls::{native_tls::TlsConnector as NativeTlsConnector, TlsConnector};
 
 #[tokio::main]
@@ -30,10 +31,16 @@ async fn main() -> Result<()> {
     let endpoint = builder.build();
 
     let id: SipUri = "sip:alice@example.com".parse().unwrap();
+    let contact: SipUri = "sip:alice@192.168.178.2:5060".parse().unwrap();
     let registrar: SipUri = "sip:example.com".parse().unwrap();
 
     let mut target = TargetTransportInfo::default();
-    let mut registration = Registration::new(NameAddr::uri(id), registrar.into());
+    let mut registration = Registration::new(
+        NameAddr::uri(id),
+        NameAddr::uri(contact),
+        registrar.into(),
+        Duration::from_secs(600),
+    );
 
     loop {
         let request = registration.create_register(false);
