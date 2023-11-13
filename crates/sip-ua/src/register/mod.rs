@@ -18,26 +18,24 @@ pub struct Registration {
     contact: Contact,
 
     /// Amount of seconds until the registration expires
-    expires: u32,
+    expires: Duration,
 
     /// Re-registration interval, is set to `expires - 10`
     register_interval: Interval,
 }
 
 impl Registration {
-    pub fn new(id: NameAddr, registrar: Box<dyn Uri>) -> Self {
-        let duration_secs = 300;
-
+    pub fn new(id: NameAddr, contact: NameAddr, registrar: Box<dyn Uri>, expiry: Duration) -> Self {
         Self {
             registrar,
             to: FromTo::new(id.clone(), None),
-            from: FromTo::new(id.clone(), Some(random_string())),
+            from: FromTo::new(id, Some(random_string())),
             cseq: random_sequence_number(),
             call_id: CallID::new(random_string()),
-            contact: Contact::new(id),
+            contact: Contact::new(contact),
 
-            expires: duration_secs,
-            register_interval: create_reg_interval(duration_secs),
+            expires: expiry,
+            register_interval: create_reg_interval(expiry),
         }
     }
 
@@ -56,7 +54,7 @@ impl Registration {
         let expires = if remove_binding {
             Expires(0)
         } else {
-            Expires(self.expires)
+            Expires(self.expires.as_secs() as u32)
         };
 
         request.headers.insert_named(&expires);
@@ -69,9 +67,11 @@ impl Registration {
         assert_eq!(response.line.code.kind(), CodeKind::Success);
 
         if let Ok(expires) = response.headers.get_named::<Expires>() {
-            if self.expires != expires.0 {
-                self.register_interval = create_reg_interval(expires.0);
-                self.expires = expires.0;
+            let expires = Duration::from_secs(expires.0 as _);
+
+            if self.expires != expires {
+                self.register_interval = create_reg_interval(expires);
+                self.expires = expires;
             }
         }
 
@@ -89,7 +89,7 @@ impl Registration {
             return false;
         };
 
-        self.expires = expires.0;
+        self.expires = Duration::from_secs(expires.0 as _);
         self.register_interval = create_reg_interval(self.expires);
 
         true
@@ -100,12 +100,11 @@ impl Registration {
     }
 }
 
-fn create_reg_interval(secs: u32) -> Interval {
-    let secs = (secs - 10) as u64;
-    let duration = Duration::from_secs(secs);
+fn create_reg_interval(period: Duration) -> Interval {
+    let period = period - Duration::from_secs(10);
 
-    let next = Instant::now() + duration;
-    let mut register_interval = interval_at(next, duration);
+    let next = Instant::now() + period;
+    let mut register_interval = interval_at(next, period);
     register_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     register_interval
 }
