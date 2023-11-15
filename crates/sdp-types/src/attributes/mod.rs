@@ -3,6 +3,7 @@ use bytesstr::BytesStr;
 use std::fmt;
 
 mod candidate;
+mod crypto;
 mod direction;
 mod fmtp;
 mod ice;
@@ -10,6 +11,7 @@ mod rtcp;
 mod rtpmap;
 
 pub use candidate::{IceCandidate, InvalidCandidateParamError, UntaggedAddress};
+pub use crypto::{SrtpCrypto, SrtpFecOrder, SrtpKeyingMaterial, SrtpSessionParam, SrtpSuite};
 pub use direction::Direction;
 pub use fmtp::Fmtp;
 pub use ice::{IceOptions, IcePassword, IceUsernameFragment};

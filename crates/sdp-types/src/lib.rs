@@ -17,7 +17,8 @@ mod time;
 
 pub use attributes::{
     Direction, Fmtp, IceCandidate, IceOptions, IcePassword, IceUsernameFragment,
-    InvalidCandidateParamError, Rtcp, RtpMap, UnknownAttribute, UntaggedAddress,
+    InvalidCandidateParamError, Rtcp, RtpMap, SrtpCrypto, SrtpFecOrder, SrtpKeyingMaterial,
+    SrtpSessionParam, SrtpSuite, UnknownAttribute, UntaggedAddress,
 };
 pub use bandwidth::Bandwidth;
 pub use connection::Connection;
