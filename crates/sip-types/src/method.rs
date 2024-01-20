@@ -72,6 +72,11 @@ methods! {
     "UPDATE",      UPDATE;
     "PRACK",       PRACK;
     "OPTIONS",     OPTIONS;
+    "SUBSCRIBE",   SUBSCRIBE;
+    "NOTIFY",      NOTIFY;
+    "PUBLISH",     PUBLISH;
+    "INFO",        INFO;
+    "REFER",       REFER;
 }
 
 impl Method {
