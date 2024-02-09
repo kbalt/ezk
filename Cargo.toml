@@ -1,6 +1,13 @@
 [workspace]
+resolver = "2"
 
 members = [
     "crates/*",
     "examples",
 ]
+
+[workspace.package]
+authors = ["kbalt"]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/kbalt/ezk"

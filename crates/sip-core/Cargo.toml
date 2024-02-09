@@ -1,14 +1,15 @@
 [package]
 name = "ezk-sip-core"
 version = "0.2.1"
-edition = "2018"
-authors = ["Konstantin Baltruschat <konstantin.baltruschat@gmail.com>"]
 description = "SIP core crate providing abstrations over transport and transactions"
-repository = "https://github.com/kbalt/ezk"
-license = "MIT"
 categories = ["network-programming", "multimedia"]
 keywords = ["sip"]
 readme = "README.md"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 internal = { package = "ezk-internal", path = "../internal", version = "0.1" }

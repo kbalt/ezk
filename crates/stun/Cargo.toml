@@ -1,14 +1,15 @@
 [package]
 name = "ezk-stun"
 version = "0.2.0"
-edition = "2018"
-authors = ["Konstantin Baltruschat <konstantin.baltruschat@gmail.com>"]
 description = "STUN endpoint for simple requests"
-repository = "https://github.com/kbalt/ezk"
-license = "MIT"
 categories = ["network-programming"]
 keywords = ["stun"]
 readme = "README.md"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 stun-types = { path = "../stun-types", package = "ezk-stun-types", version = "0.1.1" }

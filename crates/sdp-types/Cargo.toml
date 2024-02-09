@@ -1,14 +1,15 @@
 [package]
 name = "ezk-sdp-types"
 version = "0.1.1"
-edition = "2018"
-authors = ["Konstantin Baltruschat <konstantin.baltruschat@gmail.com>"]
 description = "SDP types providing parsing & serialization"
-repository = "https://github.com/kbalt/ezk"
-license = "MIT"
 categories = ["network-programming", "multimedia"]
 keywords = ["sdp"]
 readme = "README.md"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 internal = { package = "ezk-internal", path = "../internal", version = "0.1" }
