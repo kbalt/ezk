@@ -188,7 +188,11 @@ impl Drop for UsageGuard {
         let mut dialogs = self.endpoint[self.dialog_layer].dialogs.lock();
 
         if let Some(dialog_entry) = dialogs.get_mut(&self.dialog_key) {
-            dialog_entry.usages.remove(self.usage_key);
+            let usage = dialog_entry.usages.remove(self.usage_key);
+
+            // Make sure to release the lock before dropping the usage to avoid potential deadlocks
+            drop(dialogs);
+            drop(usage);
         } else {
             log::warn!("usage dropped after dialog")
         }
