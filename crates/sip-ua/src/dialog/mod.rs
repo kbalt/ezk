@@ -162,7 +162,7 @@ impl Dialog {
                 if request.base_headers.to.tag.is_none() {
                     // Add To-tag to success response to create dialog
                     response.msg.headers.edit(Name::TO, |to: &mut FromTo| {
-                        to.tag = self.local_fromto.tag.clone();
+                        to.tag.clone_from(&self.local_fromto.tag);
                     })?;
                 }
 
