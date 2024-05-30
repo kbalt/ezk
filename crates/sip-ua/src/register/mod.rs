@@ -17,7 +17,7 @@ pub struct Registration {
     call_id: CallID,
     contact: Contact,
 
-    /// Amount of seconds until the registration expires
+    /// Duration until the registration expires
     expires: Duration,
 
     /// Re-registration interval, is set to `expires - 10`
@@ -39,6 +39,10 @@ impl Registration {
         }
     }
 
+    /// Create a new REGISTER request.
+    ///
+    /// `remove_binding` must be `false` to create a new binding on the registrar.
+    /// If the value is `true` the REGISTER request will remove any active bindings.
     pub fn create_register(&mut self, remove_binding: bool) -> Request {
         let mut request = Request::new(Method::REGISTER, self.registrar.clone());
 
@@ -63,6 +67,10 @@ impl Registration {
         request
     }
 
+    /// Handle the success response received from a registrar
+    ///
+    /// Updates internal re-registration timer.
+    /// [`Self::wait_for_expiry`] should be used to wait until refreshing the binding with the registrar.
     pub fn receive_success_response(&mut self, response: TsxResponse) {
         assert_eq!(response.line.code.kind(), CodeKind::Success);
 
@@ -80,6 +88,9 @@ impl Registration {
         }
     }
 
+    /// Handle an error response received from a registrar
+    ///
+    /// Returns whether or not to retry the registration
     pub fn receive_error_response(&mut self, response: TsxResponse) -> bool {
         if !matches!(response.line.code.kind(), CodeKind::RequestFailure) {
             return false;
@@ -95,6 +106,7 @@ impl Registration {
         true
     }
 
+    /// Returns when a new REGISTER request must be sent to refresh the binding on the registrar.
     pub async fn wait_for_expiry(&mut self) {
         self.register_interval.tick().await;
     }
