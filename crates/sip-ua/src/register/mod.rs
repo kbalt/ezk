@@ -113,6 +113,8 @@ impl Registration {
 }
 
 fn create_reg_interval(period: Duration) -> Interval {
+    // Avoid underflow and zero duration intervals by limiting `period` to be at least 20s
+    let period = period.max(Duration::from_secs(20));
     let period = period - Duration::from_secs(10);
 
     let next = Instant::now() + period;
