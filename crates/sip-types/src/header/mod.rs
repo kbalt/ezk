@@ -88,6 +88,7 @@ impl<H: HeaderParse> DecodeValues for H {
     }
 }
 
+#[macro_export]
 macro_rules! csv_header {
     ($(#[$meta:meta])* $struct_name:ident, $wrapping:ty, $header_name:expr) => {
         $(#[$meta])*
@@ -130,6 +131,7 @@ macro_rules! csv_header {
     };
 }
 
+#[macro_export]
 macro_rules! from_str_header {
     ($(#[$meta:meta])* $struct_name:ident, $header_name:expr, $from_str_ty:ty) => {
         $(#[$meta])*
