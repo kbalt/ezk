@@ -91,7 +91,7 @@ impl<H: HeaderParse> DecodeValues for H {
 macro_rules! csv_header {
     ($(#[$meta:meta])* $struct_name:ident, $wrapping:ty, $header_name:expr) => {
         $(#[$meta])*
-        #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $struct_name(pub $wrapping);
 
         impl ConstNamed for $struct_name {
@@ -133,7 +133,7 @@ macro_rules! csv_header {
 macro_rules! from_str_header {
     ($(#[$meta:meta])* $struct_name:ident, $header_name:expr, $from_str_ty:ty) => {
         $(#[$meta])*
-        #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $struct_name(pub $from_str_ty);
 
         impl ConstNamed for $struct_name {
