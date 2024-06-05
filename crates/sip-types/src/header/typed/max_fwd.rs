@@ -1,9 +1,4 @@
-use crate::header::headers::OneOrMore;
-use crate::header::{ConstNamed, ExtendValues, HeaderParse};
-use crate::parse::ParseCtx;
-use crate::print::PrintCtx;
 use crate::Name;
-use anyhow::Result;
 
 from_str_header! {
     /// `Max-Forwards` header
@@ -15,6 +10,7 @@ from_str_header! {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::header::HeaderParse;
     use crate::parse::ParseCtx;
     use bytesstr::BytesStr;
 
