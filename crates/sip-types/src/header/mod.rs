@@ -101,7 +101,7 @@ macro_rules! csv_header {
         }
 
         impl $crate::header::HeaderParse for $struct_name {
-            fn parse<'i>(ctx: $crate::parse::ParseCtx, i: &'i str) -> Result<(&'i str, Self)> {
+            fn parse<'i>(ctx: $crate::parse::ParseCtx, i: &'i str) -> Result<(&'i str, Self), Error> {
                 if let Some(comma_idx) = i.find(',') {
                     Ok((
                         &i[comma_idx..],
@@ -144,7 +144,7 @@ macro_rules! from_str_header {
         }
 
         impl $crate::header::HeaderParse for $struct_name {
-            fn parse<'i>(_: $crate::parse::ParseCtx, i: &'i str) -> Result<(&'i str, Self)> {
+            fn parse<'i>(_: $crate::parse::ParseCtx, i: &'i str) -> Result<(&'i str, Self), Error> {
                 Ok(("", Self(i.trim().parse()?)))
             }
         }

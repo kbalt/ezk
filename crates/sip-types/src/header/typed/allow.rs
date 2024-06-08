@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Error, Result};
 
 use crate::header::name::Name;
 use crate::method::Method;

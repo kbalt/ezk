@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Error, Result};
 
 use crate::Name;
 

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Error, Result};
 use bytesstr::BytesStr;
 
 use crate::header::name::Name;
