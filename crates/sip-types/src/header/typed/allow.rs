@@ -1,10 +1,7 @@
-use crate::header::headers::OneOrMore;
-use crate::header::name::Name;
-use crate::header::{ConstNamed, ExtendValues, HeaderParse};
-use crate::method::Method;
-use crate::parse::ParseCtx;
-use crate::print::PrintCtx;
 use anyhow::Result;
+
+use crate::header::name::Name;
+use crate::method::Method;
 
 csv_header! {
     /// `Allow` header, contains only one method.
@@ -16,8 +13,9 @@ csv_header! {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use crate::Headers;
+
+    use super::*;
 
     const ALLOW_INVITE: Allow = Allow(Method::INVITE);
     const ALLOW_CANCEL: Allow = Allow(Method::CANCEL);

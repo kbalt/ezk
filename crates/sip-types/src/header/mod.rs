@@ -1,18 +1,19 @@
 //! Contains everything header related
 
-use crate::parse::{ParseCtx, Parser};
-use crate::print::PrintCtx;
 use anyhow::{Context, Result};
 use bytesstr::BytesStr;
+
+pub use error::HeaderError;
 use headers::OneOrMore;
 use name::Name;
+
+use crate::parse::{ParseCtx, Parser};
+use crate::print::PrintCtx;
 
 mod error;
 pub(crate) mod headers;
 pub mod multiple;
 pub(crate) mod name;
-
-pub use error::HeaderError;
 
 // ==== PARSE TRAITS ====
 
@@ -95,12 +96,12 @@ macro_rules! csv_header {
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $struct_name(pub $wrapping);
 
-        impl ConstNamed for $struct_name {
+        impl $crate::header::ConstNamed for $struct_name {
             const NAME: Name = $header_name;
         }
 
-        impl HeaderParse for $struct_name {
-            fn parse<'i>(ctx: ParseCtx, i: &'i str) -> Result<(&'i str, Self)> {
+        impl $crate::header::HeaderParse for $struct_name {
+            fn parse<'i>(ctx: $crate::parse::ParseCtx, i: &'i str) -> Result<(&'i str, Self)> {
                 if let Some(comma_idx) = i.find(',') {
                     Ok((
                         &i[comma_idx..],
@@ -112,11 +113,11 @@ macro_rules! csv_header {
             }
         }
 
-        impl ExtendValues for $struct_name {
-            fn extend_values(&self, _: PrintCtx<'_>, values: &mut OneOrMore) {
+        impl $crate::header::ExtendValues for $struct_name {
+            fn extend_values(&self, _: $crate::print::PrintCtx<'_>, values: &mut $crate::header::headers::OneOrMore) {
                 let value = match values {
-                    OneOrMore::One(value) => value,
-                    OneOrMore::More(values) => {
+                    $crate::header::headers::OneOrMore::One(value) => value,
+                    $crate::header::headers::OneOrMore::More(values) => {
                         values.last_mut().expect("empty OneOrMore::More variant")
                     }
                 };
@@ -124,8 +125,8 @@ macro_rules! csv_header {
                 *value = format!("{}, {}", value, self.0).into();
             }
 
-            fn create_values(&self, _: PrintCtx<'_>) -> OneOrMore {
-                OneOrMore::One(self.0.to_string().into())
+            fn create_values(&self, _: $crate::print::PrintCtx<'_>) -> $crate::header::headers::OneOrMore {
+                $crate::header::headers::OneOrMore::One(self.0.to_string().into())
             }
         }
     };
@@ -138,23 +139,23 @@ macro_rules! from_str_header {
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $struct_name(pub $from_str_ty);
 
-        impl ConstNamed for $struct_name {
+        impl $crate::header::ConstNamed for $struct_name {
             const NAME: Name =  $header_name;
         }
 
-        impl HeaderParse for $struct_name {
-            fn parse<'i>(_: ParseCtx, i: &'i str) -> Result<(&'i str, Self)> {
+        impl $crate::header::HeaderParse for $struct_name {
+            fn parse<'i>(_: $crate::parse::ParseCtx, i: &'i str) -> Result<(&'i str, Self)> {
                 Ok(("", Self(i.trim().parse()?)))
             }
         }
 
-        impl ExtendValues for $struct_name {
-            fn extend_values(&self, ctx: PrintCtx<'_>, values: &mut OneOrMore) {
+        impl $crate::header::ExtendValues for $struct_name {
+            fn extend_values(&self, ctx: $crate::print::PrintCtx<'_>, values: &mut $crate::header::headers::OneOrMore) {
                 *values = self.create_values(ctx)
             }
 
-            fn create_values(&self, _: PrintCtx<'_>) -> OneOrMore {
-                OneOrMore::One(self.0.to_string().into())
+            fn create_values(&self, _: $crate::print::PrintCtx<'_>) -> $crate::header::headers::OneOrMore {
+                $crate::header::headers::OneOrMore::One(self.0.to_string().into())
             }
         }
 

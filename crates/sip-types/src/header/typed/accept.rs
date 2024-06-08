@@ -1,10 +1,7 @@
-use crate::header::headers::OneOrMore;
-use crate::header::name::Name;
-use crate::header::{ConstNamed, ExtendValues, HeaderParse};
-use crate::parse::ParseCtx;
-use crate::print::PrintCtx;
 use anyhow::Result;
 use bytesstr::BytesStr;
+
+use crate::header::name::Name;
 
 csv_header! {
     /// `Accept` header, contains only one supported format.
@@ -16,8 +13,9 @@ csv_header! {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use crate::Headers;
+
+    use super::*;
 
     const ACCEPT_SDP: Accept = Accept(BytesStr::from_static("application/sdp"));
     const ACCEPT_TEXT: Accept = Accept(BytesStr::from_static("text/plain"));

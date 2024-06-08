@@ -1,9 +1,6 @@
-use crate::header::headers::OneOrMore;
-use crate::header::{ConstNamed, ExtendValues, HeaderParse};
-use crate::parse::ParseCtx;
-use crate::print::PrintCtx;
-use crate::Name;
 use anyhow::Result;
+
+use crate::Name;
 
 from_str_header! {
     /// `Expires` header
@@ -21,8 +18,9 @@ from_str_header! {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use crate::Headers;
+
+    use super::*;
 
     const EXPIRES: Expires = Expires(300);
 
