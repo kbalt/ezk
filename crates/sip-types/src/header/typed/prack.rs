@@ -51,7 +51,7 @@ impl HeaderParse for RAck {
             )),
             |(rack, cseq, method)| RAck { rack, cseq, method },
         )(i)
-        .finish()?;
+            .finish()?;
 
         Ok((rem, rack))
     }
@@ -75,8 +75,9 @@ impl fmt::Display for RAck {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use crate::Headers;
+
+    use super::*;
 
     const RACK: RAck = RAck {
         rack: 123,

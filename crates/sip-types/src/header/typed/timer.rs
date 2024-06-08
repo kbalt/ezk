@@ -63,7 +63,7 @@ impl HeaderParse for SessionExpires {
                 }
             },
         )(i)
-        .finish()?;
+            .finish()?;
 
         Ok((rem, se))
     }
@@ -95,8 +95,9 @@ impl Print for SessionExpires {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use bytesstr::BytesStr;
+
+    use super::*;
 
     #[test]
     fn min_se() {
