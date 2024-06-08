@@ -11,7 +11,7 @@ use crate::parse::{ParseCtx, Parser};
 use crate::print::PrintCtx;
 
 mod error;
-pub(crate) mod headers;
+pub mod headers;
 pub mod multiple;
 pub(crate) mod name;
 
