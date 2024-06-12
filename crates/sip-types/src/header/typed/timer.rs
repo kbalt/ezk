@@ -1,18 +1,15 @@
-use std::fmt;
-use std::str::FromStr;
-
+use crate::header::{ConstNamed, ExtendValues, HeaderParse, OneOrMore};
+use crate::parse::ParseCtx;
+use crate::print::{AppendCtx, Print, PrintCtx};
+use crate::uri::params::{Params, CPS};
+use crate::Name;
 use anyhow::{Error, Result};
+use internal::ws;
 use nom::character::complete::alphanumeric1;
 use nom::combinator::{map, map_res};
 use nom::Finish;
-
-use internal::ws;
-
-use crate::header::{ConstNamed, ExtendValues, HeaderParse, OneOrMore};
-use crate::Name;
-use crate::parse::ParseCtx;
-use crate::print::{AppendCtx, Print, PrintCtx};
-use crate::uri::params::{CPS, Params};
+use std::fmt;
+use std::str::FromStr;
 
 from_str_header! {
     /// `Min-SE` header

@@ -13,9 +13,8 @@ csv_header! {
 
 #[cfg(test)]
 mod test {
-    use crate::Headers;
-
     use super::*;
+    use crate::Headers;
 
     const ALLOW_INVITE: Allow = Allow(Method::INVITE);
     const ALLOW_CANCEL: Allow = Allow(Method::CANCEL);

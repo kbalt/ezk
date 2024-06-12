@@ -1,6 +1,5 @@
-use anyhow::{Error, Result};
-
 use crate::Name;
+use anyhow::{Error, Result};
 
 from_str_header! {
     /// `Max-Forwards` header
@@ -11,12 +10,10 @@ from_str_header! {
 
 #[cfg(test)]
 mod test {
-    use bytesstr::BytesStr;
-
-    use crate::header::HeaderParse;
-    use crate::parse::ParseCtx;
-
     use super::*;
+    use crate::parse::ParseCtx;
+    use crate::header::HeaderParse;
+    use bytesstr::BytesStr;
 
     #[test]
     fn max_fwd() {

@@ -1,11 +1,10 @@
-use anyhow::{Error, Result};
-use bytesstr::BytesStr;
-
-use crate::header::{ConstNamed, ExtendValues, HeaderParse};
 use crate::header::headers::OneOrMore;
 use crate::header::name::Name;
+use crate::header::{ConstNamed, ExtendValues, HeaderParse};
 use crate::parse::ParseCtx;
 use crate::print::PrintCtx;
+use anyhow::{Error, Result};
+use bytesstr::BytesStr;
 
 from_str_header! {
     /// `Content-Length` header

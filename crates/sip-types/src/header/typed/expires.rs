@@ -1,6 +1,5 @@
-use anyhow::{Error, Result};
-
 use crate::Name;
+use anyhow::{Error, Result};
 
 from_str_header! {
     /// `Expires` header
@@ -18,9 +17,8 @@ from_str_header! {
 
 #[cfg(test)]
 mod test {
-    use crate::Headers;
-
     use super::*;
+    use crate::Headers;
 
     const EXPIRES: Expires = Expires(300);
 

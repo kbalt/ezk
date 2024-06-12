@@ -1,19 +1,18 @@
 //! Contains everything header related
 
-use anyhow::{Context, Result};
-use bytesstr::BytesStr;
-
-pub use error::HeaderError;
-use headers::OneOrMore;
-use name::Name;
-
 use crate::parse::{ParseCtx, Parser};
 use crate::print::PrintCtx;
+use anyhow::{Context, Result};
+use bytesstr::BytesStr;
+use headers::OneOrMore;
+use name::Name;
 
 mod error;
 pub mod headers;
 pub mod multiple;
 pub(crate) mod name;
+
+pub use error::HeaderError;
 
 // ==== PARSE TRAITS ====
 

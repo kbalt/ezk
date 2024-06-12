@@ -1,19 +1,16 @@
-use std::fmt;
-use std::str::FromStr;
-
+use crate::header::headers::OneOrMore;
+use crate::header::{ConstNamed, ExtendValues, HeaderParse};
+use crate::method::Method;
+use crate::parse::ParseCtx;
+use crate::print::PrintCtx;
+use crate::Name;
 use anyhow::{Error, Result};
+use internal::ws;
 use nom::character::complete::digit1;
 use nom::combinator::{map, map_res};
 use nom::Finish;
-
-use internal::ws;
-
-use crate::header::{ConstNamed, ExtendValues, HeaderParse};
-use crate::header::headers::OneOrMore;
-use crate::method::Method;
-use crate::Name;
-use crate::parse::ParseCtx;
-use crate::print::PrintCtx;
+use std::fmt;
+use std::str::FromStr;
 
 from_str_header! {
     /// `RSeq` header
