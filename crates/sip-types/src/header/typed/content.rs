@@ -40,9 +40,8 @@ impl ExtendValues for ContentType {
 
 #[cfg(test)]
 mod test {
-    use crate::Headers;
-
     use super::*;
+    use crate::Headers;
 
     #[test]
     fn print_content_length() {
