@@ -57,8 +57,8 @@ impl PartialEq<str> for Name {
 }
 
 impl<T> From<T> for Name
-    where
-        T: Into<BytesStr> + AsRef<[u8]>,
+where
+    T: Into<BytesStr> + AsRef<[u8]>,
 {
     fn from(name: T) -> Self {
         Name::from_bytes(name)

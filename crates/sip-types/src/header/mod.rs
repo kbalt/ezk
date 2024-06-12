@@ -31,8 +31,8 @@ pub trait DecodeValues: Sized {
     ///
     /// Implementations should assume that `values` will always yield at least one value
     fn decode<'i, I>(parser: Parser, values: &mut I) -> Result<(&'i str, Self)>
-        where
-            I: Iterator<Item=&'i BytesStr>;
+    where
+        I: Iterator<Item = &'i BytesStr>;
 }
 
 /// Simplified parse trait which plays nicer with nom parsers. Should be implemented
@@ -75,8 +75,8 @@ pub trait ExtendValues {
 
 impl<H: HeaderParse> DecodeValues for H {
     fn decode<'i, I>(parser: Parser, values: &mut I) -> Result<(&'i str, Self)>
-        where
-            I: Iterator<Item=&'i BytesStr>,
+    where
+        I: Iterator<Item = &'i BytesStr>,
     {
         let value = values.next().context("no items in values")?;
 
