@@ -1,5 +1,5 @@
-use anyhow::{Error, Result};
 use crate::header::name::Name;
+use anyhow::{Error, Result};
 use bytesstr::BytesStr;
 
 csv_header! {

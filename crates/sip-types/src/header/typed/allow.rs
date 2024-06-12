@@ -1,7 +1,6 @@
-use anyhow::{Error, Result};
-
 use crate::header::name::Name;
 use crate::method::Method;
+use anyhow::{Error, Result};
 
 csv_header! {
     /// `Allow` header, contains only one method.

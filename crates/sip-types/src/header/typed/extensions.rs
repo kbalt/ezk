@@ -1,7 +1,6 @@
+use crate::header::name::Name;
 use anyhow::{Error, Result};
 use bytesstr::BytesStr;
-
-use crate::header::name::Name;
 
 csv_header! {
     /// `Supported` header, contains only one supported extension.
