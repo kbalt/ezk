@@ -1,10 +1,5 @@
-use crate::header::headers::OneOrMore;
 use crate::header::name::Name;
-use crate::header::{ConstNamed, ExtendValues, HeaderParse};
 use crate::method::Method;
-use crate::parse::ParseCtx;
-use crate::print::PrintCtx;
-use anyhow::Result;
 
 csv_header! {
     /// `Allow` header, contains only one method.
