@@ -12,7 +12,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-internal = { package = "ezk-internal", path = "../internal", version = "0.1" }
+internal = { package = "ezk-internal", path = "../internal", version = "0.2" }
 sip-types = { package = "ezk-sip-types", path = "../sip-types", version = "0.1" }
 stun-types = { package = "ezk-stun-types", path = "../stun-types", version = "0.1.1" }
 stun = { package = "ezk-stun", path = "../stun", version = "0.2.0" }

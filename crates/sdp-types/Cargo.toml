@@ -1,6 +1,6 @@
 [package]
 name = "ezk-sdp-types"
-version = "0.1.1"
+version = "0.2.0"
 description = "SDP types providing parsing & serialization"
 categories = ["network-programming", "multimedia"]
 keywords = ["sdp"]
@@ -12,7 +12,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-internal = { package = "ezk-internal", path = "../internal", version = "0.1" }
+internal = { package = "ezk-internal", path = "../internal", version = "0.2" }
 
 bytesstr = "1"
 nom = { version = "7", default-features = false, features = ["alloc"] }
