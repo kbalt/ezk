@@ -1,12 +1,12 @@
 use super::streaming::{
     StreamingFactory, StreamingListener, StreamingListenerBuilder, StreamingTransport,
 };
+use rustls_pki_types::{IpAddr, ServerName};
 use sip_types::{host::Host, uri::UriInfo};
 use std::convert::TryFrom;
 use std::io;
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
-use tokio_rustls::rustls::ServerName;
 use tokio_rustls::{TlsAcceptor, TlsConnector, TlsStream};
 
 // ==== Connector
@@ -22,9 +22,10 @@ impl StreamingFactory for TlsConnector {
     ) -> io::Result<Self::Transport> {
         let server_name = match uri_info.host_port.host {
             Host::Name(ref name) => ServerName::try_from(name.as_str())
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?,
-            Host::IP4(ip) => ServerName::IpAddress(ip.into()),
-            Host::IP6(ip) => ServerName::IpAddress(ip.into()),
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
+                .to_owned(),
+            Host::IP4(ip) => ServerName::IpAddress(IpAddr::V4(ip.into())),
+            Host::IP6(ip) => ServerName::IpAddress(IpAddr::V6(ip.into())),
         };
 
         let stream = TcpStream::connect(addr).await?;
