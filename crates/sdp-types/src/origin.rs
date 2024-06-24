@@ -6,7 +6,7 @@ use nom::bytes::complete::take_while;
 use nom::combinator::map;
 use std::fmt;
 
-/// The origin of the message
+/// Origin field (`o=`)
 ///
 /// [RFC8866](https://www.rfc-editor.org/rfc/rfc8866.html#section-5.2)
 #[derive(Debug, Clone)]

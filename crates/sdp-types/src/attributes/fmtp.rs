@@ -10,9 +10,9 @@ use nom::sequence::preceded;
 use std::fmt;
 use std::str::FromStr;
 
-/// Specify additional parameters for a format specified by a `rtpmap`
+/// Fmtp attribute (`a=fmtp`)
 ///
-/// Media-Level attribute
+/// Specify additional parameters for a format specified by a `rtpmap` in a media description
 ///
 /// [RFC8866](https://www.rfc-editor.org/rfc/rfc8866.html#section-6.15)
 #[derive(Debug, Clone)]

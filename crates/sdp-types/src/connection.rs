@@ -5,7 +5,7 @@ use nom::combinator::opt;
 use nom::sequence::pair;
 use std::fmt;
 
-/// Connection field
+/// Connection field (`c=`)
 ///
 /// [RFC8866](https://www.rfc-editor.org/rfc/rfc8866.html#section-5.7)
 #[derive(Debug, Clone)]

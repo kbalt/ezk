@@ -13,10 +13,12 @@ use std::fmt;
 use std::net::IpAddr;
 use std::str::FromStr;
 
+/// Encountered invalid values for key-value params when parsing an [`IceCandidate`]
 #[derive(Debug, thiserror::Error)]
 #[error("failed to parse candidate")]
-pub struct InvalidCandidateParam;
+pub struct InvalidCandidateParamError;
 
+/// Used by [`IceCandidate`]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum UntaggedAddress {
     Fqdn(BytesStr),
@@ -46,11 +48,11 @@ impl fmt::Display for UntaggedAddress {
     }
 }
 
-/// SDP ICE Candidate
+/// ICE Candidate (`a=candidate`)
 ///
 /// [RFC5245](https://tools.ietf.org/html/rfc5245#section-15.1)
 #[derive(Debug, Clone)]
-pub struct Candidate {
+pub struct IceCandidate {
     /// Session unique ID assigned to the candidate
     pub foundation: BytesStr,
 
@@ -97,7 +99,7 @@ pub struct Candidate {
     pub unknown: Vec<(BytesStr, BytesStr)>,
 }
 
-impl Candidate {
+impl IceCandidate {
     pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
         map_res(
                 preceded(
@@ -128,7 +130,7 @@ impl Candidate {
                         ))),
                     )),
                 ),
-                |(foundation, (component, transport, priority, address, port, type_), p_ext)| -> Result<Candidate, InvalidCandidateParam> {
+                |(foundation, (component, transport, priority, address, port, type_), p_ext)| -> Result<IceCandidate, InvalidCandidateParamError> {
                     let mut unknown = vec![];
 
                     let mut rel_addr = None;
@@ -136,8 +138,8 @@ impl Candidate {
 
                     for (key, value) in p_ext {
                         match key {
-                            "raddr" => rel_addr = Some(UntaggedAddress::parse(src)(value).map_err(|_| InvalidCandidateParam)?.1),
-                            "rport" => rel_port = Some(u16::from_str(value).map_err(|_| InvalidCandidateParam)?),
+                            "raddr" => rel_addr = Some(UntaggedAddress::parse(src)(value).map_err(|_| InvalidCandidateParamError)?.1),
+                            "rport" => rel_port = Some(u16::from_str(value).map_err(|_| InvalidCandidateParamError)?),
                             _ => unknown.push((
                                 BytesStr::from_parse(src, key),
                                 BytesStr::from_parse(src, value),
@@ -145,7 +147,7 @@ impl Candidate {
                         }
                     }
 
-                    Ok(Candidate {
+                    Ok(IceCandidate {
                         foundation: BytesStr::from_parse(src, foundation),
                         component,
                         transport: BytesStr::from_parse(src, transport),
@@ -162,7 +164,7 @@ impl Candidate {
     }
 }
 
-impl fmt::Display for Candidate {
+impl fmt::Display for IceCandidate {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
@@ -203,7 +205,7 @@ mod test {
             "candidate:12 2 TCP 2105458942 192.168.56.1 9 typ host raddr 192.168.1.22 rport 123 tcptype active",
         );
 
-        let (rem, candidate) = Candidate::parse(input.as_ref(), &input).unwrap();
+        let (rem, candidate) = IceCandidate::parse(input.as_ref(), &input).unwrap();
 
         assert_eq!(candidate.foundation, "12");
         assert_eq!(candidate.component, 2);
@@ -235,7 +237,7 @@ mod test {
 
     #[test]
     fn candidate_print() {
-        let candidate = Candidate {
+        let candidate = IceCandidate {
             foundation: "1".into(),
             component: 1,
             transport: "UDP".into(),

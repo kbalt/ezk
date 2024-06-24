@@ -85,11 +85,11 @@ impl fmt::Display for TransportProtocol {
     }
 }
 
-/// Media description or `m` field
+/// Media field (`m=`)
 ///
 /// [RFC8866](https://www.rfc-editor.org/rfc/rfc8866.html#section-5.14)
 #[derive(Debug, Clone)]
-pub struct MediaDescription {
+pub struct Media {
     pub media_type: MediaType,
     pub port: u16,
     pub ports_num: Option<u32>,
@@ -97,7 +97,7 @@ pub struct MediaDescription {
     pub fmts: Vec<u32>,
 }
 
-impl MediaDescription {
+impl Media {
     pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
         map(
             ws((
@@ -107,7 +107,7 @@ impl MediaDescription {
                 TransportProtocol::parse(src),
                 many0(map(ws((map_res(digit1, FromStr::from_str),)), |t| t.0)),
             )),
-            |(media, port, ports_num, proto, fmts)| MediaDescription {
+            |(media, port, ports_num, proto, fmts)| Media {
                 media_type: media,
                 port,
                 ports_num,
@@ -118,7 +118,7 @@ impl MediaDescription {
     }
 }
 
-impl fmt::Display for MediaDescription {
+impl fmt::Display for Media {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "m={}", self.media_type)?;
 
@@ -147,7 +147,7 @@ mod test {
     fn media() {
         let input = BytesStr::from_static("audio 49170 RTP/AVP 0");
 
-        let (rem, media) = MediaDescription::parse(input.as_ref(), &input).unwrap();
+        let (rem, media) = Media::parse(input.as_ref(), &input).unwrap();
 
         assert_eq!(media.media_type, MediaType::Audio);
         assert_eq!(media.port, 49170);

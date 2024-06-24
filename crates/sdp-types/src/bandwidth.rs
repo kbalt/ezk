@@ -9,7 +9,7 @@ use nom::sequence::tuple;
 use std::fmt;
 use std::str::FromStr;
 
-/// Bandwidth Information
+/// Bandwidth field (`b=`)
 ///
 /// [RFC8866](https://www.rfc-editor.org/rfc/rfc8866.html#section-5.8)
 #[derive(Debug, Clone)]

@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-/// Media direction attribute
+/// Media direction attribute e.g. (`a=sendrecv`)
 ///
 /// Session and Media Level attribute.  
 /// If the direction is specified at the session level but not as media level

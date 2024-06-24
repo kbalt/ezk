@@ -10,14 +10,15 @@ use nom::sequence::{preceded, tuple};
 use std::fmt;
 use std::str::FromStr;
 
-/// Specify an alternative address/port for RTCP  
-/// Defined as a simple fix for NAT transversal with STUN
+/// Rtcp attribute (`a=rtcp`)
+///
+/// Specify an alternative address/port for RTCP
 ///
 /// Media Level attribute
 ///
 /// [RFC3605](https://datatracker.ietf.org/doc/html/rfc3605)
 #[derive(Debug, Clone)]
-pub struct RtcpAttr {
+pub struct Rtcp {
     /// Port to be used for RTCP
     pub port: u16,
 
@@ -25,7 +26,7 @@ pub struct RtcpAttr {
     pub address: Option<TaggedAddress>,
 }
 
-impl RtcpAttr {
+impl Rtcp {
     pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
         preceded(
             tag("rtcp:"),
@@ -36,7 +37,7 @@ impl RtcpAttr {
                     // optional tagged address
                     opt(ws((TaggedAddress::parse(src),))),
                 )),
-                |(port, address)| RtcpAttr {
+                |(port, address)| Rtcp {
                     port,
                     address: address.map(|t| t.0),
                 },
@@ -45,7 +46,7 @@ impl RtcpAttr {
     }
 }
 
-impl fmt::Display for RtcpAttr {
+impl fmt::Display for Rtcp {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "a=rtcp:{}", self.port)?;
 
@@ -67,7 +68,7 @@ mod test {
     fn rtcp() {
         let input = BytesStr::from_static("rtcp:4444");
 
-        let (rem, rtcp) = RtcpAttr::parse(input.as_ref(), &input).unwrap();
+        let (rem, rtcp) = Rtcp::parse(input.as_ref(), &input).unwrap();
 
         assert!(rem.is_empty());
 
@@ -79,7 +80,7 @@ mod test {
     fn rtcp_address() {
         let input = BytesStr::from_static("rtcp:4444 IN IP4 192.168.123.222");
 
-        let (rem, rtcp) = RtcpAttr::parse(input.as_ref(), &input).unwrap();
+        let (rem, rtcp) = Rtcp::parse(input.as_ref(), &input).unwrap();
 
         assert!(rem.is_empty());
 
@@ -91,7 +92,7 @@ mod test {
 
     #[test]
     fn rtcp_print() {
-        let rtcp = RtcpAttr {
+        let rtcp = Rtcp {
             port: 4444,
             address: None,
         };
@@ -101,7 +102,7 @@ mod test {
 
     #[test]
     fn rtcp_address_print() {
-        let rtcp = RtcpAttr {
+        let rtcp = Rtcp {
             port: 4444,
             address: Some(TaggedAddress::IP4(Ipv4Addr::new(192, 168, 123, 222))),
         };

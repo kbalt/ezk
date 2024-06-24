@@ -6,7 +6,7 @@ use nom::combinator::map_res;
 use std::fmt;
 use std::str::FromStr;
 
-/// Defines a start and stop time for the session.
+/// Time field (`t=`)
 ///
 /// [RFC8866](https://www.rfc-editor.org/rfc/rfc8866.html#section-5.9)
 #[derive(Debug, Clone)]

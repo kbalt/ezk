@@ -9,18 +9,18 @@ use nom::combinator::map;
 use nom::multi::many1;
 use std::fmt;
 
-/// ice-options
+/// Ice options attribute (`a=ice-options`)
 ///
 /// Session Level attribute
 ///
 /// [RFC5245](https://datatracker.ietf.org/doc/html/rfc5245#section-15.5)
 #[derive(Default, Debug, Clone)]
-pub struct Options {
+pub struct IceOptions {
     /// Non empty list of options
     pub options: Vec<BytesStr>,
 }
 
-impl Options {
+impl IceOptions {
     pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
         map(
             many1(map(take_while1(ice_char), |option| {
@@ -31,7 +31,7 @@ impl Options {
     }
 }
 
-impl fmt::Display for Options {
+impl fmt::Display for IceOptions {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if self.options.is_empty() {
             return Ok(());
@@ -47,21 +47,21 @@ impl fmt::Display for Options {
     }
 }
 
-/// ice-ufrag attribute
+/// Ice username fragment attribute (`a=ice-ufrag`)
 ///
 /// Session and Media Level attribute  
 /// If not present at media level the attribute at session level is taken as default.
 ///
 /// [RFC5245](https://datatracker.ietf.org/doc/html/rfc5245#section-15.4)
 #[derive(Debug, Clone)]
-pub struct UsernameFragment {
+pub struct IceUsernameFragment {
     /// The username fragment.
     ///
     /// Must be between 4 and 256 bytes long
     pub ufrag: BytesStr,
 }
 
-impl UsernameFragment {
+impl IceUsernameFragment {
     pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
         map(take_while_m_n(4, 256, ice_char), |ufrag| Self {
             ufrag: BytesStr::from_parse(src, ufrag),
@@ -69,27 +69,27 @@ impl UsernameFragment {
     }
 }
 
-impl fmt::Display for UsernameFragment {
+impl fmt::Display for IceUsernameFragment {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "a=ice-ufrag:{}", self.ufrag)
     }
 }
 
-/// ice-pwd attribute
+/// Ice password attribute (`a=ice-pwd`)
 ///
 /// Session and Media Level attribute  
 /// If not present at media level the attribute at session level is taken as default.
 ///
 /// [RFC5245](https://datatracker.ietf.org/doc/html/rfc5245#section-15.4)
 #[derive(Debug, Clone)]
-pub struct Password {
+pub struct IcePassword {
     /// The password
     ///
     /// Must be between 22 and 256 bytes long
     pub pwd: BytesStr,
 }
 
-impl Password {
+impl IcePassword {
     pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
         map(take_while_m_n(22, 256, ice_char), |pwd| Self {
             pwd: BytesStr::from_parse(src, pwd),
@@ -97,7 +97,7 @@ impl Password {
     }
 }
 
-impl fmt::Display for Password {
+impl fmt::Display for IcePassword {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "a=ice-pwd:{}", self.pwd)
     }

@@ -10,6 +10,8 @@ use nom::sequence::{preceded, terminated, tuple};
 use std::fmt;
 use std::str::FromStr;
 
+/// Rtpmap attribute (`a=rtpmap`)
+///
 /// Map a RTP payload number specified in the media description to a encoding.
 ///
 /// Media-Level attribute

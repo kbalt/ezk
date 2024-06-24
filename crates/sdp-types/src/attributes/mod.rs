@@ -2,12 +2,19 @@ use bytes::Bytes;
 use bytesstr::BytesStr;
 use std::fmt;
 
-pub mod candidate;
-pub mod direction;
-pub mod fmtp;
-pub mod ice;
-pub mod rtcp;
-pub mod rtpmap;
+mod candidate;
+mod direction;
+mod fmtp;
+mod ice;
+mod rtcp;
+mod rtpmap;
+
+pub use candidate::{IceCandidate, InvalidCandidateParamError, UntaggedAddress};
+pub use direction::Direction;
+pub use fmtp::Fmtp;
+pub use ice::{IceOptions, IcePassword, IceUsernameFragment};
+pub use rtcp::Rtcp;
+pub use rtpmap::RtpMap;
 
 /// `name:[value]` pair which contains an unparsed/unknown attribute
 #[derive(Debug, Clone)]
