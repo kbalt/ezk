@@ -3,11 +3,9 @@ use crate::parse::ParseCtx;
 use crate::print::{AppendCtx, Print, PrintCtx};
 use crate::uri::params::{Params, CPS};
 use crate::Name;
-use anyhow::Result;
-use internal::ws;
+use internal::{ws, IResult};
 use nom::character::complete::alphanumeric1;
 use nom::combinator::{map, map_res};
-use nom::Finish;
 use std::fmt;
 use std::str::FromStr;
 
@@ -37,8 +35,8 @@ impl ConstNamed for SessionExpires {
 }
 
 impl HeaderParse for SessionExpires {
-    fn parse<'i>(ctx: ParseCtx<'_>, i: &'i str) -> Result<(&'i str, Self)> {
-        let (rem, se) = map(
+    fn parse<'i>(ctx: ParseCtx<'_>, i: &'i str) -> IResult<&'i str, Self> {
+        map(
             ws((
                 map_res(alphanumeric1, FromStr::from_str),
                 Params::<CPS>::parse(ctx),
@@ -60,9 +58,6 @@ impl HeaderParse for SessionExpires {
                 }
             },
         )(i)
-        .finish()?;
-
-        Ok((rem, se))
     }
 }
 

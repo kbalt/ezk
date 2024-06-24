@@ -3,15 +3,15 @@ use super::{ConstNamed, DecodeValues, ExtendValues, HeaderParse};
 use crate::header::name::Name;
 use crate::parse::{ParseCtx, Parser};
 use crate::print::PrintCtx;
-use anyhow::Result;
 use bytesstr::BytesStr;
+use internal::IResult;
 
 impl<H: ConstNamed> ConstNamed for Vec<H> {
     const NAME: Name = H::NAME;
 }
 
 impl<H: HeaderParse> DecodeValues for Vec<H> {
-    fn decode<'i, I>(parser: Parser, values: &mut I) -> Result<(&'i str, Self)>
+    fn decode<'i, I>(parser: Parser, values: &mut I) -> IResult<&'i str, Self>
     where
         I: Iterator<Item = &'i BytesStr>,
     {

@@ -3,6 +3,8 @@ use crate::header::name::Name;
 use crate::parse::Parser;
 use crate::print::{AppendCtx, Print, PrintCtx};
 use bytesstr::BytesStr;
+use internal::verbose_error_to_owned;
+use nom::Finish;
 use std::iter::{once, FromIterator};
 use std::mem::take;
 use std::{fmt, slice};
@@ -387,11 +389,11 @@ impl OneOrMore {
 
     fn decode<H: DecodeValues>(&self, name: Name, parser: Parser) -> Result<H, HeaderError> {
         match &self {
-            OneOrMore::One(v) => H::decode(parser, &mut once(v)),
-            OneOrMore::More(v) => H::decode(parser, &mut v.iter()),
+            OneOrMore::One(v) => H::decode(parser, &mut once(v)).finish(),
+            OneOrMore::More(v) => H::decode(parser, &mut v.iter()).finish(),
         }
         .map(|(_, h)| h)
-        .map_err(|err| HeaderError::malformed(name, err))
+        .map_err(|err| HeaderError::malformed(name, verbose_error_to_owned(err)))
     }
 }
 

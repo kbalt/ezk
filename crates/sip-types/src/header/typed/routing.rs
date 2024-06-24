@@ -4,10 +4,9 @@ use crate::parse::ParseCtx;
 use crate::print::{AppendCtx, Print, PrintCtx, UriContext};
 use crate::uri::params::{Params, CPS};
 use crate::uri::NameAddr;
-use anyhow::Result;
+use internal::IResult;
 use nom::combinator::map;
 use nom::sequence::tuple;
-use nom::Finish;
 use std::fmt;
 
 /// Implementation for all Route-related headers.
@@ -18,14 +17,11 @@ pub struct Routing {
 }
 
 impl HeaderParse for Routing {
-    fn parse<'i>(ctx: ParseCtx<'_>, i: &'i str) -> Result<(&'i str, Self)> {
-        let (rem, routing) = map(
+    fn parse<'i>(ctx: ParseCtx<'_>, i: &'i str) -> IResult<&'i str, Self> {
+        map(
             tuple((NameAddr::parse_no_params(ctx), Params::<CPS>::parse(ctx))),
             |(uri, params)| Self { uri, params },
         )(i)
-        .finish()?;
-
-        Ok((rem, routing))
     }
 }
 

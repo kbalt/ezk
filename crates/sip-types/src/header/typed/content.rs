@@ -3,8 +3,9 @@ use crate::header::name::Name;
 use crate::header::{ConstNamed, ExtendValues, HeaderParse};
 use crate::parse::ParseCtx;
 use crate::print::PrintCtx;
-use anyhow::Result;
 use bytesstr::BytesStr;
+use internal::{identity, IResult};
+use nom::combinator::map;
 
 from_str_header! {
     /// `Content-Length` header
@@ -22,8 +23,10 @@ impl ConstNamed for ContentType {
 }
 
 impl HeaderParse for ContentType {
-    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> Result<(&'i str, Self)> {
-        Ok(("", Self(BytesStr::from_parse(ctx.src, i.trim()))))
+    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> IResult<&'i str, Self> {
+        map(identity(), |i| {
+            Self(BytesStr::from_parse(ctx.src, i.trim()))
+        })(i)
     }
 }
 

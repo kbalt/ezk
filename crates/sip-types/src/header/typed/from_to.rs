@@ -4,12 +4,10 @@ use crate::parse::ParseCtx;
 use crate::print::{AppendCtx, Print, PrintCtx, UriContext};
 use crate::uri::params::{Params, CPS};
 use crate::uri::NameAddr;
-use anyhow::Result;
 use bytesstr::BytesStr;
 use internal::IResult;
 use nom::combinator::map;
 use nom::sequence::tuple;
-use nom::Finish;
 use std::fmt;
 
 /// Type which is being wrapped by [From] and [To]
@@ -44,8 +42,8 @@ impl FromTo {
 }
 
 impl HeaderParse for FromTo {
-    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> Result<(&'i str, Self)> {
-        let (rem, from_to) = map(
+    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> IResult<&'i str, Self> {
+        map(
             tuple((NameAddr::parse_no_params(ctx), Params::<CPS>::parse(ctx))),
             |(uri, mut params)| FromTo {
                 uri,
@@ -53,9 +51,6 @@ impl HeaderParse for FromTo {
                 params,
             },
         )(i)
-        .finish()?;
-
-        Ok((rem, from_to))
     }
 }
 

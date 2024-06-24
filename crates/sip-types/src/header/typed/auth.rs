@@ -4,14 +4,13 @@ use crate::parse::{parse_quoted, token, whitespace, ParseCtx};
 use crate::print::{AppendCtx, Print, PrintCtx};
 use anyhow::{bail, Context};
 use bytesstr::BytesStr;
+use internal::ws;
 use internal::IResult;
-use internal::{ws, ParseError};
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_while, take_while1};
 use nom::combinator::{map, map_res};
 use nom::multi::many0;
 use nom::sequence::{preceded, tuple};
-use nom::Finish;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use std::borrow::Cow;
 use std::fmt;
@@ -59,19 +58,16 @@ pub enum AuthChallenge {
 }
 
 impl HeaderParse for AuthChallenge {
-    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> anyhow::Result<(&'i str, Self)> {
-        let (rem, challenge) = map_res(
+    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> IResult<&'i str, Self> {
+        map_res(
             parse_auth_params(ctx),
-            |(scheme, params)| -> Result<Self, ParseError> {
+            |(scheme, params)| -> anyhow::Result<Self> {
                 match scheme.as_ref() {
                     "Digest" => Ok(Self::Digest(DigestChallenge::from_auth_params(params)?)),
                     _ => Ok(Self::Other(Auth { scheme, params })),
                 }
             },
         )(i)
-        .finish()?;
-
-        Ok((rem, challenge))
     }
 }
 
@@ -210,19 +206,16 @@ pub enum AuthResponse {
 }
 
 impl HeaderParse for AuthResponse {
-    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> anyhow::Result<(&'i str, Self)> {
-        let (rem, response) = map_res(
+    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> IResult<&'i str, Self> {
+        map_res(
             parse_auth_params(ctx),
-            |(scheme, params)| -> Result<Self, ParseError> {
+            |(scheme, params)| -> anyhow::Result<Self> {
                 match scheme.as_ref() {
                     "Digest" => Ok(Self::Digest(DigestResponse::from_auth_params(params)?)),
                     _ => Ok(Self::Other(Auth { scheme, params })),
                 }
             },
         )(i)
-        .finish()?;
-
-        Ok((rem, response))
     }
 }
 

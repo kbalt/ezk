@@ -5,11 +5,11 @@ use crate::method::Method;
 use crate::parse::{whitespace, ParseCtx};
 use crate::print::PrintCtx;
 use anyhow::Result;
+use internal::IResult;
 use nom::bytes::complete::take_while;
 use nom::character::complete::digit1;
 use nom::combinator::map_res;
 use nom::sequence::separated_pair;
-use nom::Finish;
 use std::num::ParseIntError;
 use std::str::FromStr;
 
@@ -32,8 +32,8 @@ impl ConstNamed for CSeq {
 }
 
 impl HeaderParse for CSeq {
-    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> Result<(&'i str, Self)> {
-        let (rem, cseq) = map_res(
+    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> IResult<&'i str, Self> {
+        map_res(
             separated_pair(
                 map_res(digit1, FromStr::from_str),
                 take_while(whitespace),
@@ -41,9 +41,6 @@ impl HeaderParse for CSeq {
             ),
             |(cseq, method)| -> Result<_, ParseIntError> { Ok(CSeq { cseq, method }) },
         )(i)
-        .finish()?;
-
-        Ok((rem, cseq))
     }
 }
 

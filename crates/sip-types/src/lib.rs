@@ -25,3 +25,9 @@ pub use method::Method;
 
 pub use header::headers::Headers;
 pub use header::name::Name;
+
+#[doc(hidden)]
+pub mod _private_reexport {
+    pub use internal::{identity, IResult};
+    pub use nom;
+}

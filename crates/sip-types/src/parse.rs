@@ -4,7 +4,7 @@
 use crate::uri::sip::SipUri;
 use crate::uri::Uri;
 use bytes::Bytes;
-use internal::{IResult, ParseError};
+use internal::IResult;
 use nom::branch::alt;
 use nom::bytes::complete::{escaped, is_not};
 use nom::character::complete::char;
@@ -33,9 +33,7 @@ pub struct Parser {
 }
 
 fn fail(_: &str) -> IResult<&str, Box<dyn Uri>> {
-    Err(nom::Err::Error(ParseError::from(anyhow::anyhow!(
-        "failed to parse any uri"
-    ))))
+    Err(nom::Err::Error(nom::error::VerboseError { errors: vec![] }))
 }
 
 impl Default for Parser {

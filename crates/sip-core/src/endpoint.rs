@@ -7,7 +7,7 @@ use crate::transport::{
 use crate::{BaseHeaders, IncomingRequest, Layer, MayTake, Request, Response, Result, StunError};
 use bytes::{Bytes, BytesMut};
 use bytesstr::BytesStr;
-use internal::{Finish, ParseError};
+use internal::{verbose_error_to_owned, Finish};
 use sip_types::header::typed::{Accept, Allow, Supported, Via};
 use sip_types::host::{Host, HostPort};
 use sip_types::msg::{MessageLine, StatusLine};
@@ -72,11 +72,16 @@ impl Endpoint {
     }
 
     /// Utility function to parse an uri
-    pub fn parse_uri(&self, i: impl AsRef<str>) -> Result<Box<dyn Uri>, ParseError> {
+    pub fn parse_uri(
+        &self,
+        i: impl AsRef<str>,
+    ) -> Result<Box<dyn Uri>, nom::error::VerboseError<String>> {
         let bytes = BytesStr::from(i.as_ref());
         let ctx = ParseCtx::new(bytes.as_ref(), self.parser());
 
-        let (_, uri) = ctx.parse_uri()(&bytes).finish()?;
+        let (_, uri) = ctx.parse_uri()(&bytes)
+            .finish()
+            .map_err(verbose_error_to_owned)?;
 
         Ok(uri)
     }

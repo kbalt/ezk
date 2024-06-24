@@ -5,14 +5,12 @@ use crate::host::HostPort;
 use crate::parse::{token, whitespace, ParseCtx};
 use crate::print::{AppendCtx, Print, PrintCtx};
 use crate::uri::params::{Param, Params, CPS};
-use anyhow::Result;
 use bytesstr::BytesStr;
 use internal::ws;
 use internal::IResult;
 use nom::bytes::complete::{tag, take_while};
 use nom::combinator::map;
 use nom::sequence::{delimited, preceded, tuple};
-use nom::Finish;
 use std::fmt;
 
 /// `Via` header
@@ -48,8 +46,8 @@ impl ConstNamed for Via {
 }
 
 impl HeaderParse for Via {
-    fn parse<'i>(ctx: ParseCtx<'_>, i: &'i str) -> Result<(&'i str, Self)> {
-        let (rem, via) = map(
+    fn parse<'i>(ctx: ParseCtx<'_>, i: &'i str) -> IResult<&'i str, Self> {
+        map(
             tuple((
                 preceded(
                     parse_sip_version,
@@ -68,9 +66,6 @@ impl HeaderParse for Via {
                 params: p,
             },
         )(i)
-        .finish()?;
-
-        Ok((rem, via))
     }
 }
 

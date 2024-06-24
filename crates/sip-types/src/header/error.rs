@@ -1,3 +1,5 @@
+use nom::error::VerboseError;
+
 use super::name::Name;
 use std::error;
 use std::fmt;
@@ -14,7 +16,8 @@ pub struct HeaderError {
 #[derive(Debug)]
 enum Repr {
     Missing,
-    Malformed(anyhow::Error),
+    Malformed(VerboseError<String>),
+    MalformedAdhoc(&'static str),
 }
 
 impl HeaderError {
@@ -25,7 +28,7 @@ impl HeaderError {
         }
     }
 
-    pub const fn malformed(name: Name, error: anyhow::Error) -> Self {
+    pub const fn malformed(name: Name, error: VerboseError<String>) -> Self {
         HeaderError {
             name,
             repr: Repr::Malformed(error),
@@ -35,7 +38,7 @@ impl HeaderError {
     pub fn malformed_adhoc(name: Name, error: &'static str) -> Self {
         HeaderError {
             name,
-            repr: Repr::Malformed(anyhow::Error::msg(error)),
+            repr: Repr::MalformedAdhoc(error),
         }
     }
 
@@ -49,6 +52,11 @@ impl fmt::Display for HeaderError {
         match &self.repr {
             Repr::Missing => write!(f, "header {:?} is missing", self.name),
             Repr::Malformed(err) => write!(
+                f,
+                "header {:?} was found but is malformed: {}",
+                self.name, err
+            ),
+            Repr::MalformedAdhoc(err) => write!(
                 f,
                 "header {:?} was found but is malformed: {}",
                 self.name, err

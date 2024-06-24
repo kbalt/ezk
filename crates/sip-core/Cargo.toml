@@ -36,7 +36,8 @@ rand = "0.8"
 bytesstr = "1"
 downcast-rs = "1"
 trust-dns-resolver = "0.23"
-multimap = "0.9"
+multimap = "0.10"
+nom = "7"
 
 tokio-rustls = { version = "0.24", optional = true }
 tokio-native-tls = { version = "0.3", optional = true }

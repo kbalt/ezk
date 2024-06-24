@@ -6,12 +6,11 @@ use crate::parse::ParseCtx;
 use crate::print::PrintCtx;
 use crate::uri::params::{Params, CPS};
 use crate::Name;
-use anyhow::{Context, Result};
+use anyhow::Context;
 use bytesstr::BytesStr;
-use internal::{ws, ParseError};
+use internal::{ws, IResult};
 use nom::bytes::complete::take_while1;
 use nom::combinator::map_res;
-use nom::Finish;
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,10 +26,10 @@ impl ConstNamed for Replaces {
 }
 
 impl HeaderParse for Replaces {
-    fn parse<'i>(ctx: ParseCtx<'_>, i: &'i str) -> Result<(&'i str, Self)> {
-        let (rem, replaces) = map_res(
+    fn parse<'i>(ctx: ParseCtx<'_>, i: &'i str) -> IResult<&'i str, Self> {
+        map_res(
             ws((take_while1(|b| b != ';'), Params::<CPS>::parse(ctx))),
-            |(call_id, mut params)| -> Result<Self, ParseError> {
+            |(call_id, mut params)| -> anyhow::Result<Self> {
                 Ok(Self {
                     call_id: BytesStr::from_parse(ctx.src, call_id),
                     from_tag: params.take("from-tag").context("missing from-tag")?,
@@ -39,9 +38,6 @@ impl HeaderParse for Replaces {
                 })
             },
         )(i)
-        .finish()?;
-
-        Ok((rem, replaces))
     }
 }
 

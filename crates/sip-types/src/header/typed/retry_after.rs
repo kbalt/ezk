@@ -4,13 +4,12 @@ use crate::header::{ConstNamed, ExtendValues, HeaderParse};
 use crate::parse::{whitespace, ParseCtx};
 use crate::print::PrintCtx;
 use crate::uri::params::{Params, CPS};
-use anyhow::Result;
 use bytesstr::BytesStr;
+use internal::IResult;
 use nom::bytes::complete::{is_not, tag, take_while};
 use nom::character::complete::digit1;
 use nom::combinator::{map, map_res, opt};
 use nom::sequence::{delimited, preceded, tuple};
-use nom::Finish;
 use std::fmt;
 use std::str::FromStr;
 
@@ -50,8 +49,8 @@ impl ConstNamed for RetryAfter {
 }
 
 impl HeaderParse for RetryAfter {
-    fn parse<'i>(ctx: ParseCtx<'_>, i: &'i str) -> Result<(&'i str, Self)> {
-        let (rem, retry_after) = map(
+    fn parse<'i>(ctx: ParseCtx<'_>, i: &'i str) -> IResult<&'i str, Self> {
+        map(
             tuple((
                 map_res(digit1, FromStr::from_str),
                 Params::<CPS>::parse(ctx),
@@ -66,9 +65,6 @@ impl HeaderParse for RetryAfter {
                 comment: comment.map(|str| BytesStr::from_parse(ctx.src, str)),
             },
         )(i)
-        .finish()?;
-
-        Ok((rem, retry_after))
     }
 }
 

@@ -2,10 +2,11 @@
 
 use crate::parse::{ParseCtx, Parser};
 use crate::print::PrintCtx;
-use anyhow::{Context, Result};
 use bytesstr::BytesStr;
 use headers::OneOrMore;
+use internal::IResult;
 use name::Name;
+use nom::error::{VerboseError, VerboseErrorKind};
 
 mod error;
 pub mod headers;
@@ -29,7 +30,7 @@ pub trait DecodeValues: Sized {
     /// Decode a header from a iterator of [`BytesStr`].
     ///
     /// Implementations should assume that `values` will always yield at least one value
-    fn decode<'i, I>(parser: Parser, values: &mut I) -> Result<(&'i str, Self)>
+    fn decode<'i, I>(parser: Parser, values: &mut I) -> IResult<&'i str, Self>
     where
         I: Iterator<Item = &'i BytesStr>;
 }
@@ -37,7 +38,7 @@ pub trait DecodeValues: Sized {
 /// Simplified parse trait which plays nicer with nom parsers. Should be implemented
 /// by any header that only cares about a single header value.
 pub trait HeaderParse: Sized {
-    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> Result<(&'i str, Self)>;
+    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> IResult<&'i str, Self>;
 }
 
 // ==== PRINT TRAITS ====
@@ -73,11 +74,18 @@ pub trait ExtendValues {
 // ==== BLANKED IMPL ===-
 
 impl<H: HeaderParse> DecodeValues for H {
-    fn decode<'i, I>(parser: Parser, values: &mut I) -> Result<(&'i str, Self)>
+    fn decode<'i, I>(parser: Parser, values: &mut I) -> IResult<&'i str, Self>
     where
         I: Iterator<Item = &'i BytesStr>,
     {
-        let value = values.next().context("no items in values")?;
+        let Some(value) = values.next() else {
+            return Err(nom::Err::Failure(VerboseError {
+                errors: vec![(
+                    "",
+                    VerboseErrorKind::Context("No input to DecodeValues provided"),
+                )],
+            }));
+        };
 
         let ctx = ParseCtx {
             src: value.as_ref(),
@@ -100,7 +108,7 @@ macro_rules! csv_header {
         }
 
         impl $crate::header::HeaderParse for $struct_name {
-            fn parse<'i>(ctx: $crate::parse::ParseCtx, i: &'i str) -> anyhow::Result<(&'i str, Self)> {
+            fn parse<'i>(ctx: $crate::parse::ParseCtx, i: &'i str) -> $crate::_private_reexport::IResult<&'i str, Self> {
                 if let Some(comma_idx) = i.find(',') {
                     Ok((
                         &i[comma_idx..],
@@ -143,8 +151,14 @@ macro_rules! from_str_header {
         }
 
         impl $crate::header::HeaderParse for $struct_name {
-            fn parse<'i>(_: $crate::parse::ParseCtx, i: &'i str) -> anyhow::Result<(&'i str, Self)> {
-                Ok(("", Self(i.trim().parse()?)))
+            fn parse<'i>(_: $crate::parse::ParseCtx, i: &'i str) -> $crate::_private_reexport::IResult<&'i str, Self> {
+                use $crate::_private_reexport::nom;
+                use $crate::_private_reexport::identity;
+                use nom::combinator::map_res;
+
+                let (i, o) = map_res(identity(), |x| x.parse())(i.trim())?;
+
+                Ok((i, Self(o)))
             }
         }
 

@@ -4,11 +4,9 @@ use crate::method::Method;
 use crate::parse::ParseCtx;
 use crate::print::PrintCtx;
 use crate::Name;
-use anyhow::Result;
-use internal::ws;
+use internal::{ws, IResult};
 use nom::character::complete::digit1;
 use nom::combinator::{map, map_res};
-use nom::Finish;
 use std::fmt;
 use std::str::FromStr;
 
@@ -39,8 +37,8 @@ impl ConstNamed for RAck {
 }
 
 impl HeaderParse for RAck {
-    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> Result<(&'i str, Self)> {
-        let (rem, rack) = map(
+    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> IResult<&'i str, Self> {
+        map(
             ws((
                 map_res(digit1, FromStr::from_str),
                 map_res(digit1, FromStr::from_str),
@@ -48,9 +46,6 @@ impl HeaderParse for RAck {
             )),
             |(rack, cseq, method)| RAck { rack, cseq, method },
         )(i)
-        .finish()?;
-
-        Ok((rem, rack))
     }
 }
 
