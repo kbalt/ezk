@@ -17,5 +17,4 @@ internal = { package = "ezk-internal", path = "../internal", version = "0.2" }
 bytesstr = "1"
 nom = { version = "7", default-features = false, features = ["alloc"] }
 bytes = "1"
-anyhow = "1"
 thiserror = "1"

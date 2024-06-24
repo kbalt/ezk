@@ -15,7 +15,7 @@ repository.workspace = true
 [dependencies]
 byteorder = "1.4"
 rand = "0.8"
-bitfield = "0.14"
+bitfield = "0.15"
 bytes = "1"
 hmac = "0.12"
 sha-1 = "0.10"

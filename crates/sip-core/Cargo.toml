@@ -39,7 +39,7 @@ trust-dns-resolver = "0.23"
 multimap = "0.10"
 nom = "7"
 
-tokio-rustls = { version = "0.24", optional = true }
+tokio-rustls = { version = "0.26", optional = true }
 tokio-native-tls = { version = "0.3", optional = true }
 
 [features]
