@@ -6,6 +6,7 @@ use bytesstr::BytesStr;
 use internal::IResult;
 use nom::bytes::complete::{take_while1, take_while_m_n};
 use nom::combinator::map;
+use nom::error::context;
 use nom::multi::many1;
 use std::fmt;
 
@@ -22,11 +23,14 @@ pub struct IceOptions {
 
 impl IceOptions {
     pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
-        map(
-            many1(map(take_while1(ice_char), |option| {
-                BytesStr::from_parse(src, option)
-            })),
-            |options| Self { options },
+        context(
+            "parsing ice-options",
+            map(
+                many1(map(take_while1(ice_char), |option| {
+                    BytesStr::from_parse(src, option)
+                })),
+                |options| Self { options },
+            ),
         )(i)
     }
 }
@@ -63,9 +67,12 @@ pub struct IceUsernameFragment {
 
 impl IceUsernameFragment {
     pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
-        map(take_while_m_n(4, 256, ice_char), |ufrag| Self {
-            ufrag: BytesStr::from_parse(src, ufrag),
-        })(i)
+        context(
+            "parsing ice-ufrag",
+            map(take_while_m_n(4, 256, ice_char), |ufrag| Self {
+                ufrag: BytesStr::from_parse(src, ufrag),
+            }),
+        )(i)
     }
 }
 
@@ -91,9 +98,12 @@ pub struct IcePassword {
 
 impl IcePassword {
     pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
-        map(take_while_m_n(22, 256, ice_char), |pwd| Self {
-            pwd: BytesStr::from_parse(src, pwd),
-        })(i)
+        context(
+            "parsing ice-pwd",
+            map(take_while_m_n(22, 256, ice_char), |pwd| Self {
+                pwd: BytesStr::from_parse(src, pwd),
+            }),
+        )(i)
     }
 }
 

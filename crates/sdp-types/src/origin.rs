@@ -4,6 +4,7 @@ use bytesstr::BytesStr;
 use internal::{ws, IResult};
 use nom::bytes::complete::take_while;
 use nom::combinator::map;
+use nom::error::context;
 use std::fmt;
 
 /// Origin field (`o=`)
@@ -26,23 +27,26 @@ pub struct Origin {
 
 impl Origin {
     pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
-        map(
-            ws((
-                // username
-                take_while(not_whitespace),
-                // Session ID
-                take_while(not_whitespace),
-                // Session Version
-                take_while(not_whitespace),
-                // Origin transport address
-                TaggedAddress::parse(src),
-            )),
-            |(username, session_id, session_version, address)| Origin {
-                username: BytesStr::from_parse(src, username),
-                session_id: BytesStr::from_parse(src, session_id),
-                session_version: BytesStr::from_parse(src, session_version),
-                address,
-            },
+        context(
+            "parsing origin",
+            map(
+                ws((
+                    // username
+                    take_while(not_whitespace),
+                    // Session ID
+                    take_while(not_whitespace),
+                    // Session Version
+                    take_while(not_whitespace),
+                    // Origin transport address
+                    TaggedAddress::parse(src),
+                )),
+                |(username, session_id, session_version, address)| Origin {
+                    username: BytesStr::from_parse(src, username),
+                    session_id: BytesStr::from_parse(src, session_id),
+                    session_version: BytesStr::from_parse(src, session_version),
+                    address,
+                },
+            ),
         )(i)
     }
 }

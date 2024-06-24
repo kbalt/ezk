@@ -6,6 +6,7 @@ use internal::{ws, IResult};
 use nom::bytes::complete::{tag, take_while};
 use nom::character::complete::digit1;
 use nom::combinator::{map, map_res, opt};
+use nom::error::context;
 use nom::sequence::{preceded, terminated, tuple};
 use std::fmt;
 use std::str::FromStr;
@@ -34,32 +35,35 @@ pub struct RtpMap {
 
 impl RtpMap {
     pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
-        preceded(
-            tag("rtpmap:"),
-            map(
-                tuple((
-                    // payload num
-                    map_res(digit1, FromStr::from_str),
-                    // encoding
-                    ws((terminated(
-                        map(take_while(|c| c != '/'), |slice| {
-                            BytesStr::from_parse(src, slice)
-                        }),
-                        tag("/"),
-                    ),)),
-                    // clock rate
-                    map_res(digit1, FromStr::from_str),
-                    // optional params
-                    opt(preceded(tag("/"), |rem| {
-                        Ok(("", BytesStr::from_parse(src, rem)))
-                    })),
-                )),
-                |(payload, (encoding,), clock_rate, params)| RtpMap {
-                    payload,
-                    encoding,
-                    clock_rate,
-                    params,
-                },
+        context(
+            "parsing rtpmap",
+            preceded(
+                tag("rtpmap:"),
+                map(
+                    tuple((
+                        // payload num
+                        map_res(digit1, FromStr::from_str),
+                        // encoding
+                        ws((terminated(
+                            map(take_while(|c| c != '/'), |slice| {
+                                BytesStr::from_parse(src, slice)
+                            }),
+                            tag("/"),
+                        ),)),
+                        // clock rate
+                        map_res(digit1, FromStr::from_str),
+                        // optional params
+                        opt(preceded(tag("/"), |rem| {
+                            Ok(("", BytesStr::from_parse(src, rem)))
+                        })),
+                    )),
+                    |(payload, (encoding,), clock_rate, params)| RtpMap {
+                        payload,
+                        encoding,
+                        clock_rate,
+                        params,
+                    },
+                ),
             ),
         )(i)
     }

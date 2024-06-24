@@ -4,6 +4,7 @@ use internal::IResult;
 use nom::bytes::complete::{tag, take_while};
 use nom::character::complete::digit1;
 use nom::combinator::{map, map_res};
+use nom::error::context;
 use nom::sequence::tuple;
 use std::fmt;
 use std::str::FromStr;
@@ -26,16 +27,19 @@ pub struct Bandwidth {
 
 impl Bandwidth {
     pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
-        map(
-            tuple((
-                map(take_while(token), |m| BytesStr::from_parse(src, m)),
-                tag(":"),
-                map_res(digit1, FromStr::from_str),
-            )),
-            |(modifier, _, value)| Bandwidth {
-                type_: modifier,
-                bandwidth: value,
-            },
+        context(
+            "parsing bandwidth",
+            map(
+                tuple((
+                    map(take_while(token), |m| BytesStr::from_parse(src, m)),
+                    tag(":"),
+                    map_res(digit1, FromStr::from_str),
+                )),
+                |(modifier, _, value)| Bandwidth {
+                    type_: modifier,
+                    bandwidth: value,
+                },
+            ),
         )(i)
     }
 }

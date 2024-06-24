@@ -4,6 +4,7 @@ use internal::IResult;
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_while};
 use nom::combinator::map;
+use nom::error::context;
 use nom::sequence::preceded;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -31,28 +32,31 @@ impl From<IpAddr> for TaggedAddress {
 impl TaggedAddress {
     pub fn parse(src: &Bytes) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
         move |i| {
-            alt((
-                preceded(
-                    tag("IN IP4 "),
-                    map(take_while(probe_host), |ip4_host: &str| {
-                        if let Ok(addr) = ip4_host.parse() {
-                            TaggedAddress::IP4(addr)
-                        } else {
-                            TaggedAddress::IP4FQDN(BytesStr::from_parse(src, ip4_host))
-                        }
-                    }),
-                ),
-                preceded(
-                    tag("IN IP6 "),
-                    map(take_while(probe_host6), |ip6_host: &str| {
-                        if let Ok(addr) = ip6_host.parse() {
-                            TaggedAddress::IP6(addr)
-                        } else {
-                            TaggedAddress::IP6FQDN(BytesStr::from_parse(src, ip6_host))
-                        }
-                    }),
-                ),
-            ))(i)
+            context(
+                "parsing tagged address",
+                alt((
+                    preceded(
+                        tag("IN IP4 "),
+                        map(take_while(probe_host), |ip4_host: &str| {
+                            if let Ok(addr) = ip4_host.parse() {
+                                TaggedAddress::IP4(addr)
+                            } else {
+                                TaggedAddress::IP4FQDN(BytesStr::from_parse(src, ip4_host))
+                            }
+                        }),
+                    ),
+                    preceded(
+                        tag("IN IP6 "),
+                        map(take_while(probe_host6), |ip6_host: &str| {
+                            if let Ok(addr) = ip6_host.parse() {
+                                TaggedAddress::IP6(addr)
+                            } else {
+                                TaggedAddress::IP6FQDN(BytesStr::from_parse(src, ip6_host))
+                            }
+                        }),
+                    ),
+                )),
+            )(i)
         }
     }
 }

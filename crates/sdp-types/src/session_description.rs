@@ -8,13 +8,13 @@ use crate::{
     UnknownAttribute,
 };
 use bytesstr::BytesStr;
-use internal::{Finish, ParseError};
+use internal::{verbose_error_to_owned, Finish};
 use std::fmt::{self, Debug};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ParseSessionDescriptionError {
-    #[error(transparent)]
-    ParseError(#[from] ParseError),
+    #[error("{0}")]
+    ParseError(nom::error::VerboseError<String>),
     #[error("message ended unexpectedly")]
     Incomplete,
     #[error("message is missing the origin field (o=)")]
@@ -23,6 +23,12 @@ pub enum ParseSessionDescriptionError {
     MissingName,
     #[error("message is missing the time (t=) field")]
     MissingTime,
+}
+
+impl From<nom::error::VerboseError<&str>> for ParseSessionDescriptionError {
+    fn from(value: nom::error::VerboseError<&str>) -> Self {
+        Self::ParseError(verbose_error_to_owned(value))
+    }
 }
 
 /// Part of the [`SessionDescription`] describes a single media session

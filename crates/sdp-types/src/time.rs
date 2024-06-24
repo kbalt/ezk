@@ -3,6 +3,7 @@ use internal::IResult;
 use nom::character::complete::digit1;
 use nom::combinator::map;
 use nom::combinator::map_res;
+use nom::error::context;
 use std::fmt;
 use std::str::FromStr;
 
@@ -26,12 +27,15 @@ pub struct Time {
 
 impl Time {
     pub fn parse(i: &str) -> IResult<&str, Self> {
-        map(
-            ws((
-                map_res(digit1, FromStr::from_str),
-                map_res(digit1, FromStr::from_str),
-            )),
-            |(start, stop)| Time { start, stop },
+        context(
+            "parsing time field",
+            map(
+                ws((
+                    map_res(digit1, FromStr::from_str),
+                    map_res(digit1, FromStr::from_str),
+                )),
+                |(start, stop)| Time { start, stop },
+            ),
         )(i)
     }
 }

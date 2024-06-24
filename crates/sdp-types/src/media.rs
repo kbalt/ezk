@@ -6,6 +6,7 @@ use nom::branch::alt;
 use nom::bytes::complete::{tag, take_while1};
 use nom::character::complete::digit1;
 use nom::combinator::{map, map_res, opt};
+use nom::error::context;
 use nom::multi::many0;
 use std::fmt;
 use std::str::FromStr;
@@ -20,12 +21,15 @@ pub enum MediaType {
 
 impl MediaType {
     pub fn parse(i: &str) -> IResult<&str, Self> {
-        alt((
-            map(tag("audio"), |_| MediaType::Audio),
-            map(tag("video"), |_| MediaType::Video),
-            map(tag("text"), |_| MediaType::Text),
-            map(tag("application"), |_| MediaType::App),
-        ))(i)
+        context(
+            "parsing media type",
+            alt((
+                map(tag("audio"), |_| MediaType::Audio),
+                map(tag("video"), |_| MediaType::Video),
+                map(tag("text"), |_| MediaType::Text),
+                map(tag("application"), |_| MediaType::App),
+            )),
+        )(i)
     }
 }
 
@@ -99,21 +103,24 @@ pub struct Media {
 
 impl Media {
     pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
-        map(
-            ws((
-                MediaType::parse,
-                map_res(digit1, FromStr::from_str),
-                opt(slash_num),
-                TransportProtocol::parse(src),
-                many0(map(ws((map_res(digit1, FromStr::from_str),)), |t| t.0)),
-            )),
-            |(media, port, ports_num, proto, fmts)| Media {
-                media_type: media,
-                port,
-                ports_num,
-                proto,
-                fmts,
-            },
+        context(
+            "parsing media field",
+            map(
+                ws((
+                    MediaType::parse,
+                    map_res(digit1, FromStr::from_str),
+                    opt(slash_num),
+                    TransportProtocol::parse(src),
+                    many0(map(ws((map_res(digit1, FromStr::from_str),)), |t| t.0)),
+                )),
+                |(media, port, ports_num, proto, fmts)| Media {
+                    media_type: media,
+                    port,
+                    ports_num,
+                    proto,
+                    fmts,
+                },
+            ),
         )(i)
     }
 }

@@ -6,6 +6,7 @@ use internal::{ws, IResult};
 use nom::bytes::complete::tag;
 use nom::character::complete::digit1;
 use nom::combinator::{map, map_res, opt};
+use nom::error::context;
 use nom::sequence::{preceded, tuple};
 use std::fmt;
 use std::str::FromStr;
@@ -28,19 +29,22 @@ pub struct Rtcp {
 
 impl Rtcp {
     pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
-        preceded(
-            tag("rtcp:"),
-            map(
-                tuple((
-                    // port
-                    map_res(digit1, FromStr::from_str),
-                    // optional tagged address
-                    opt(ws((TaggedAddress::parse(src),))),
-                )),
-                |(port, address)| Rtcp {
-                    port,
-                    address: address.map(|t| t.0),
-                },
+        context(
+            "parsing rtcp field",
+            preceded(
+                tag("rtcp:"),
+                map(
+                    tuple((
+                        // port
+                        map_res(digit1, FromStr::from_str),
+                        // optional tagged address
+                        opt(ws((TaggedAddress::parse(src),))),
+                    )),
+                    |(port, address)| Rtcp {
+                        port,
+                        address: address.map(|t| t.0),
+                    },
+                ),
             ),
         )(i)
     }

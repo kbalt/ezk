@@ -6,6 +6,7 @@ use internal::{ws, IResult};
 use nom::bytes::complete::tag;
 use nom::character::complete::digit1;
 use nom::combinator::{map, map_res};
+use nom::error::context;
 use nom::sequence::preceded;
 use std::fmt;
 use std::str::FromStr;
@@ -26,19 +27,22 @@ pub struct Fmtp {
 
 impl Fmtp {
     pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
-        map(
-            preceded(
-                tag("fmtp:"),
-                ws((
-                    // format & remaining into params
-                    map_res(digit1, FromStr::from_str),
-                    |remaining| Ok(("", remaining)),
-                )),
+        context(
+            "parsing fmtp",
+            map(
+                preceded(
+                    tag("fmtp:"),
+                    ws((
+                        // format & remaining into params
+                        map_res(digit1, FromStr::from_str),
+                        |remaining| Ok(("", remaining)),
+                    )),
+                ),
+                |(format, params)| Fmtp {
+                    format,
+                    params: BytesStr::from_parse(src, params),
+                },
             ),
-            |(format, params)| Fmtp {
-                format,
-                params: BytesStr::from_parse(src, params),
-            },
         )(i)
     }
 }

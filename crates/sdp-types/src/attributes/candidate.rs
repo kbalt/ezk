@@ -7,6 +7,7 @@ use internal::{ws, IResult};
 use nom::bytes::complete::{tag, take_while, take_while1, take_while_m_n};
 use nom::character::complete::digit1;
 use nom::combinator::{map, map_res};
+use nom::error::context;
 use nom::multi::many0;
 use nom::sequence::{preceded, tuple};
 use std::fmt;
@@ -28,13 +29,16 @@ pub enum UntaggedAddress {
 impl UntaggedAddress {
     fn parse(src: &Bytes) -> impl FnMut(&str) -> IResult<&str, Self> + '_ {
         move |i| {
-            map(take_while(probe_host6), |address| {
-                if let Ok(address) = IpAddr::from_str(address) {
-                    UntaggedAddress::IpAddress(address)
-                } else {
-                    UntaggedAddress::Fqdn(BytesStr::from_parse(src, address))
-                }
-            })(i)
+            context(
+                "parsing untagged address",
+                map(take_while(probe_host6), |address| {
+                    if let Ok(address) = IpAddr::from_str(address) {
+                        UntaggedAddress::IpAddress(address)
+                    } else {
+                        UntaggedAddress::Fqdn(BytesStr::from_parse(src, address))
+                    }
+                }),
+            )(i)
         }
     }
 }
@@ -101,7 +105,9 @@ pub struct IceCandidate {
 
 impl IceCandidate {
     pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
-        map_res(
+        context(
+    "parsing ice candidate",
+            map_res(
                 preceded(
                     tag("candidate:"),
                     tuple((
@@ -160,7 +166,8 @@ impl IceCandidate {
                         unknown,
                     })
                 }
-            )(i)
+            )
+        )(i)
     }
 }
 
