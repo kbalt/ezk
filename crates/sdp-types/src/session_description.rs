@@ -15,10 +15,8 @@ use std::fmt::{self, Debug};
 pub enum ParseSessionDescriptionError {
     #[error(transparent)]
     ParseError(#[from] ParseError),
-
     #[error("message ended unexpectedly")]
     Incomplete,
-
     #[error("message is missing the origin field (o=)")]
     MissingOrigin,
     #[error("message is missing the name (s=) field")]
@@ -47,10 +45,10 @@ pub struct MediaDescription {
     /// rtcp attribute
     pub rtcp_attr: Option<Rtcp>,
 
-    /// RTP mappings
+    /// RTP Payload mappings
     pub rtpmaps: Vec<RtpMap>,
 
-    /// Format parameters
+    /// RTP encoding parameters
     pub fmtps: Vec<Fmtp>,
 
     /// ICE username fragment
@@ -160,201 +158,251 @@ impl SessionDescription {
             .split(|c| matches!(c, '\n' | '\r'))
             .filter(|line| !line.is_empty());
 
-        let mut name: Option<BytesStr> = Default::default();
-        let mut origin: Option<Origin> = Default::default();
-        let mut time: Option<Time> = Default::default();
-        let mut direction: Direction = Default::default();
-        let mut connection: Option<Connection> = Default::default();
-        let mut bandwidth: Vec<Bandwidth> = Default::default();
-        let mut ice_options: IceOptions = Default::default();
-        let mut ice_lite: bool = Default::default();
-        let mut ice_ufrag: Option<IceUsernameFragment> = Default::default();
-        let mut ice_pwd: Option<IcePassword> = Default::default();
-        let mut attributes: Vec<UnknownAttribute> = Default::default();
-        let mut media_scopes: Vec<MediaDescription> = Default::default();
+        let mut parser = Parser::default();
 
         for complete_line in lines {
-            let line = complete_line
-                .get(2..)
-                .ok_or(ParseSessionDescriptionError::Incomplete)?;
+            parser.parse_line(src, complete_line)?;
+        }
 
-            match complete_line.as_bytes() {
-                [b'v', b'=', b'0'] => {
-                    // parsed the version yay!
+        parser.finish()
+    }
+}
+
+#[derive(Default)]
+struct Parser {
+    name: Option<BytesStr>,
+    origin: Option<Origin>,
+    time: Option<Time>,
+    direction: Direction,
+    connection: Option<Connection>,
+    bandwidth: Vec<Bandwidth>,
+    ice_options: IceOptions,
+    ice_lite: bool,
+    ice_ufrag: Option<IceUsernameFragment>,
+    ice_pwd: Option<IcePassword>,
+    attributes: Vec<UnknownAttribute>,
+    media_descriptions: Vec<MediaDescription>,
+}
+
+impl Parser {
+    fn parse_line(
+        &mut self,
+        src: &BytesStr,
+        complete_line: &str,
+    ) -> Result<(), ParseSessionDescriptionError> {
+        let line = complete_line
+            .get(2..)
+            .ok_or(ParseSessionDescriptionError::Incomplete)?;
+
+        match complete_line.as_bytes() {
+            [b'v', b'=', b'0'] => {
+                // parsed the version yay!
+            }
+            [b's', b'=', ..] => {
+                self.name = Some(BytesStr::from_parse(src.as_ref(), line));
+            }
+            [b'o', b'=', ..] => {
+                let (_, o) = Origin::parse(src.as_ref(), line).finish()?;
+                self.origin = Some(o);
+            }
+            [b't', b'=', ..] => {
+                let (_, t) = Time::parse(line).finish()?;
+                self.time = Some(t);
+            }
+            [b'c', b'=', ..] => {
+                let (_, c) = Connection::parse(src.as_ref(), line).finish()?;
+
+                if let Some(media_scope) = self.media_descriptions.last_mut() {
+                    media_scope.connection = Some(c);
+                } else {
+                    self.connection = Some(c);
                 }
-                [b's', b'=', ..] => {
-                    name = Some(BytesStr::from_parse(src.as_ref(), line));
+            }
+            [b'b', b'=', ..] => {
+                let (_, b) = Bandwidth::parse(src.as_ref(), line).finish()?;
+
+                if let Some(media_scope) = self.media_descriptions.last_mut() {
+                    media_scope.bandwidth.push(b);
+                } else {
+                    self.bandwidth.push(b);
                 }
-                [b'o', b'=', ..] => {
-                    let (_, o) = Origin::parse(src.as_ref(), line).finish()?;
-                    origin = Some(o);
+            }
+            [b'm', b'=', ..] => {
+                let (_, desc) = Media::parse(src.as_ref(), line).finish()?;
+
+                self.media_descriptions.push(MediaDescription {
+                    media: desc,
+                    // inherit session direction
+                    direction: self.direction,
+                    connection: None,
+                    bandwidth: vec![],
+                    rtcp_attr: None,
+                    rtpmaps: vec![],
+                    fmtps: vec![],
+                    ice_ufrag: None,
+                    ice_pwd: None,
+                    ice_candidates: vec![],
+                    ice_end_of_candidates: false,
+                    attributes: vec![],
+                });
+            }
+            [b'a', b'=', ..] => self.parse_attribute(src, line)?,
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    fn parse_attribute(
+        &mut self,
+        src: &BytesStr,
+        line: &str,
+    ) -> Result<(), ParseSessionDescriptionError> {
+        if let Some((name, value)) = line.split_once(':') {
+            self.parse_attribute_with_value(src, line, name, value)?;
+        } else {
+            self.parse_attribute_without_value(src, line);
+        }
+
+        Ok(())
+    }
+
+    fn parse_attribute_with_value(
+        &mut self,
+        src: &BytesStr,
+        line: &str,
+        name: &str,
+        value: &str,
+    ) -> Result<(), ParseSessionDescriptionError> {
+        match name {
+            "rtpmap" => {
+                let (_, rtpmap) = RtpMap::parse(src.as_ref(), line).finish()?;
+
+                if let Some(media_scope) = self.media_descriptions.last_mut() {
+                    media_scope.rtpmaps.push(rtpmap);
                 }
-                [b't', b'=', ..] => {
-                    let (_, t) = Time::parse(line).finish()?;
-                    time = Some(t);
+
+                // TODO error here ?
+            }
+            "fmtp" => {
+                let (_, fmtp) = Fmtp::parse(src.as_ref(), line).finish()?;
+
+                if let Some(media_scope) = self.media_descriptions.last_mut() {
+                    media_scope.fmtps.push(fmtp);
                 }
-                [b'c', b'=', ..] => {
-                    let (_, c) = Connection::parse(src.as_ref(), line).finish()?;
 
-                    if let Some(media_scope) = media_scopes.last_mut() {
-                        media_scope.connection = Some(c);
-                    } else {
-                        connection = Some(c);
-                    }
+                // TODO error here ?
+            }
+            "rtcp" => {
+                let (_, rtcp) = Rtcp::parse(src.as_ref(), line).finish()?;
+
+                if let Some(media_scope) = self.media_descriptions.last_mut() {
+                    media_scope.rtcp_attr = Some(rtcp);
                 }
-                [b'b', b'=', ..] => {
-                    let (_, b) = Bandwidth::parse(src.as_ref(), line).finish()?;
 
-                    if let Some(media_scope) = media_scopes.last_mut() {
-                        media_scope.bandwidth.push(b);
-                    } else {
-                        bandwidth.push(b);
-                    }
+                // TODO error here?
+            }
+            "ice-lite" => {
+                self.ice_lite = true;
+            }
+            "ice-options" => {
+                let (_, options) = IceOptions::parse(src.as_ref(), value).finish()?;
+                self.ice_options = options;
+            }
+            "ice-ufrag" => {
+                let (_, ufrag) = IceUsernameFragment::parse(src.as_ref(), value).finish()?;
+
+                if let Some(media_scope) = self.media_descriptions.last_mut() {
+                    media_scope.ice_ufrag = Some(ufrag);
+                } else {
+                    self.ice_ufrag = Some(ufrag);
                 }
-                [b'm', b'=', ..] => {
-                    let (_, desc) = Media::parse(src.as_ref(), line).finish()?;
+            }
+            "ice-pwd" => {
+                let (_, pwd) = IcePassword::parse(src.as_ref(), value).finish()?;
 
-                    media_scopes.push(MediaDescription {
-                        media: desc,
-                        // inherit session direction
-                        direction,
-                        connection: None,
-                        bandwidth: vec![],
-                        rtcp_attr: None,
-                        rtpmaps: vec![],
-                        fmtps: vec![],
-                        ice_ufrag: None,
-                        ice_pwd: None,
-                        ice_candidates: vec![],
-                        ice_end_of_candidates: false,
-                        attributes: vec![],
-                    });
+                if let Some(media_scope) = self.media_descriptions.last_mut() {
+                    media_scope.ice_pwd = Some(pwd);
+                } else {
+                    self.ice_pwd = Some(pwd);
                 }
-                [b'a', b'=', ..] => {
-                    if let Some((attr, attr_v)) = line.split_once(':') {
-                        match attr {
-                            "rtpmap" => {
-                                let (_, rtpmap) = RtpMap::parse(src.as_ref(), line).finish()?;
+            }
+            "candidate" => {
+                let (_, candidate) = IceCandidate::parse(src.as_ref(), line).finish()?;
 
-                                if let Some(media_scope) = media_scopes.last_mut() {
-                                    media_scope.rtpmaps.push(rtpmap);
-                                }
-
-                                // TODO error here ?
-                            }
-                            "fmtp" => {
-                                let (_, fmtp) = Fmtp::parse(src.as_ref(), line).finish()?;
-
-                                if let Some(media_scope) = media_scopes.last_mut() {
-                                    media_scope.fmtps.push(fmtp);
-                                }
-
-                                // TODO error here ?
-                            }
-                            "rtcp" => {
-                                let (_, rtcp) = Rtcp::parse(src.as_ref(), line).finish()?;
-
-                                if let Some(media_scope) = media_scopes.last_mut() {
-                                    media_scope.rtcp_attr = Some(rtcp)
-                                }
-
-                                // TODO error here?
-                            }
-                            "ice-lite" => {
-                                ice_lite = true;
-                            }
-                            "ice-options" => {
-                                let (_, options) =
-                                    IceOptions::parse(src.as_ref(), attr_v).finish()?;
-                                ice_options = options;
-                            }
-                            "ice-ufrag" => {
-                                let (_, ufrag) =
-                                    IceUsernameFragment::parse(src.as_ref(), attr_v).finish()?;
-
-                                if let Some(media_scope) = media_scopes.last_mut() {
-                                    media_scope.ice_ufrag = Some(ufrag)
-                                } else {
-                                    ice_ufrag = Some(ufrag);
-                                }
-                            }
-                            "ice-pwd" => {
-                                let (_, pwd) = IcePassword::parse(src.as_ref(), attr_v).finish()?;
-
-                                if let Some(media_scope) = media_scopes.last_mut() {
-                                    media_scope.ice_pwd = Some(pwd)
-                                } else {
-                                    ice_pwd = Some(pwd);
-                                }
-                            }
-                            "candidate" => {
-                                let (_, candidate) =
-                                    IceCandidate::parse(src.as_ref(), line).finish()?;
-
-                                if let Some(media_scope) = media_scopes.last_mut() {
-                                    media_scope.ice_candidates.push(candidate);
-                                }
-
-                                // TODO error here?
-                            }
-                            _ => {
-                                let attr = UnknownAttribute {
-                                    name: src.slice_ref(attr),
-                                    value: Some(src.slice_ref(attr_v)),
-                                };
-
-                                if let Some(media_scope) = media_scopes.last_mut() {
-                                    media_scope.attributes.push(attr);
-                                } else {
-                                    attributes.push(attr);
-                                }
-                            }
-                        }
-                    } else {
-                        match line {
-                            "sendrecv" => direction = Direction::SendRecv,
-                            "recvonly" => direction = Direction::RecvOnly,
-                            "sendonly" => direction = Direction::SendOnly,
-                            "inactive" => direction = Direction::Inactive,
-                            "end-of-candidates" => {
-                                if let Some(media_scope) = media_scopes.last_mut() {
-                                    media_scope.ice_end_of_candidates = true;
-                                }
-
-                                // TODO error here?
-                            }
-                            _ => {
-                                let attr = UnknownAttribute {
-                                    name: src.slice_ref(line),
-                                    value: None,
-                                };
-
-                                if let Some(media_scope) = media_scopes.last_mut() {
-                                    media_scope.attributes.push(attr);
-                                } else {
-                                    attributes.push(attr);
-                                }
-                            }
-                        }
-                    }
+                if let Some(media_scope) = self.media_descriptions.last_mut() {
+                    media_scope.ice_candidates.push(candidate);
                 }
-                _ => {}
+
+                // TODO error here?
+            }
+            _ => {
+                let attr = UnknownAttribute {
+                    name: src.slice_ref(name),
+                    value: Some(src.slice_ref(value)),
+                };
+
+                if let Some(media_scope) = self.media_descriptions.last_mut() {
+                    media_scope.attributes.push(attr);
+                } else {
+                    self.attributes.push(attr);
+                }
             }
         }
 
-        Ok(Self {
-            origin: origin.ok_or(ParseSessionDescriptionError::MissingOrigin)?,
-            name: name.ok_or(ParseSessionDescriptionError::MissingName)?,
-            time: time.ok_or(ParseSessionDescriptionError::MissingTime)?,
-            direction,
-            connection,
-            bandwidth,
-            ice_options,
-            ice_lite,
-            ice_ufrag,
-            ice_pwd,
-            attributes,
-            media_descriptions: media_scopes,
+        Ok(())
+    }
+
+    fn parse_attribute_without_value(&mut self, src: &BytesStr, line: &str) {
+        let direction = if let Some(media_scope) = self.media_descriptions.last_mut() {
+            &mut media_scope.direction
+        } else {
+            &mut self.direction
+        };
+
+        match line {
+            "sendrecv" => *direction = Direction::SendRecv,
+            "recvonly" => *direction = Direction::RecvOnly,
+            "sendonly" => *direction = Direction::SendOnly,
+            "inactive" => *direction = Direction::Inactive,
+            "end-of-candidates" => {
+                if let Some(media_scope) = self.media_descriptions.last_mut() {
+                    media_scope.ice_end_of_candidates = true;
+                }
+
+                // TODO error here?
+            }
+            _ => {
+                let attr = UnknownAttribute {
+                    name: src.slice_ref(line),
+                    value: None,
+                };
+
+                if let Some(media_scope) = self.media_descriptions.last_mut() {
+                    media_scope.attributes.push(attr);
+                } else {
+                    self.attributes.push(attr);
+                }
+            }
+        }
+    }
+
+    fn finish(self) -> Result<SessionDescription, ParseSessionDescriptionError> {
+        Ok(SessionDescription {
+            origin: self
+                .origin
+                .ok_or(ParseSessionDescriptionError::MissingOrigin)?,
+            name: self.name.ok_or(ParseSessionDescriptionError::MissingName)?,
+            time: self.time.ok_or(ParseSessionDescriptionError::MissingTime)?,
+            direction: self.direction,
+            connection: self.connection,
+            bandwidth: self.bandwidth,
+            ice_options: self.ice_options,
+            ice_lite: self.ice_lite,
+            ice_ufrag: self.ice_ufrag,
+            ice_pwd: self.ice_pwd,
+            attributes: self.attributes,
+            media_descriptions: self.media_descriptions,
         })
     }
 }
@@ -372,11 +420,11 @@ s={}\r\n\
         )?;
 
         if let Some(conn) = &self.connection {
-            write!(f, "{}\r\n", conn)?;
+            write!(f, "{conn}\r\n")?;
         }
 
         for bw in &self.bandwidth {
-            write!(f, "{}\r\n", bw)?;
+            write!(f, "{bw}\r\n")?;
         }
 
         write!(f, "{}\r\n{}", self.time, self.ice_options)?;
@@ -386,19 +434,19 @@ s={}\r\n\
         }
 
         if let Some(ufrag) = &self.ice_ufrag {
-            write!(f, "{}\r\n", ufrag)?;
+            write!(f, "{ufrag}\r\n")?;
         }
 
         if let Some(pwd) = &self.ice_pwd {
-            write!(f, "{}\r\n", pwd)?;
+            write!(f, "{pwd}\r\n")?;
         }
 
         for attr in &self.attributes {
-            write!(f, "{}\r\n", attr)?;
+            write!(f, "{attr}\r\n")?;
         }
 
         for media_scope in &self.media_descriptions {
-            write!(f, "{}", media_scope)?;
+            write!(f, "{media_scope}")?;
         }
 
         Ok(())

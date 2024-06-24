@@ -61,16 +61,16 @@ impl fmt::Display for TaggedAddress {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             TaggedAddress::IP4(addr) => {
-                write!(f, "IN IP4 {}", addr)
+                write!(f, "IN IP4 {addr}")
             }
             TaggedAddress::IP4FQDN(fqdn) => {
-                write!(f, "IN IP4 {}", fqdn)
+                write!(f, "IN IP4 {fqdn}")
             }
             TaggedAddress::IP6(addr) => {
-                write!(f, "IN IP6 {}", addr)
+                write!(f, "IN IP6 {addr}")
             }
             TaggedAddress::IP6FQDN(fqdn) => {
-                write!(f, "IN IP6 {}", fqdn)
+                write!(f, "IN IP6 {fqdn}")
             }
         }
     }
