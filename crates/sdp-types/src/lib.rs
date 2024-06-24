@@ -31,10 +31,6 @@ fn slash_num(i: &str) -> IResult<&str, u32> {
     preceded(char('/'), map_res(digit1, FromStr::from_str))(i)
 }
 
-fn token(c: char) -> bool {
-    matches!(c, '\x21' | '\x23'..='\x27' | '\x2A'..='\x2B' | '\x2D'..='\x2E' | '\x30'..='\x39' | '\x41'..='\x5A' | '\x5E'..='\x7E')
-}
-
 fn not_whitespace(c: char) -> bool {
     !c.is_ascii_whitespace()
 }

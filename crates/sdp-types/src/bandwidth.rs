@@ -1,4 +1,3 @@
-use crate::token;
 use bytes::Bytes;
 use bytesstr::BytesStr;
 use internal::IResult;
@@ -45,6 +44,10 @@ impl fmt::Display for Bandwidth {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "b={}:{}", self.type_, self.bandwidth)
     }
+}
+
+fn token(c: char) -> bool {
+    matches!(c, '\x21' | '\x23'..='\x27' | '\x2A'..='\x2B' | '\x2D'..='\x2E' | '\x30'..='\x39' | '\x41'..='\x5A' | '\x5E'..='\x7E')
 }
 
 #[cfg(test)]
