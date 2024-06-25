@@ -196,6 +196,24 @@ header_names! {
     /// [[RFC3621, Section 20.25](https://tools.ietf.org/html/rfc3261#section-20.25)]
     "Organization",         Organization,       ["organization"],           ORGANIZATION;
 
+    /// [[RFC7315, Section 4.1](https://datatracker.ietf.org/doc/html/rfc7315#section-4.1)]
+    "P-Associated-URI",     PAssociatedURI,     ["p-associated-uri"],       P_ASSOCIATED_URI;
+
+    /// [[RFC7315, Section 4.2](https://datatracker.ietf.org/doc/html/rfc7315#section-4.2)]
+    "P-Called-Party-ID",   PCalledPartyID,     ["p-called-party-id"],      P_CALLED_PARTY_ID;
+
+    /// [[RFC7315, Section 4.3](https://datatracker.ietf.org/doc/html/rfc7315#section-4.3)]
+    "P-Visited-Network-ID", PVisitedNetworkID, ["p-visited-network-id"],   P_VISITED_NETWORK_ID;
+
+    /// [[RFC7315, Section 4.4](https://datatracker.ietf.org/doc/html/rfc7315#section-4.4)]
+    "P-Access-Network-Info", PAccessNetworkInfo, ["p-access-network-info"], P_ACCESS_NETWORK_INFO;
+
+    /// [[RFC7315, Section 4.5](https://datatracker.ietf.org/doc/html/rfc7315#section-4.5)]
+    "P-Charging-Function-Addresses", PChargingFunctionAddresses, ["p-charging-function-addresses"], P_CHARGING_FUNCTION_ADDRESSES;
+
+    /// [[RFC7315, Section 4.6](https://datatracker.ietf.org/doc/html/rfc7315#section-4.6)]
+    "P-Charging-Vector", PChargingVector, ["p-charging-vector"], P_CHARGING_VECTOR;
+
     /// [[RFC3621, Section 20.26](https://tools.ietf.org/html/rfc3261#section-20.26)]
     "Priority",             Priority,           ["priority"],               PRIORITY;
 
