@@ -1,6 +1,6 @@
 [package]
 name = "ezk-sip-auth"
-version = "0.1.1"
+version = "0.1.2"
 description = "RFC8769 compliant SIP authentication"
 categories = ["network-programming", "multimedia"]
 keywords = ["sip", "auth"]
@@ -12,7 +12,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-sip-types = { package = "ezk-sip-types", path = "../sip-types", version = "0.1" }
+sip-types = { package = "ezk-sip-types", path = "../sip-types", version = "0.2" }
 
 bytesstr = "1"
 md5 = "0.7"

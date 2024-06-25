@@ -1,6 +1,6 @@
 [package]
 name = "ezk-sip-core"
-version = "0.2.1"
+version = "0.2.2"
 description = "SIP core crate providing abstrations over transport and transactions"
 categories = ["network-programming", "multimedia"]
 keywords = ["sip"]
@@ -13,7 +13,7 @@ repository.workspace = true
 
 [dependencies]
 internal = { package = "ezk-internal", path = "../internal", version = "0.2" }
-sip-types = { package = "ezk-sip-types", path = "../sip-types", version = "0.1" }
+sip-types = { package = "ezk-sip-types", path = "../sip-types", version = "0.2" }
 stun-types = { package = "ezk-stun-types", path = "../stun-types", version = "0.1.1" }
 stun = { package = "ezk-stun", path = "../stun", version = "0.2.0" }
 
@@ -42,7 +42,6 @@ nom = "7"
 tokio-rustls = { version = "0.26", optional = true, default-features = false }
 rustls-pki-types = { version = "1", features = ["std"], optional = true }
 tokio-native-tls = { version = "0.3", optional = true }
-
 
 [features]
 tls-rustls = ["dep:tokio-rustls", "dep:rustls-pki-types"]
