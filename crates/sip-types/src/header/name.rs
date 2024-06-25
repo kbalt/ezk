@@ -250,6 +250,15 @@ header_names! {
     /// [[RFC3262, Section 20.34](https://datatracker.ietf.org/doc/html/rfc3262#section-7.1)]
     "RSeq",                 RSeq,               ["rseq"],                   RSEQ;
 
+    /// [[RFC3329, Section 2.6](https://datatracker.ietf.org/doc/html/rfc3329#section-2.6)]
+    "Security-Client",      SecurityClient,     ["security-client"],        SECURITY_CLIENT;
+
+    /// [[RFC3329, Section 2.6](https://datatracker.ietf.org/doc/html/rfc3329#section-2.6)]
+    "Security-Server",      SecurityServer,     ["security-server"],        SECURITY_SERVER;
+
+    /// [[RFC3329, Section 2.6](https://datatracker.ietf.org/doc/html/rfc3329#section-2.6)]
+    "Security-Verify",      SecurityVerify,     ["security-verify"],        SECURITY_VERIFY;
+
     /// [[RFC3621, Section 20.35](https://tools.ietf.org/html/rfc3261#section-20.35)]
     "Server",               Server,             ["server"],                 SERVER;
 
