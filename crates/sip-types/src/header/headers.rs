@@ -59,13 +59,13 @@ impl Headers {
 
     /// Inserts `header` using its [`HeaderNamed`] and [`InsertIntoHeaders`] implementation to the front of the list
     #[inline]
-    pub fn insert_named_front<H: DynNamed + ExtendValues>(&mut self, header: &H) {
+    pub fn insert_named_front<H: DynNamed + ExtendValues + ?Sized>(&mut self, header: &H) {
         self.insert_type_front(header.name(), header)
     }
 
     /// Inserts `header` using its [`InsertIntoHeaders`] implementation to the front of the list
     #[inline]
-    pub fn insert_type_front<H: ExtendValues>(&mut self, name: Name, header: &H) {
+    pub fn insert_type_front<H: ExtendValues + ?Sized>(&mut self, name: Name, header: &H) {
         let ctx = PrintCtx::default();
 
         if let Some(Entry { values, .. }) = self.entry_mut(&name) {
@@ -107,13 +107,13 @@ impl Headers {
 
     /// Inserts `header` using its [`DynNamed`] and [`ExtendValues`] implementation to the list
     #[inline]
-    pub fn insert_named<H: DynNamed + ExtendValues>(&mut self, header: &H) {
+    pub fn insert_named<H: DynNamed + ExtendValues + ?Sized>(&mut self, header: &H) {
         self.insert_type(header.name(), header)
     }
 
     /// Inserts `header` using its [`ExtendValues`] implementation to the list
     #[inline]
-    pub fn insert_type<H: ExtendValues>(&mut self, name: Name, header: &H) {
+    pub fn insert_type<H: ExtendValues + ?Sized>(&mut self, name: Name, header: &H) {
         let ctx = PrintCtx::default();
 
         if let Some(Entry { values, .. }) = self.entry_mut(&name) {
