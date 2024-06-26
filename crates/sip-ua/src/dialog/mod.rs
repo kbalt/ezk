@@ -141,7 +141,7 @@ impl Dialog {
     ) -> Result<OutgoingResponse> {
         let mut response = self.endpoint.create_response(request, code, reason);
 
-        if request.line.method == Method::INVITE {
+        if request.line.method == Method::INVITE || request.line.method == Method::SUBSCRIBE {
             let _ = request
                 .headers
                 .clone_into(&mut response.msg.headers, Name::RECORD_ROUTE);
