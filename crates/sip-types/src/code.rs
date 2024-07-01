@@ -273,6 +273,10 @@ codes! {
     /// 488 Not Acceptable Here
     [488 => NOT_ACCEPTABLE_HERE, "Not Acceptable Here"];
 
+    /// [[RFC6665, Section 8.3.2](https://datatracker.ietf.org/doc/html/rfc6665#section-8.3.2)]
+    /// 489 Bad Event
+    [489 => BAD_EVENT, "Bad Event"];
+
     /// [[RFC3621, Section 21.4.27](https://tools.ietf.org/html/rfc3261#section-21.4.27)]
     /// 491 Request Pending
     [491 => REQUEST_PENDING, "Request Pending"];
