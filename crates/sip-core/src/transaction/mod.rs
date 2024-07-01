@@ -6,6 +6,7 @@ use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
 use registration::TsxRegistration;
 use sip_types::msg::{MessageLine, StatusLine};
 use sip_types::Headers;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
 mod client;
@@ -48,7 +49,13 @@ impl Transactions {
     }
 
     pub fn register_transaction(&self, key: TsxKey, handler: TsxHandler) {
-        self.map.write().insert(key, handler);
+        let mut map = self.map.write();
+
+        match map.entry(key) {
+            // See https://github.com/kbalt/ezk/issues/16
+            Entry::Occupied(e) => panic!("Tried to create a second transaction for {:?}. This can happen if a retransmission of message is received before creating a transaction for the original one.", e.key()),
+            Entry::Vacant(e) => { e.insert(handler); },
+        }
     }
 
     pub fn remove_transaction(&self, key: &TsxKey) {
