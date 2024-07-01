@@ -24,7 +24,7 @@ impl InviteUsage {
         endpoint: &Endpoint,
         request: MayTake<'_, IncomingRequest>,
     ) -> Result<()> {
-        let (prack, awaited_prack) = {
+        let (mut prack, awaited_prack) = {
             let mut awaited_prack_opt = self.inner.awaited_prack.lock();
             if let Some(awaited_prack) = awaited_prack_opt.take() {
                 let rack = request.headers.get_named::<RAck>()?;
@@ -40,7 +40,7 @@ impl InviteUsage {
             }
         };
 
-        let prack_tsx = endpoint.create_server_tsx(&prack);
+        let prack_tsx = endpoint.create_server_tsx(&mut prack);
 
         let response = endpoint.create_response(&prack, Code::OK, None);
 

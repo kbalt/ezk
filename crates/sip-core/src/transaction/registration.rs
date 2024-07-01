@@ -12,10 +12,10 @@ use tokio::sync::mpsc;
 /// transactional messages from it
 #[derive(Debug)]
 pub(crate) struct TsxRegistration {
-    pub endpoint: Endpoint,
-    pub tsx_key: TsxKey,
+    pub(crate) endpoint: Endpoint,
+    pub(crate) tsx_key: TsxKey,
 
-    receiver: mpsc::UnboundedReceiver<TsxMessage>,
+    pub(super) receiver: mpsc::UnboundedReceiver<TsxMessage>,
 }
 
 impl TsxRegistration {
@@ -41,7 +41,7 @@ impl TsxRegistration {
         F: Fn(&TsxMessage) -> bool + Send + Sync + 'static,
     {
         let transactions = self.endpoint.transactions();
-        let mut tsx_map = transactions.map.write();
+        let mut tsx_map = transactions.map.lock();
         let handler = tsx_map
             .get_mut(&self.tsx_key)
             .expect("registration is responsible of handler lifetime inside endpoint");

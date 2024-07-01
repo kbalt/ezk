@@ -58,7 +58,7 @@ impl Acceptor {
     pub fn new(
         dialog: Dialog,
         invite_layer: LayerKey<InviteLayer>,
-        invite: IncomingRequest,
+        mut invite: IncomingRequest,
     ) -> Result<Self> {
         assert_eq!(
             invite.line.method,
@@ -88,7 +88,7 @@ impl Acceptor {
         let dialog_layer = dialog.dialog_layer;
 
         // Create Inner shared state
-        let tsx = endpoint.create_server_inv_tsx(&invite);
+        let tsx = endpoint.create_server_inv_tsx(&mut invite);
         let inner = Arc::new(Inner {
             invite_layer,
             state: Mutex::new(InviteSessionState::UasProvisional {

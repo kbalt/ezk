@@ -151,7 +151,7 @@ impl DialogLayer {
     async fn handle_unwanted_request(
         &self,
         endpoint: &Endpoint,
-        request: IncomingRequest,
+        mut request: IncomingRequest,
     ) -> Result<()> {
         if request.line.method == Method::ACK {
             // Cannot respond to ACK request
@@ -161,11 +161,11 @@ impl DialogLayer {
         let response = endpoint.create_response(&request, Code::NOT_FOUND, None);
 
         if request.line.method == Method::INVITE {
-            let tsx = endpoint.create_server_inv_tsx(&request);
+            let tsx = endpoint.create_server_inv_tsx(&mut request);
 
             tsx.respond_failure(response).await
         } else {
-            let tsx = endpoint.create_server_tsx(&request);
+            let tsx = endpoint.create_server_tsx(&mut request);
 
             tsx.respond(response).await
         }

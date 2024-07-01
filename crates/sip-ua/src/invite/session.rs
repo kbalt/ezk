@@ -189,8 +189,8 @@ impl Session {
         };
 
         match evt {
-            UsageEvent::Bye(request) => {
-                let transaction = self.endpoint.create_server_tsx(&request);
+            UsageEvent::Bye(mut request) => {
+                let transaction = self.endpoint.create_server_tsx(&mut request);
 
                 Ok(Event::Bye(ByeEvent {
                     session: self,
@@ -198,10 +198,10 @@ impl Session {
                     transaction,
                 }))
             }
-            UsageEvent::ReInvite(invite) => {
+            UsageEvent::ReInvite(mut invite) => {
                 self.session_timer.reset();
 
-                let transaction = self.endpoint.create_server_inv_tsx(&invite);
+                let transaction = self.endpoint.create_server_inv_tsx(&mut invite);
 
                 Ok(Event::ReInviteReceived(ReInviteReceived {
                     session: self,

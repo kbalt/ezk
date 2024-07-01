@@ -1,13 +1,14 @@
 use crate::transport::MessageTpInfo;
-use crate::BaseHeaders;
+use crate::{BaseHeaders, Endpoint};
 use bytes::Bytes;
 use bytesstr::BytesStr;
-use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
-use registration::TsxRegistration;
+use parking_lot::lock_api::MutexGuard;
+use parking_lot::{MappedMutexGuard, Mutex};
 use sip_types::msg::{MessageLine, StatusLine};
 use sip_types::Headers;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use tokio::sync::mpsc;
 
 mod client;
 mod client_inv;
@@ -32,34 +33,55 @@ pub use key::TsxKey;
 pub use server::ServerTsx;
 pub use server_inv::{Accepted, ServerInvTsx};
 
+pub(crate) use registration::TsxRegistration;
+
 pub(crate) type TsxHandler = Box<dyn Fn(TsxMessage) -> Option<TsxMessage> + Send + Sync>;
 
 #[derive(Default)]
 pub(crate) struct Transactions {
-    map: RwLock<HashMap<TsxKey, TsxHandler>>,
+    map: Mutex<HashMap<TsxKey, TsxHandler>>,
 }
 
 impl Transactions {
-    pub fn get_handler<'a: 'k, 'k>(
+    pub(crate) fn get_handler<'a: 'k, 'k>(
         &'a self,
+        endoint: &Endpoint,
         tsx_key: &TsxKey,
-    ) -> Option<MappedRwLockReadGuard<'a, TsxHandler>> {
-        let map = self.map.read();
-        RwLockReadGuard::try_map(map, |map| map.get(tsx_key)).ok()
+    ) -> Result<MappedMutexGuard<'a, TsxHandler>, TsxRegistration> {
+        let map = self.map.lock();
+
+        let mut map = match MutexGuard::try_map(map, |map| map.get_mut(tsx_key)) {
+            Ok(handler) => return Ok(handler),
+            Err(map) => map,
+        };
+
+        let (sender, receiver) = mpsc::unbounded_channel();
+
+        map.insert(
+            tsx_key.clone(),
+            Box::new(move |msg| sender.send(msg).map_err(|e| e.0).err()),
+        );
+
+        Err(TsxRegistration {
+            endpoint: endoint.clone(),
+            tsx_key: tsx_key.clone(),
+            receiver,
+        })
     }
 
-    pub fn register_transaction(&self, key: TsxKey, handler: TsxHandler) {
-        let mut map = self.map.write();
+    pub(crate) fn register_transaction(&self, key: TsxKey, handler: TsxHandler) {
+        let mut map = self.map.lock();
 
         match map.entry(key) {
-            // See https://github.com/kbalt/ezk/issues/16
-            Entry::Occupied(e) => panic!("Tried to create a second transaction for {:?}. This can happen if a retransmission of message is received before creating a transaction for the original one.", e.key()),
-            Entry::Vacant(e) => { e.insert(handler); },
+            Entry::Occupied(e) => panic!("Tried to create a second transaction for {:?}", e.key()),
+            Entry::Vacant(e) => {
+                e.insert(handler);
+            }
         }
     }
 
-    pub fn remove_transaction(&self, key: &TsxKey) {
-        self.map.write().remove(key);
+    pub(crate) fn remove_transaction(&self, key: &TsxKey) {
+        self.map.lock().remove(key);
     }
 }
 

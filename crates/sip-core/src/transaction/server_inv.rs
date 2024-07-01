@@ -2,7 +2,7 @@ use crate::error::Error;
 use crate::transaction::consts::{T1, T2};
 use crate::transaction::TsxRegistration;
 use crate::transport::OutgoingResponse;
-use crate::{Endpoint, IncomingRequest, Result};
+use crate::{IncomingRequest, Result};
 use sip_types::msg::MessageLine;
 use sip_types::{CodeKind, Method};
 use std::io;
@@ -23,7 +23,7 @@ pub struct ServerInvTsx {
 
 impl ServerInvTsx {
     /// Internal: Used by [Endpoint::create_server_inv_tsx]
-    pub(crate) fn new(endpoint: Endpoint, request: &IncomingRequest) -> Self {
+    pub(crate) fn new(request: &mut IncomingRequest) -> Self {
         assert_eq!(
             request.line.method,
             Method::INVITE,
@@ -31,9 +31,9 @@ impl ServerInvTsx {
             request.line.method
         );
 
-        let registration = TsxRegistration::create(endpoint, request.tsx_key.clone());
-
-        Self { registration }
+        Self {
+            registration: request.take_tsx_registration(),
+        }
     }
 
     /// Respond with a provisional response (1XX)

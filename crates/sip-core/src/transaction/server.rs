@@ -1,7 +1,7 @@
 use super::consts::T1;
 use super::TsxRegistration;
 use crate::transport::OutgoingResponse;
-use crate::{Endpoint, IncomingRequest, Result};
+use crate::{IncomingRequest, Result};
 use sip_types::{CodeKind, Method};
 use std::time::Instant;
 use tokio::time::timeout_at;
@@ -19,16 +19,16 @@ pub struct ServerTsx {
 
 impl ServerTsx {
     /// Internal: Used by [Endpoint::create_server_tsx]
-    pub(crate) fn new(endpoint: Endpoint, request: &IncomingRequest) -> Self {
+    pub(crate) fn new(request: &mut IncomingRequest) -> Self {
         assert!(
             !matches!(request.line.method, Method::INVITE | Method::ACK),
             "tried to create server transaction from {} request",
             request.line.method
         );
 
-        let registration = TsxRegistration::create(endpoint, request.tsx_key.clone());
-
-        Self { registration }
+        Self {
+            registration: request.take_tsx_registration(),
+        }
     }
 
     /// Respond with a provisional response (1XX)

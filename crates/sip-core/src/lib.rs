@@ -14,7 +14,7 @@ use sip_types::print::AppendCtx;
 use sip_types::uri::Uri;
 use sip_types::{Headers, Method, Name};
 use std::fmt;
-use transaction::TsxKey;
+use transaction::{TsxKey, TsxRegistration};
 use transport::MessageTpInfo;
 
 #[macro_use]
@@ -103,6 +103,7 @@ impl BaseHeaders {
 pub struct IncomingRequest {
     pub tp_info: MessageTpInfo,
     pub tsx_key: TsxKey,
+    tsx: Option<TsxRegistration>,
 
     pub line: RequestLine,
     pub base_headers: BaseHeaders,
@@ -113,6 +114,17 @@ pub struct IncomingRequest {
 impl fmt::Display for IncomingRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.line.default_print_ctx().fmt(f)
+    }
+}
+
+impl IncomingRequest {
+    #[track_caller]
+    fn take_tsx_registration(&mut self) -> TsxRegistration {
+        let Some(tsx) = self.tsx.take() else {
+            panic!("Tried to create transaction for {:?}, which is an already handled message or isn't a transaction creating request", self.tsx_key);
+        };
+
+        tsx
     }
 }
 

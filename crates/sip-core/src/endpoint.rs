@@ -106,14 +106,14 @@ impl Endpoint {
 
     /// Create a [`ServerTsx`] from an [`IncomingRequest`]. The returned transaction
     /// can be used to form and send responses to the request.
-    pub fn create_server_tsx(&self, request: &IncomingRequest) -> ServerTsx {
-        ServerTsx::new(self.clone(), request)
+    pub fn create_server_tsx(&self, request: &mut IncomingRequest) -> ServerTsx {
+        ServerTsx::new(request)
     }
 
     /// Create a [`ServerInvTsx`] from an INVITE [`IncomingRequest`]. The returned transaction
     /// can be used to form and send responses to the request.
-    pub fn create_server_inv_tsx(&self, request: &IncomingRequest) -> ServerInvTsx {
-        ServerInvTsx::new(self.clone(), request)
+    pub fn create_server_inv_tsx(&self, request: &mut IncomingRequest) -> ServerInvTsx {
+        ServerInvTsx::new(request)
     }
 
     /// Returns all ALLOW headers this endpoint supports
@@ -360,32 +360,40 @@ impl Endpoint {
             }
         };
 
+        let mut tsx = None;
+
         // Try to find a transaction that might be able to handle the message
-        if let Some(handler) = self.transactions().get_handler(&tsx_key) {
-            let tsx_message = TsxMessage {
-                tp_info: message.tp_info,
-                line: message.line,
-                base_headers,
-                headers: message.headers,
-                body: message.body,
-            };
-
-            log::debug!("delegating message to transaction {}", tsx_key);
-
-            if let Some(rejected_tsx_message) = handler(tsx_message) {
-                log::trace!("transaction {} rejected message", tsx_key);
-
-                // TsxMessage was rejected, restore previous state
-                base_headers = rejected_tsx_message.base_headers;
-                message = ReceivedMessage {
-                    tp_info: rejected_tsx_message.tp_info,
-                    line: rejected_tsx_message.line,
-                    headers: rejected_tsx_message.headers,
-                    body: rejected_tsx_message.body,
+        match self.transactions().get_handler(&self, &tsx_key) {
+            Ok(handler) => {
+                let tsx_message = TsxMessage {
+                    tp_info: message.tp_info,
+                    line: message.line,
+                    base_headers,
+                    headers: message.headers,
+                    body: message.body,
                 };
-            } else {
-                // Handled
-                return;
+
+                log::debug!("delegating message to transaction {}", tsx_key);
+
+                if let Some(rejected_tsx_message) = handler(tsx_message) {
+                    log::trace!("transaction {} rejected message", tsx_key);
+
+                    // TsxMessage was rejected, restore previous state
+                    base_headers = rejected_tsx_message.base_headers;
+                    message = ReceivedMessage {
+                        tp_info: rejected_tsx_message.tp_info,
+                        line: rejected_tsx_message.line,
+                        headers: rejected_tsx_message.headers,
+                        body: rejected_tsx_message.body,
+                    };
+                } else {
+                    // Handled
+                    return;
+                }
+            }
+            Err(registration) => {
+                log::debug!("no transaction for {tsx_key} found, created registration");
+                tsx = Some(registration);
             }
         }
 
@@ -401,6 +409,7 @@ impl Endpoint {
 
         let incoming = IncomingRequest {
             tp_info: message.tp_info,
+            tsx,
             line,
             base_headers,
             headers: message.headers,
@@ -433,7 +442,7 @@ impl Endpoint {
         }
     }
 
-    async fn handle_unwanted_request(&self, request: IncomingRequest) -> Result<()> {
+    async fn handle_unwanted_request(&self, mut request: IncomingRequest) -> Result<()> {
         if request.line.method == Method::ACK {
             // Cannot respond to unhandled ACK requests
             return Ok(());
@@ -443,11 +452,11 @@ impl Endpoint {
             self.create_response(&request, Code::CALL_OR_TRANSACTION_DOES_NOT_EXIST, None);
 
         if request.line.method == Method::INVITE {
-            let tsx = self.create_server_inv_tsx(&request);
+            let tsx = self.create_server_inv_tsx(&mut request);
 
             tsx.respond_failure(response).await
         } else {
-            let tsx = self.create_server_tsx(&request);
+            let tsx = self.create_server_tsx(&mut request);
 
             tsx.respond(response).await
         }

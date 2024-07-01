@@ -174,8 +174,8 @@ impl InviteLayer {
         // Transaction found but completed: respond 200 to cancel
         // No matching transaction: don't handle it, endpoint will respond accordingly
         if let Some(inner) = inner {
-            let cancel = cancel.take();
-            let cancel_tsx = endpoint.create_server_tsx(&cancel);
+            let mut cancel = cancel.take();
+            let cancel_tsx = endpoint.create_server_tsx(&mut cancel);
 
             if let Some((dialog, invite_tsx, invite)) = inner.state.lock().await.set_cancelled() {
                 let invite_response =
@@ -303,10 +303,10 @@ impl InviteUsage {
         dialog: Dialog,
         invite_tsx: ServerInvTsx,
         invite: IncomingRequest,
-        bye: IncomingRequest,
+        mut bye: IncomingRequest,
     ) -> Result<()> {
         let bye_response = dialog.create_response(&invite, Code::OK, None)?;
-        let bye_tsx = endpoint.create_server_tsx(&bye);
+        let bye_tsx = endpoint.create_server_tsx(&mut bye);
 
         let invite_response = dialog.create_response(&invite, Code::REQUEST_TERMINATED, None)?;
 
