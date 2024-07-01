@@ -133,6 +133,9 @@ header_names! {
     /// [[RFC3621, Section 20.5](https://tools.ietf.org/html/rfc3261#section-20.5)]
     "Allow",                Allow,              ["allow"],                  ALLOW;
 
+    /// [[RFC6665, Section 8.2.2](https://datatracker.ietf.org/doc/html/rfc6665#section-8.2.2)])]
+    "Allow-Events",         AllowEvents,        ["allow-events", "u"],      ALLOW_EVENTS;
+
     /// [[RFC3621, Section 20.6](https://tools.ietf.org/html/rfc3261#section-20.6)]
     "Authentication-Info",  AuthenticationInfo, ["authentication-info"],    AUTHENTICATION_INFO;
 
@@ -171,6 +174,9 @@ header_names! {
 
     /// [[RFC3621, Section 20.18](https://tools.ietf.org/html/rfc3261#section-20.18)]
     "Error-Info",           ErrorInfo,          ["error-info"],             ERROR_INFO;
+
+    /// [[RFC6665, Section 8.2.1](https://datatracker.ietf.org/doc/html/rfc6665#section-8.2.1)]
+    "Event",                Event,              ["event", "o"],             EVENT;
 
     /// [[RFC3621, Section 20.19](https://tools.ietf.org/html/rfc3261#section-20.19)]
     "Expires",              Expires,            ["expires"],                EXPIRES;
@@ -267,6 +273,9 @@ header_names! {
 
     /// [[RFC3621, Section 20.36](https://tools.ietf.org/html/rfc3261#section-20.36)]
     "Subject",              Subject,            ["subject", "s"],           SUBJECT;
+
+    /// [[RFC6665, Section 8.2.3](https://datatracker.ietf.org/doc/html/rfc6665#section-8.2.3)]
+    "Subscription-State",   SubscriptionState,  ["subscription-state"],     SUBSCRIPTION_STATE;
 
     /// [[RFC3621, Section 20.37](https://tools.ietf.org/html/rfc3261#section-20.37)]
     "Supported",            Supported,          ["supported", "k"],         SUPPORTED;
