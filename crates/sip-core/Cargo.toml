@@ -1,6 +1,6 @@
 [package]
 name = "ezk-sip-core"
-version = "0.2.2"
+version = "0.3.0"
 description = "SIP core crate providing abstrations over transport and transactions"
 categories = ["network-programming", "multimedia"]
 keywords = ["sip"]

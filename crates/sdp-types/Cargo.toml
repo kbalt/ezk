@@ -1,6 +1,6 @@
 [package]
 name = "ezk-sdp-types"
-version = "0.2.0"
+version = "0.3.0"
 description = "SDP types providing parsing & serialization"
 categories = ["network-programming", "multimedia"]
 keywords = ["sdp"]
