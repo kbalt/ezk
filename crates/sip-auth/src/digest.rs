@@ -2,8 +2,8 @@ use crate::{Error, RequestParts, ResponseEntry, UacAuthenticator};
 use bytesstr::BytesStr;
 use sha2::Digest;
 use sip_types::header::typed::{
-    Algorithm, AuthChallenge, AuthResponse, DigestChallenge, DigestResponse, QopOption,
-    QopResponse, Username,
+    Algorithm, AlgorithmValue, AuthChallenge, AuthResponse, DigestChallenge, DigestResponse,
+    QopOption, QopResponse, Username,
 };
 use sip_types::print::{AppendCtx, PrintCtx, UriContext};
 
@@ -162,26 +162,31 @@ impl DigestAuthenticator {
         digest: DigestChallenge,
         request_parts: RequestParts<'_>,
     ) -> Result<AuthResponse, Error> {
-        let (hash, is_session): (HashFn, bool) = match digest.algorithm {
-            Algorithm::MD5 => {
+        let algorithm_value = match digest.algorithm.clone() {
+            Algorithm::AkaNamespace((_, av)) => av,
+            Algorithm::AlgorithmValue(av) => av,
+        };
+
+        let (hash, is_session): (HashFn, bool) = match algorithm_value {
+            AlgorithmValue::MD5 => {
                 if self.reject_md5 {
                     return Err(Error::UnsupportedAlgorithm(BytesStr::from_static("MD5")));
                 } else {
                     (hash_md5, false)
                 }
             }
-            Algorithm::MD5Sess => {
+            AlgorithmValue::MD5Sess => {
                 if self.reject_md5 {
                     return Err(Error::UnsupportedAlgorithm(BytesStr::from_static("MD5")));
                 } else {
                     (hash_md5, true)
                 }
             }
-            Algorithm::SHA256 => (hash_sha256, false),
-            Algorithm::SHA256Sess => (hash_sha256, true),
-            Algorithm::SHA512256 => (hash_sha512_trunc256, false),
-            Algorithm::SHA512256Sess => (hash_sha512_trunc256, true),
-            Algorithm::Other(other) => return Err(Error::UnsupportedAlgorithm(other)),
+            AlgorithmValue::SHA256 => (hash_sha256, false),
+            AlgorithmValue::SHA256Sess => (hash_sha256, true),
+            AlgorithmValue::SHA512256 => (hash_sha512_trunc256, false),
+            AlgorithmValue::SHA512256Sess => (hash_sha512_trunc256, true),
+            AlgorithmValue::Other(other) => return Err(Error::UnsupportedAlgorithm(other)),
         };
 
         let response = self.digest_respond(digest, request_parts, credentials, is_session, hash)?;
@@ -373,7 +378,7 @@ mod test {
                 nonce: "YWmh5GFpoLjiTDCA1hTSSygkgdj99aHE".into(),
                 opaque: None,
                 stale: false,
-                algorithm: Algorithm::MD5,
+                algorithm: Algorithm::AlgorithmValue(AlgorithmValue::MD5),
                 qop: vec![],
                 userhash: false,
                 other: vec![],
@@ -426,7 +431,7 @@ mod test {
                 assert_eq!(nonce, "YWmh5GFpoLjiTDCA1hTSSygkgdj99aHE");
                 assert_eq!(uri, "sip:example.org");
                 assert_eq!(response, "bc185e4893f17f12dc53153d2a62e6a6");
-                assert_eq!(algorithm, Algorithm::MD5);
+                assert_eq!(algorithm, Algorithm::AlgorithmValue(AlgorithmValue::MD5));
                 assert_eq!(opaque, None);
                 assert_eq!(qop_response, None);
                 assert!(!userhash);
@@ -450,7 +455,7 @@ mod test {
                 nonce: "YWmh5GFpoLjiTDCA1hTSSygkgdj99aHE".into(),
                 opaque: None,
                 stale: false,
-                algorithm: Algorithm::MD5,
+                algorithm: Algorithm::AlgorithmValue(AlgorithmValue::MD5),
                 qop: vec![QopOption::AuthInt],
                 userhash: false,
                 other: vec![],
@@ -502,7 +507,7 @@ mod test {
                 assert_eq!(realm, "example.org");
                 assert_eq!(nonce, "YWmh5GFpoLjiTDCA1hTSSygkgdj99aHE");
                 assert_eq!(uri, "sip:example.org");
-                assert_eq!(algorithm, Algorithm::MD5);
+                assert_eq!(algorithm, Algorithm::AlgorithmValue(AlgorithmValue::MD5));
                 assert_eq!(opaque, None);
                 let qop_response = qop_response.unwrap();
                 assert_eq!(qop_response.qop, QopOption::AuthInt);
@@ -539,7 +544,7 @@ mod test {
                 assert_eq!(nonce, "YWmh5GFpoLjiTDCA1hTSSygkgdj99aHE");
                 assert_eq!(uri, "sip:example.org");
 
-                assert_eq!(algorithm, Algorithm::MD5);
+                assert_eq!(algorithm, Algorithm::AlgorithmValue(AlgorithmValue::MD5));
                 assert_eq!(opaque, None);
                 let qop_response = qop_response.unwrap();
                 assert_eq!(qop_response.qop, QopOption::AuthInt);
