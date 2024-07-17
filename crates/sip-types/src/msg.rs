@@ -82,7 +82,7 @@ impl Line {
 }
 
 /// The leading line of any SIP message
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum MessageLine {
     Request(RequestLine),
     Response(StatusLine),
@@ -124,7 +124,7 @@ impl Print for MessageLine {
 }
 
 /// The leading line of a SIP request message
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RequestLine {
     pub method: Method,
     pub uri: Box<dyn Uri>,
@@ -155,7 +155,7 @@ impl RequestLine {
 }
 
 /// The leading line of a SIP response message
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StatusLine {
     pub code: Code,
     pub reason: Option<BytesStr>,
