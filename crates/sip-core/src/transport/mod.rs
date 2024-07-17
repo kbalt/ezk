@@ -249,19 +249,19 @@ impl ReceivedMessage {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OutgoingResponse {
     pub msg: Response,
     pub parts: OutgoingParts,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OutgoingRequest {
     pub msg: Request,
     pub parts: OutgoingParts,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OutgoingParts {
     /// Transport the message will be sent with
     pub transport: TpHandle,

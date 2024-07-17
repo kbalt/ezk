@@ -31,7 +31,7 @@ pub use error::{Error, Result, StunError};
 pub use may_take::MayTake;
 
 /// Basic Response
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Response {
     pub line: StatusLine,
     pub headers: Headers,
@@ -44,7 +44,7 @@ impl fmt::Display for Response {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// Basic request
 pub struct Request {
     pub line: RequestLine,
