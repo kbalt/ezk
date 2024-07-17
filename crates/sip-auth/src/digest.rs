@@ -9,14 +9,14 @@ use sip_types::print::{AppendCtx, PrintCtx, UriContext};
 
 pub struct DigestCredentials {
     user: String,
-    password: String,
+    password: Vec<u8>,
 }
 
 impl DigestCredentials {
     pub fn new<U, P>(user: U, password: P) -> Self
     where
         U: Into<String>,
-        P: Into<String>,
+        P: Into<Vec<u8>>,
     {
         Self {
             user: user.into(),
@@ -204,13 +204,13 @@ impl DigestAuthenticator {
     ) -> Result<DigestResponse, Error> {
         let cnonce = BytesStr::from(uuid::Uuid::new_v4().simple().to_string());
 
-        let mut ha1 = hash(
+        let mut ha1 = hash([
             format!(
-                "{}:{}:{}",
-                credentials.user, challenge.realm, credentials.password
-            )
-            .as_bytes(),
-        );
+                "{}:{}:",
+                credentials.user,
+                challenge.realm
+            ).as_bytes(), &credentials.password
+        ].concat().as_slice());
 
         if is_session {
             ha1 = format!("{}:{}:{}", ha1, challenge.nonce, cnonce);
