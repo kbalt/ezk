@@ -13,7 +13,7 @@ use std::{fmt, slice};
 /// The headers are stored as [BytesStr] under its respective [Name].
 ///
 /// Internally it is a `Vec`-backed multimap to keep insertion order
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Headers {
     parser: Parser,
     entries: Vec<Entry>,
@@ -364,13 +364,13 @@ impl Extend<(Name, BytesStr)> for Headers {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 struct Entry {
     name: Name,
     values: OneOrMore,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OneOrMore {
     One(BytesStr),
     More(Vec<BytesStr>),
