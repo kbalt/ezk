@@ -112,7 +112,7 @@ impl DigestChallenge {
         let mut nonce = None;
         let mut opaque = None;
         let mut stale = false;
-        let mut algorithm = Algorithm::MD5;
+        let mut algorithm = Algorithm::AlgorithmValue(AlgorithmValue::MD5);
         let mut qop = vec![];
         let mut userhash = false;
         let mut other = vec![];
@@ -170,7 +170,7 @@ impl Print for DigestChallenge {
             f.write_str(", stale=true")?;
         }
 
-        if !matches!(self.algorithm, Algorithm::MD5) {
+        if !matches!(self.algorithm, Algorithm::AlgorithmValue(AlgorithmValue::MD5)) {
             write!(f, ", algorithm={}", self.algorithm)?;
         }
 
@@ -312,7 +312,7 @@ impl DigestResponse {
         let mut nonce = None;
         let mut uri = None;
         let mut response = None;
-        let mut algorithm = Algorithm::MD5;
+        let mut algorithm = Algorithm::AlgorithmValue(AlgorithmValue::MD5);
         let mut opaque = None;
 
         // qop related params
@@ -393,7 +393,7 @@ impl Print for DigestResponse {
             self.username, self.realm, self.nonce, self.uri, self.response
         )?;
 
-        if !matches!(self.algorithm, Algorithm::MD5) {
+        if !matches!(self.algorithm, Algorithm::AlgorithmValue(AlgorithmValue::MD5)) {
             write!(f, ", algorithm={}", self.algorithm)?;
         }
 
@@ -457,6 +457,72 @@ impl Display for QopOption {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Algorithm {
+    AkaNamespace((AkaVersion, AlgorithmValue)),
+    AlgorithmValue(AlgorithmValue),
+}
+
+impl From<BytesStr> for Algorithm {
+    fn from(value: BytesStr) -> Self {
+        // Check if it is an aka-namespace
+        if let Some((version, algorithm)) = value.split_once('-') {
+            // 5 characters, starting with case-insensitive "AKAv", followed by single-digit number
+            if version.len() == 5 && version[0..4].eq_ignore_ascii_case("AKAv") && version.as_bytes()[4].is_ascii_digit() {
+                return Algorithm::AkaNamespace((
+                    AkaVersion::from(BytesStr::from(version)),
+                    AlgorithmValue::from(BytesStr::from(algorithm)),
+                ));
+            }
+        }
+        // Otherwise, is only an algorithm-value
+        Algorithm::AlgorithmValue(AlgorithmValue::from(value))
+    }
+}
+
+impl Display for Algorithm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Algorithm::AlgorithmValue(algorithm) => write!(f, "{}", algorithm),
+            Algorithm::AkaNamespace((version, algorithm)) => write!(f, "{}-{}", version, algorithm),
+        }
+    }
+}
+
+
+/// AKA versions
+/// https://www.iana.org/assignments/aka-version-namespace/aka-version-namespace.xhtml
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AkaVersion {
+    /// https://datatracker.ietf.org/doc/html/rfc3310
+    AKAv1,
+    /// https://datatracker.ietf.org/doc/html/rfc4169
+    AKAv2,
+    Other(BytesStr),
+}
+
+impl From<BytesStr> for AkaVersion {
+    fn from(value: BytesStr) -> Self {
+        if value.eq_ignore_ascii_case("AKAv1") {
+            AkaVersion::AKAv1
+        } else if value.eq_ignore_ascii_case("AKAv2") {
+            AkaVersion::AKAv2
+        } else {
+            AkaVersion::Other(value)
+        }
+    }
+}
+
+impl fmt::Display for AkaVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AkaVersion::AKAv1 => f.write_str("AKAv1"),
+            AkaVersion::AKAv2 => f.write_str("AKAv2"),
+            AkaVersion::Other(other) => f.write_str(other),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AlgorithmValue {
     MD5,
     MD5Sess,
     SHA256,
@@ -466,36 +532,36 @@ pub enum Algorithm {
     Other(BytesStr),
 }
 
-impl From<BytesStr> for Algorithm {
+impl From<BytesStr> for AlgorithmValue {
     fn from(value: BytesStr) -> Self {
         if value.eq_ignore_ascii_case("MD5") {
-            Algorithm::MD5
+            AlgorithmValue::MD5
         } else if value.eq_ignore_ascii_case("MD5-sess") {
-            Algorithm::MD5Sess
+            AlgorithmValue::MD5Sess
         } else if value.eq_ignore_ascii_case("SHA-256") {
-            Algorithm::SHA256
+            AlgorithmValue::SHA256
         } else if value.eq_ignore_ascii_case("SHA-256-sess") {
-            Algorithm::SHA256Sess
+            AlgorithmValue::SHA256Sess
         } else if value.eq_ignore_ascii_case("SHA-512-256") {
-            Algorithm::SHA512256
+            AlgorithmValue::SHA512256
         } else if value.eq_ignore_ascii_case("SHA-512-256-sess") {
-            Algorithm::SHA512256Sess
+            AlgorithmValue::SHA512256Sess
         } else {
-            Algorithm::Other(value)
+            AlgorithmValue::Other(value)
         }
     }
 }
 
-impl fmt::Display for Algorithm {
+impl fmt::Display for AlgorithmValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Algorithm::MD5 => f.write_str("MD5"),
-            Algorithm::MD5Sess => f.write_str("MD5-sess"),
-            Algorithm::SHA256 => f.write_str("SHA-256"),
-            Algorithm::SHA256Sess => f.write_str("SHA-256-sess"),
-            Algorithm::SHA512256 => f.write_str("SHA-512-256"),
-            Algorithm::SHA512256Sess => f.write_str("SHA-512-256-sess"),
-            Algorithm::Other(other) => f.write_str(other),
+            AlgorithmValue::MD5 => f.write_str("MD5"),
+            AlgorithmValue::MD5Sess => f.write_str("MD5-sess"),
+            AlgorithmValue::SHA256 => f.write_str("SHA-256"),
+            AlgorithmValue::SHA256Sess => f.write_str("SHA-256-sess"),
+            AlgorithmValue::SHA512256 => f.write_str("SHA-512-256"),
+            AlgorithmValue::SHA512256Sess => f.write_str("SHA-512-256-sess"),
+            AlgorithmValue::Other(other) => f.write_str(other),
         }
     }
 }
@@ -581,7 +647,7 @@ mod test {
                 assert_eq!(nonce, "abc123");
                 assert_eq!(opaque, None);
                 assert!(!stale);
-                assert_eq!(algorithm, Algorithm::MD5);
+                assert_eq!(algorithm, Algorithm::AlgorithmValue(AlgorithmValue::MD5));
                 assert_eq!(qop, vec![]);
                 assert!(!userhash);
                 assert!(other.is_empty())
@@ -600,7 +666,7 @@ mod test {
             nonce: BytesStr::from_static("abc123"),
             opaque: None,
             stale: false,
-            algorithm: Algorithm::MD5,
+            algorithm: Algorithm::AlgorithmValue(AlgorithmValue::MD5),
             qop: vec![],
             userhash: false,
             other: vec![],
@@ -609,6 +675,164 @@ mod test {
         let expected = r#"Digest realm="example.com", nonce="abc123""#;
 
         assert_eq!(expected, challenge.default_print_ctx().to_string());
+    }
+
+    #[test]
+    fn parse_digest_aka_challenge() {
+        let input = BytesStr::from_static(r#"Digest realm="example.com", nonce="abc123", algorithm="AKAv1-MD5""#);
+
+        let (rem, auth) = AuthChallenge::parse(ParseCtx::default(&input), &input).unwrap();
+
+        match auth {
+            AuthChallenge::Digest(DigestChallenge {
+                realm,
+                domain,
+                nonce,
+                opaque,
+                stale,
+                algorithm,
+                qop,
+                userhash,
+                other,
+            }) => {
+                assert_eq!(realm, "example.com");
+                assert_eq!(domain, None);
+                assert_eq!(nonce, "abc123");
+                assert_eq!(opaque, None);
+                assert!(!stale);
+                assert_eq!(algorithm, Algorithm::AkaNamespace((AkaVersion::AKAv1, AlgorithmValue::MD5)));
+                assert_eq!(qop, vec![]);
+                assert!(!userhash);
+                assert!(other.is_empty())
+            }
+            _ => panic!(),
+        }
+
+        assert_eq!(rem, "");
+
+        let input = BytesStr::from_static(r#"Digest realm="example.com", nonce="abc123", algorithm="AKAv2-SHA-256""#);
+
+        let (rem, auth) = AuthChallenge::parse(ParseCtx::default(&input), &input).unwrap();
+
+        match auth {
+            AuthChallenge::Digest(DigestChallenge {
+                                      realm,
+                                      domain,
+                                      nonce,
+                                      opaque,
+                                      stale,
+                                      algorithm,
+                                      qop,
+                                      userhash,
+                                      other,
+                                  }) => {
+                assert_eq!(realm, "example.com");
+                assert_eq!(domain, None);
+                assert_eq!(nonce, "abc123");
+                assert_eq!(opaque, None);
+                assert!(!stale);
+                assert_eq!(algorithm, Algorithm::AkaNamespace((AkaVersion::AKAv2, AlgorithmValue::SHA256)));
+                assert_eq!(qop, vec![]);
+                assert!(!userhash);
+                assert!(other.is_empty())
+            }
+            _ => panic!(),
+        }
+
+        assert_eq!(rem, "");
+
+        let input = BytesStr::from_static(r#"Digest realm="example.com", nonce="abc123", algorithm="AKAv3-SHA-512-256-sess""#);
+
+        let (rem, auth) = AuthChallenge::parse(ParseCtx::default(&input), &input).unwrap();
+
+        match auth {
+            AuthChallenge::Digest(DigestChallenge {
+                                      realm,
+                                      domain,
+                                      nonce,
+                                      opaque,
+                                      stale,
+                                      algorithm,
+                                      qop,
+                                      userhash,
+                                      other,
+                                  }) => {
+                assert_eq!(realm, "example.com");
+                assert_eq!(domain, None);
+                assert_eq!(nonce, "abc123");
+                assert_eq!(opaque, None);
+                assert!(!stale);
+                assert_eq!(algorithm, Algorithm::AkaNamespace((AkaVersion::Other(BytesStr::from_static("AKAv3")), AlgorithmValue::SHA512256Sess)));
+                assert_eq!(qop, vec![]);
+                assert!(!userhash);
+                assert!(other.is_empty())
+            }
+            _ => panic!(),
+        }
+
+        assert_eq!(rem, "");
+
+        let input = BytesStr::from_static(r#"Digest realm="example.com", nonce="abc123", algorithm="AKA-ABC123""#);
+
+        let (rem, auth) = AuthChallenge::parse(ParseCtx::default(&input), &input).unwrap();
+
+        match auth {
+            AuthChallenge::Digest(DigestChallenge {
+                                      realm,
+                                      domain,
+                                      nonce,
+                                      opaque,
+                                      stale,
+                                      algorithm,
+                                      qop,
+                                      userhash,
+                                      other,
+                                  }) => {
+                assert_eq!(realm, "example.com");
+                assert_eq!(domain, None);
+                assert_eq!(nonce, "abc123");
+                assert_eq!(opaque, None);
+                assert!(!stale);
+                assert_eq!(algorithm, Algorithm::AlgorithmValue(AlgorithmValue::Other(BytesStr::from_static("AKA-ABC123"))));
+                assert_eq!(qop, vec![]);
+                assert!(!userhash);
+                assert!(other.is_empty())
+            }
+            _ => panic!(),
+        }
+
+        assert_eq!(rem, "");
+
+        let input = BytesStr::from_static(r#"Digest realm="example.com", nonce="abc123", algorithm="AKAvX-ABC123""#);
+
+        let (rem, auth) = AuthChallenge::parse(ParseCtx::default(&input), &input).unwrap();
+
+        match auth {
+            AuthChallenge::Digest(DigestChallenge {
+                                      realm,
+                                      domain,
+                                      nonce,
+                                      opaque,
+                                      stale,
+                                      algorithm,
+                                      qop,
+                                      userhash,
+                                      other,
+                                  }) => {
+                assert_eq!(realm, "example.com");
+                assert_eq!(domain, None);
+                assert_eq!(nonce, "abc123");
+                assert_eq!(opaque, None);
+                assert!(!stale);
+                assert_eq!(algorithm, Algorithm::AlgorithmValue(AlgorithmValue::Other(BytesStr::from_static("AKAvX-ABC123"))));
+                assert_eq!(qop, vec![]);
+                assert!(!userhash);
+                assert!(other.is_empty())
+            }
+            _ => panic!(),
+        }
+
+        assert_eq!(rem, "");
     }
 
     #[test]
@@ -636,7 +860,7 @@ mod test {
                 assert_eq!(nonce, "abc123");
                 assert_eq!(opaque, Some(BytesStr::from_static("opaque_value")));
                 assert!(stale);
-                assert_eq!(algorithm, Algorithm::SHA256);
+                assert_eq!(algorithm, Algorithm::AlgorithmValue(AlgorithmValue::SHA256));
                 assert_eq!(
                     qop,
                     vec![
@@ -669,7 +893,7 @@ mod test {
             nonce: BytesStr::from_static("abc123"),
             opaque: Some(BytesStr::from_static("opaque_value")),
             stale: true,
-            algorithm: Algorithm::SHA256,
+            algorithm: Algorithm::AlgorithmValue(AlgorithmValue::SHA256),
             qop: vec![
                 QopOption::Auth,
                 QopOption::AuthInt,
@@ -714,7 +938,7 @@ mod test {
             }) => {
                 assert_eq!(realm, "example.com");
                 assert_eq!(domain, &None);
-                assert_eq!(algorithm, &Algorithm::MD5);
+                assert_eq!(algorithm, &Algorithm::AlgorithmValue(AlgorithmValue::MD5));
                 assert_eq!(nonce, "abc123");
                 assert_eq!(opaque, &None);
                 assert_eq!(stale, &false);
@@ -739,7 +963,7 @@ mod test {
             }) => {
                 assert_eq!(realm, "example.org");
                 assert_eq!(domain, &None);
-                assert_eq!(algorithm, &Algorithm::MD5);
+                assert_eq!(algorithm, &Algorithm::AlgorithmValue(AlgorithmValue::MD5));
                 assert_eq!(nonce, "123abc");
                 assert_eq!(opaque, &None);
                 assert_eq!(stale, &false);
@@ -776,7 +1000,7 @@ mod test {
                 assert_eq!(nonce, "xyz987");
                 assert_eq!(opaque, &None);
                 assert_eq!(stale, &false);
-                assert_eq!(algorithm, &Algorithm::SHA256);
+                assert_eq!(algorithm, &Algorithm::AlgorithmValue(AlgorithmValue::SHA256));
                 assert_eq!(qop, &vec![]);
                 assert_eq!(userhash, &false);
                 assert!(other.is_empty());
@@ -808,7 +1032,7 @@ mod test {
                 assert_eq!(realm, "example.com");
                 assert_eq!(domain, None);
                 assert_eq!(nonce, "abc123");
-                assert_eq!(algorithm, Algorithm::MD5);
+                assert_eq!(algorithm, Algorithm::AlgorithmValue(AlgorithmValue::MD5));
                 assert_eq!(opaque, None);
                 assert!(!stale);
                 assert_eq!(
@@ -856,7 +1080,7 @@ mod test {
                 assert_eq!(nonce, "abc123");
                 assert_eq!(uri, "sip:bob@example.com");
                 assert_eq!(response, "00000000000000000000000000000000");
-                assert_eq!(algorithm, Algorithm::MD5);
+                assert_eq!(algorithm, Algorithm::AlgorithmValue(AlgorithmValue::MD5));
                 assert_eq!(opaque, None);
                 assert_eq!(qop_response, None);
                 assert!(!userhash);
@@ -874,7 +1098,7 @@ mod test {
             nonce: BytesStr::from_static("abc123"),
             uri: BytesStr::from_static("sip:bob@example.com"),
             response: BytesStr::from_static("00000000000000000000000000000000"),
-            algorithm: Algorithm::MD5,
+            algorithm: Algorithm::AlgorithmValue(AlgorithmValue::MD5),
             opaque: None,
             qop_response: None,
             userhash: false,
@@ -912,7 +1136,7 @@ mod test {
                 assert_eq!(nonce, "abc123");
                 assert_eq!(uri, "sip:bob@example.com");
                 assert_eq!(response, "00000000000000000000000000000000");
-                assert_eq!(algorithm, Algorithm::SHA256);
+                assert_eq!(algorithm, Algorithm::AlgorithmValue(AlgorithmValue::SHA256));
                 assert_eq!(opaque, Some(BytesStr::from_static("opaque_value")));
                 assert_eq!(
                     qop_response,
@@ -945,7 +1169,7 @@ mod test {
             nonce: BytesStr::from_static("abc123"),
             uri: BytesStr::from_static("sip:bob@example.com"),
             response: BytesStr::from_static("00000000000000000000000000000000"),
-            algorithm: Algorithm::SHA256,
+            algorithm: Algorithm::AlgorithmValue(AlgorithmValue::SHA256),
             opaque: Some(BytesStr::from_static("opaque_value")),
             qop_response: Some(QopResponse {
                 qop: QopOption::Auth,
@@ -990,7 +1214,7 @@ mod test {
                 assert_eq!(nonce, "abc123");
                 assert_eq!(uri, "sip:bob@example.com");
                 assert_eq!(response, "00000000000000000000000000000000");
-                assert_eq!(algorithm, Algorithm::MD5);
+                assert_eq!(algorithm, Algorithm::AlgorithmValue(AlgorithmValue::MD5));
                 assert_eq!(opaque, None);
                 assert_eq!(
                     qop_response,
@@ -1035,7 +1259,7 @@ mod test {
                 assert_eq!(nonce, "abc123");
                 assert_eq!(uri, "sip:bob@example.com");
                 assert_eq!(response, "00000000000000000000000000000000");
-                assert_eq!(algorithm, Algorithm::MD5);
+                assert_eq!(algorithm, Algorithm::AlgorithmValue(AlgorithmValue::MD5));
                 assert_eq!(opaque, None);
                 assert_eq!(
                     qop_response,
