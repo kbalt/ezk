@@ -4,7 +4,7 @@ from_str_header! {
     /// `Max-Forwards` header
     MaxForwards,
     Name::MAX_FORWARDS,
-    u32
+    u8
 }
 
 #[cfg(test)]
