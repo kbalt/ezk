@@ -13,7 +13,7 @@ use sip_core::{Endpoint, Error, LayerKey, Request};
 use sip_types::header::typed::{Contact, RSeq, Refresher, Supported};
 use sip_types::header::HeaderError;
 use sip_types::uri::{NameAddr, Uri};
-use sip_types::Method;
+use sip_types::{Method, Name};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 
@@ -158,6 +158,11 @@ impl Initiator {
 
             match code {
                 101..=199 => {
+                    if !response.headers.contains(&Name::CONTACT) {
+                        // Cannot create an early dialog when the contact is missing
+                        return Ok(Response::Provisional(response));
+                    }
+
                     let early = self.create_early_dialog(&response)?;
 
                     let rseq = get_rseq(&response);

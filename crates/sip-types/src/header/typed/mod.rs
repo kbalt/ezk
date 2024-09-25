@@ -38,6 +38,6 @@ pub use prack::{RAck, RSeq};
 pub use replaces::Replaces;
 pub use retry_after::RetryAfter;
 pub use routing::Routing;
-pub use subscription_state::{SubscriptionState, EventReasonValue, SubStateValue};
+pub use subscription_state::{EventReasonValue, SubStateValue, SubscriptionState};
 pub use timer::{MinSe, Refresher, SessionExpires};
 pub use via::Via;
