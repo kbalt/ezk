@@ -9,7 +9,7 @@ use sip_types::header::typed::{CSeq, CallID, Contact, FromTo, MaxForwards};
 use sip_types::header::HeaderError;
 use sip_types::msg::RequestLine;
 use sip_types::uri::{NameAddr, Uri};
-use sip_types::{CodeKind, Headers, Method, Name};
+use sip_types::{Headers, Method, Name};
 use tokio::sync::Mutex;
 
 #[derive(Debug)]
@@ -75,7 +75,6 @@ impl ClientDialogBuilder {
         &mut self,
         response: &TsxResponse,
     ) -> Result<Dialog, HeaderError> {
-        assert_eq!(response.line.code.kind(), CodeKind::Success);
         assert!(response.base_headers.to.tag.is_some());
 
         let dialog = Dialog {

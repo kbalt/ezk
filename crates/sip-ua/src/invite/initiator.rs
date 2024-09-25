@@ -126,52 +126,50 @@ impl Initiator {
             if code <= 100 {
                 // 100 Trying, cannot create dialog - just return
                 return Ok(Response::Provisional(response));
-            } else if let Some(to_tag) = response.base_headers.to.tag.as_ref() {
-                // Response is > 100 and contains a to-tag, see if we have a early dialog for the given tag
-                if let 101..=299 = code {
-                    // Only forwards success responses
-                    if let Some((_, tx)) = self.early_list.iter().find(|(tag, _)| tag == to_tag) {
-                        // Found a early dialog for the tag, forward
-                        tx.send(EarlyEvent::Response(response))
-                            .await
-                            .expect("failed to forward response, early dropped");
+            }
 
-                        continue;
-                    } else if let 101..=199 = code {
-                        let early = self.create_early_dialog(&response)?;
-
-                        let rseq = get_rseq(&response);
-
-                        return Ok(Response::Early(early, response, rseq));
-                    } else if let 200..=299 = code {
-                        let session = self.create_session(&response)?;
-
-                        return Ok(Response::Session(session, response));
-                    } else {
-                        unreachable!("all reachable cases covered")
+            if code >= 300 {
+                for (_, early) in self.early_list.drain(..) {
+                    if early.send(EarlyEvent::Terminate).await.is_err() {
+                        log::warn!(
+                            "failed to forward termination event, receiver of early dropped"
+                        );
                     }
-                } else {
-                    // Response is failure: terminate all early dialogs
-                    for (_, early) in self.early_list.drain(..) {
-                        if early.send(EarlyEvent::Terminate).await.is_err() {
-                            log::warn!(
-                                "failed to forward termination event, receiver of early dropped"
-                            );
-                        }
-                    }
-
-                    return Ok(Response::Failure(response));
                 }
-            } else {
-                // Response is not TRYING and does not contain a to-tag
-                log::warn!("Got non-100 response without To-tag");
 
-                if code >= 300 {
-                    return Ok(Response::Failure(response));
-                } else {
-                    log::warn!("Cannot handle 1XX/2XX response without To-tag, ignoring");
-                    continue;
+                return Ok(Response::Failure(response));
+            }
+
+            // Verify that there's a to-tag set
+            let Some(to_tag) = response.base_headers.to.tag.as_ref() else {
+                log::warn!("Cannot handle success response without To-tag, ignoring");
+                continue;
+            };
+
+            // Check if the response is part of any early dialog
+            if let Some((_, tx)) = self.early_list.iter().find(|(tag, _)| tag == to_tag) {
+                // Found a early dialog for the tag, forward
+                tx.send(EarlyEvent::Response(response))
+                    .await
+                    .expect("failed to forward response, early dropped");
+
+                continue;
+            }
+
+            match code {
+                101..=199 => {
+                    let early = self.create_early_dialog(&response)?;
+
+                    let rseq = get_rseq(&response);
+
+                    return Ok(Response::Early(early, response, rseq));
                 }
+                200..=299 => {
+                    let session = self.create_session(&response)?;
+
+                    return Ok(Response::Session(session, response));
+                }
+                _ => unreachable!(),
             }
         }
     }
