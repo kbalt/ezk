@@ -59,6 +59,7 @@ impl Acceptor {
         dialog: Dialog,
         invite_layer: LayerKey<InviteLayer>,
         mut invite: IncomingRequest,
+        on_cancel: Option<Box<dyn FnOnce() + Send>>,
     ) -> Result<Self> {
         assert_eq!(
             invite.line.method,
@@ -95,6 +96,7 @@ impl Acceptor {
                 dialog,
                 tsx,
                 invite,
+                on_cancel,
             }),
             peer_supports_timer,
             peer_supports_100rel,
