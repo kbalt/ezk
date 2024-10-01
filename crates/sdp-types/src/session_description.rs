@@ -167,9 +167,7 @@ pub struct SessionDescription {
 
 impl SessionDescription {
     pub fn parse(src: &BytesStr) -> Result<Self, ParseSessionDescriptionError> {
-        let lines = src
-            .split(|c| matches!(c, '\n' | '\r'))
-            .filter(|line| !line.is_empty());
+        let lines = src.split(['\n', '\r']).filter(|line| !line.is_empty());
 
         let mut parser = Parser::default();
 
