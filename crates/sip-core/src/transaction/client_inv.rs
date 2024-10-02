@@ -83,6 +83,28 @@ impl ClientInvTsx {
         })
     }
 
+    pub async fn cancel(&self, request: Request, target: &mut TargetTransportInfo) {
+        let registration = self.registration.as_ref().unwrap();
+        let mut request = registration
+            .endpoint
+            .create_outgoing(request, target)
+            .await
+            .unwrap();
+
+        let via = registration.endpoint.create_via(
+            &request.parts.transport,
+            &registration.tsx_key,
+            target.via_host_port.clone(),
+        );
+
+        request.msg.headers.insert_named_front(&via);
+        registration
+            .endpoint
+            .send_outgoing_request(&mut request)
+            .await
+            .unwrap();
+    }
+
     /// Returns the request the transaction was created from
     pub fn request(&self) -> &OutgoingRequest {
         &self.request
