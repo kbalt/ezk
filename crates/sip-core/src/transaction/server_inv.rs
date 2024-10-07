@@ -89,6 +89,11 @@ impl ServerInvTsx {
             CodeKind::Provisional | CodeKind::Success
         ));
 
+        self.registration
+            .endpoint
+            .send_outgoing_response(&mut response)
+            .await?;
+
         // after this instant is over the tsx will time out
         let abandon_retransmit = Instant::now() + T1 * 64;
 
