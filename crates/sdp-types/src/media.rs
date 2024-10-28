@@ -98,7 +98,7 @@ pub struct Media {
     pub port: u16,
     pub ports_num: Option<u32>,
     pub proto: TransportProtocol,
-    pub fmts: Vec<u32>,
+    pub fmts: Vec<u8>,
 }
 
 impl Media {

@@ -170,7 +170,10 @@ impl Print for DigestChallenge {
             f.write_str(", stale=true")?;
         }
 
-        if !matches!(self.algorithm, Algorithm::AlgorithmValue(AlgorithmValue::MD5)) {
+        if !matches!(
+            self.algorithm,
+            Algorithm::AlgorithmValue(AlgorithmValue::MD5)
+        ) {
             write!(f, ", algorithm={}", self.algorithm)?;
         }
 
@@ -393,7 +396,10 @@ impl Print for DigestResponse {
             self.username, self.realm, self.nonce, self.uri, self.response
         )?;
 
-        if !matches!(self.algorithm, Algorithm::AlgorithmValue(AlgorithmValue::MD5)) {
+        if !matches!(
+            self.algorithm,
+            Algorithm::AlgorithmValue(AlgorithmValue::MD5)
+        ) {
             write!(f, ", algorithm={}", self.algorithm)?;
         }
 
@@ -466,7 +472,10 @@ impl From<BytesStr> for Algorithm {
         // Check if it is an aka-namespace
         if let Some((version, algorithm)) = value.split_once('-') {
             // 5 characters, starting with case-insensitive "AKAv", followed by single-digit number
-            if version.len() == 5 && version[0..4].eq_ignore_ascii_case("AKAv") && version.as_bytes()[4].is_ascii_digit() {
+            if version.len() == 5
+                && version[0..4].eq_ignore_ascii_case("AKAv")
+                && version.as_bytes()[4].is_ascii_digit()
+            {
                 return Algorithm::AkaNamespace((
                     AkaVersion::from(BytesStr::from(version)),
                     AlgorithmValue::from(BytesStr::from(algorithm)),
@@ -486,7 +495,6 @@ impl Display for Algorithm {
         }
     }
 }
-
 
 /// AKA versions
 /// https://www.iana.org/assignments/aka-version-namespace/aka-version-namespace.xhtml
@@ -679,7 +687,9 @@ mod test {
 
     #[test]
     fn parse_digest_aka_challenge() {
-        let input = BytesStr::from_static(r#"Digest realm="example.com", nonce="abc123", algorithm="AKAv1-MD5""#);
+        let input = BytesStr::from_static(
+            r#"Digest realm="example.com", nonce="abc123", algorithm="AKAv1-MD5""#,
+        );
 
         let (rem, auth) = AuthChallenge::parse(ParseCtx::default(&input), &input).unwrap();
 
@@ -700,7 +710,10 @@ mod test {
                 assert_eq!(nonce, "abc123");
                 assert_eq!(opaque, None);
                 assert!(!stale);
-                assert_eq!(algorithm, Algorithm::AkaNamespace((AkaVersion::AKAv1, AlgorithmValue::MD5)));
+                assert_eq!(
+                    algorithm,
+                    Algorithm::AkaNamespace((AkaVersion::AKAv1, AlgorithmValue::MD5))
+                );
                 assert_eq!(qop, vec![]);
                 assert!(!userhash);
                 assert!(other.is_empty())
@@ -710,28 +723,33 @@ mod test {
 
         assert_eq!(rem, "");
 
-        let input = BytesStr::from_static(r#"Digest realm="example.com", nonce="abc123", algorithm="AKAv2-SHA-256""#);
+        let input = BytesStr::from_static(
+            r#"Digest realm="example.com", nonce="abc123", algorithm="AKAv2-SHA-256""#,
+        );
 
         let (rem, auth) = AuthChallenge::parse(ParseCtx::default(&input), &input).unwrap();
 
         match auth {
             AuthChallenge::Digest(DigestChallenge {
-                                      realm,
-                                      domain,
-                                      nonce,
-                                      opaque,
-                                      stale,
-                                      algorithm,
-                                      qop,
-                                      userhash,
-                                      other,
-                                  }) => {
+                realm,
+                domain,
+                nonce,
+                opaque,
+                stale,
+                algorithm,
+                qop,
+                userhash,
+                other,
+            }) => {
                 assert_eq!(realm, "example.com");
                 assert_eq!(domain, None);
                 assert_eq!(nonce, "abc123");
                 assert_eq!(opaque, None);
                 assert!(!stale);
-                assert_eq!(algorithm, Algorithm::AkaNamespace((AkaVersion::AKAv2, AlgorithmValue::SHA256)));
+                assert_eq!(
+                    algorithm,
+                    Algorithm::AkaNamespace((AkaVersion::AKAv2, AlgorithmValue::SHA256))
+                );
                 assert_eq!(qop, vec![]);
                 assert!(!userhash);
                 assert!(other.is_empty())
@@ -741,28 +759,36 @@ mod test {
 
         assert_eq!(rem, "");
 
-        let input = BytesStr::from_static(r#"Digest realm="example.com", nonce="abc123", algorithm="AKAv3-SHA-512-256-sess""#);
+        let input = BytesStr::from_static(
+            r#"Digest realm="example.com", nonce="abc123", algorithm="AKAv3-SHA-512-256-sess""#,
+        );
 
         let (rem, auth) = AuthChallenge::parse(ParseCtx::default(&input), &input).unwrap();
 
         match auth {
             AuthChallenge::Digest(DigestChallenge {
-                                      realm,
-                                      domain,
-                                      nonce,
-                                      opaque,
-                                      stale,
-                                      algorithm,
-                                      qop,
-                                      userhash,
-                                      other,
-                                  }) => {
+                realm,
+                domain,
+                nonce,
+                opaque,
+                stale,
+                algorithm,
+                qop,
+                userhash,
+                other,
+            }) => {
                 assert_eq!(realm, "example.com");
                 assert_eq!(domain, None);
                 assert_eq!(nonce, "abc123");
                 assert_eq!(opaque, None);
                 assert!(!stale);
-                assert_eq!(algorithm, Algorithm::AkaNamespace((AkaVersion::Other(BytesStr::from_static("AKAv3")), AlgorithmValue::SHA512256Sess)));
+                assert_eq!(
+                    algorithm,
+                    Algorithm::AkaNamespace((
+                        AkaVersion::Other(BytesStr::from_static("AKAv3")),
+                        AlgorithmValue::SHA512256Sess
+                    ))
+                );
                 assert_eq!(qop, vec![]);
                 assert!(!userhash);
                 assert!(other.is_empty())
@@ -772,28 +798,35 @@ mod test {
 
         assert_eq!(rem, "");
 
-        let input = BytesStr::from_static(r#"Digest realm="example.com", nonce="abc123", algorithm="AKA-ABC123""#);
+        let input = BytesStr::from_static(
+            r#"Digest realm="example.com", nonce="abc123", algorithm="AKA-ABC123""#,
+        );
 
         let (rem, auth) = AuthChallenge::parse(ParseCtx::default(&input), &input).unwrap();
 
         match auth {
             AuthChallenge::Digest(DigestChallenge {
-                                      realm,
-                                      domain,
-                                      nonce,
-                                      opaque,
-                                      stale,
-                                      algorithm,
-                                      qop,
-                                      userhash,
-                                      other,
-                                  }) => {
+                realm,
+                domain,
+                nonce,
+                opaque,
+                stale,
+                algorithm,
+                qop,
+                userhash,
+                other,
+            }) => {
                 assert_eq!(realm, "example.com");
                 assert_eq!(domain, None);
                 assert_eq!(nonce, "abc123");
                 assert_eq!(opaque, None);
                 assert!(!stale);
-                assert_eq!(algorithm, Algorithm::AlgorithmValue(AlgorithmValue::Other(BytesStr::from_static("AKA-ABC123"))));
+                assert_eq!(
+                    algorithm,
+                    Algorithm::AlgorithmValue(AlgorithmValue::Other(BytesStr::from_static(
+                        "AKA-ABC123"
+                    )))
+                );
                 assert_eq!(qop, vec![]);
                 assert!(!userhash);
                 assert!(other.is_empty())
@@ -803,28 +836,35 @@ mod test {
 
         assert_eq!(rem, "");
 
-        let input = BytesStr::from_static(r#"Digest realm="example.com", nonce="abc123", algorithm="AKAvX-ABC123""#);
+        let input = BytesStr::from_static(
+            r#"Digest realm="example.com", nonce="abc123", algorithm="AKAvX-ABC123""#,
+        );
 
         let (rem, auth) = AuthChallenge::parse(ParseCtx::default(&input), &input).unwrap();
 
         match auth {
             AuthChallenge::Digest(DigestChallenge {
-                                      realm,
-                                      domain,
-                                      nonce,
-                                      opaque,
-                                      stale,
-                                      algorithm,
-                                      qop,
-                                      userhash,
-                                      other,
-                                  }) => {
+                realm,
+                domain,
+                nonce,
+                opaque,
+                stale,
+                algorithm,
+                qop,
+                userhash,
+                other,
+            }) => {
                 assert_eq!(realm, "example.com");
                 assert_eq!(domain, None);
                 assert_eq!(nonce, "abc123");
                 assert_eq!(opaque, None);
                 assert!(!stale);
-                assert_eq!(algorithm, Algorithm::AlgorithmValue(AlgorithmValue::Other(BytesStr::from_static("AKAvX-ABC123"))));
+                assert_eq!(
+                    algorithm,
+                    Algorithm::AlgorithmValue(AlgorithmValue::Other(BytesStr::from_static(
+                        "AKAvX-ABC123"
+                    )))
+                );
                 assert_eq!(qop, vec![]);
                 assert!(!userhash);
                 assert!(other.is_empty())
@@ -1000,7 +1040,10 @@ mod test {
                 assert_eq!(nonce, "xyz987");
                 assert_eq!(opaque, &None);
                 assert_eq!(stale, &false);
-                assert_eq!(algorithm, &Algorithm::AlgorithmValue(AlgorithmValue::SHA256));
+                assert_eq!(
+                    algorithm,
+                    &Algorithm::AlgorithmValue(AlgorithmValue::SHA256)
+                );
                 assert_eq!(qop, &vec![]);
                 assert_eq!(userhash, &false);
                 assert!(other.is_empty());

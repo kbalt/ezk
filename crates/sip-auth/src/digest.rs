@@ -204,13 +204,14 @@ impl DigestAuthenticator {
     ) -> Result<DigestResponse, Error> {
         let cnonce = BytesStr::from(uuid::Uuid::new_v4().simple().to_string());
 
-        let mut ha1 = hash([
-            format!(
-                "{}:{}:",
-                credentials.user,
-                challenge.realm
-            ).as_bytes(), &credentials.password
-        ].concat().as_slice());
+        let mut ha1 = hash(
+            [
+                format!("{}:{}:", credentials.user, challenge.realm).as_bytes(),
+                &credentials.password,
+            ]
+            .concat()
+            .as_slice(),
+        );
 
         if is_session {
             ha1 = format!("{}:{}:{}", ha1, challenge.nonce, cnonce);

@@ -19,7 +19,7 @@ use std::str::FromStr;
 #[derive(Debug, Clone)]
 pub struct Fmtp {
     /// The format the parameter is for
-    pub format: u32,
+    pub format: u8,
 
     /// The parameters as string
     pub params: BytesStr,

@@ -21,7 +21,7 @@ use std::str::FromStr;
 #[derive(Debug, Clone)]
 pub struct RtpMap {
     /// The number used in the media description which this maps a description to
-    pub payload: u32,
+    pub payload: u8,
 
     /// Name of the encoding
     pub encoding: BytesStr,

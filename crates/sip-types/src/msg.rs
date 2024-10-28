@@ -202,7 +202,7 @@ impl StatusLine {
 /// Simple pull parser which returns all lines in a SIP message.
 ///
 /// > __Note:__ Lines are terminated with either `\n` or `\r\n` followed by anything but a whitespace.
-/// 
+///
 /// This is a SIP message feature allowing multi-line headers.
 ///
 /// # Examples
