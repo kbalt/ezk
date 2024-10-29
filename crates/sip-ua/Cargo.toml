@@ -1,6 +1,6 @@
 [package]
 name = "ezk-sip-ua"
-version = "0.4.3"
+version = "0.4.4"
 description = "Low level SIP user agent utilities"
 categories = ["network-programming", "multimedia"]
 keywords = ["sip"]
@@ -12,8 +12,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-sip-types = { package = "ezk-sip-types", path = "../sip-types", version = "0.2" }
-sip-core = { package = "ezk-sip-core", path = "../sip-core", version = "0.3" }
+sip-types = { package = "ezk-sip-types", path = "../sip-types", version = "0.3" }
+sip-core = { package = "ezk-sip-core", path = "../sip-core", version = "0.4" }
 
 log = "0.4"
 bytesstr = "1"
