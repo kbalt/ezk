@@ -1,5 +1,5 @@
 use crate::Result;
-use bytes::{Bytes, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 use internal::Finish;
 use sip_types::msg::{Line, MessageLine, PullParser};
 use sip_types::parse::{ParseCtx, Parser};
@@ -58,9 +58,10 @@ impl Decoder for StreamingDecoder {
     type Error = Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        if &src[..] == b"\r\n" {
-            src.clear();
-            return Ok(None);
+        // strip leading newlines
+        let trimmed_whitespace = src.trim_ascii_start();
+        if !trimmed_whitespace.is_empty() {
+            src.advance(trimmed_whitespace.len());
         }
 
         if src.len() > 4096 {
