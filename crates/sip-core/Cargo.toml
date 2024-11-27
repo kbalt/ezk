@@ -1,6 +1,6 @@
 [package]
 name = "ezk-sip-core"
-version = "0.4.0"
+version = "0.4.1"
 description = "SIP core crate providing abstrations over transport and transactions"
 categories = ["network-programming", "multimedia"]
 keywords = ["sip"]
@@ -12,10 +12,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-internal = { package = "ezk-internal", path = "../internal", version = "0.2" }
-sip-types = { package = "ezk-sip-types", path = "../sip-types", version = "0.3" }
-stun-types = { package = "ezk-stun-types", path = "../stun-types", version = "0.1.1" }
-stun = { package = "ezk-stun", path = "../stun", version = "0.2.0" }
+internal.workspace = true
+sip-types.workspace = true
+stun-types.workspace = true
+stun.workspace = true
 
 tracing = "0.1"
 bytes = "1"

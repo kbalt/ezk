@@ -12,7 +12,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-internal = { package = "ezk-internal", path = "../internal", version = "0.2" }
+internal.workspace = true
 
 bytesstr = "1"
 nom = { version = "7", default-features = false, features = ["alloc"] }

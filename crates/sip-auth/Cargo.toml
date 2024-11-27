@@ -12,7 +12,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-sip-types = { package = "ezk-sip-types", path = "../sip-types", version = "0.3" }
+sip-types.workspace = true
 
 bytesstr = "1"
 md5 = "0.7"
