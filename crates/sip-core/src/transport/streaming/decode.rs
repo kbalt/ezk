@@ -5,7 +5,6 @@ use sip_types::msg::{Line, MessageLine, PullParser};
 use sip_types::parse::{ParseCtx, Parser};
 use sip_types::Headers;
 use std::io;
-use std::mem::replace;
 use std::str::{from_utf8, Utf8Error};
 use tokio_util::codec::Decoder;
 
@@ -31,6 +30,12 @@ impl From<io::Error> for Error {
     }
 }
 
+pub enum Item {
+    DecodedMessage(DecodedMessage),
+    KeepAliveRequest,
+    KeepAliveResponse,
+}
+
 pub struct DecodedMessage {
     pub line: MessageLine,
     pub headers: Headers,
@@ -54,18 +59,27 @@ impl StreamingDecoder {
 }
 
 impl Decoder for StreamingDecoder {
-    type Item = DecodedMessage;
+    type Item = Item;
     type Error = Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         // strip leading newlines
-        let trimmed_whitespace = src.trim_ascii_start();
-        if !trimmed_whitespace.is_empty() {
-            src.advance(trimmed_whitespace.len());
+        let whitespace_count = src.iter().take_while(|b| b.is_ascii_whitespace()).count();
+        if whitespace_count > 0 {
+            let is_keep_alive_request = src.starts_with(b"\r\n\r\n");
+            let is_keep_alive_response = src.starts_with(b"\r\n");
+
+            src.advance(whitespace_count);
+
+            if is_keep_alive_request {
+                return Ok(Some(Item::KeepAliveRequest));
+            } else if is_keep_alive_response {
+                return Ok(Some(Item::KeepAliveResponse));
+            }
         }
 
-        if src.len() > 4096 {
-            // do not allow a message head larger than that
+        // limit message size
+        if src.len() > 65535 {
             src.clear();
 
             return Err(Error::MessageTooLarge);
@@ -76,30 +90,39 @@ impl Decoder for StreamingDecoder {
         let mut content_len = 0;
 
         for line in &mut parser {
-            if let Ok(line) = line {
-                // try to find content-length field
-                // so the complete message size can be calculated
-                let mut split = line.splitn(2, |&c| c == b':');
-
-                if let Some(name) = split.next() {
-                    if name.eq_ignore_ascii_case(b"content-length") || name.starts_with(b"l") {
-                        let value = split.next().ok_or(Error::Malformed)?;
-                        let value = from_utf8(value)?;
-
-                        content_len = value
-                            .trim()
-                            .parse::<usize>()
-                            .map_err(|_| Error::Malformed)?;
-
-                        if content_len > (u16::MAX as usize) {
-                            return Err(Error::MessageTooLarge);
-                        }
-                    }
-                }
-            } else {
+            let Ok(line) = line else {
                 // cannot parse complete message head yet
                 self.head_progress = parser.progress();
                 return Ok(None);
+            };
+
+            // try to find content-length field
+            // so the complete message size can be calculated
+            let mut split = line.splitn(2, |&c| c == b':');
+
+            let Some(name) = split.next() else {
+                continue;
+            };
+
+            let content_length_possible_names = sip_types::Name::CONTENT_LENGTH
+                .as_parse_strs()
+                .unwrap_or_default();
+
+            if content_length_possible_names
+                .iter()
+                .any(|str| name.eq_ignore_ascii_case(str.as_bytes()))
+            {
+                let value = split.next().ok_or(Error::Malformed)?;
+                let value = from_utf8(value)?;
+
+                content_len = value
+                    .trim()
+                    .parse::<usize>()
+                    .map_err(|_| Error::Malformed)?;
+
+                if content_len > (u16::MAX as usize) {
+                    return Err(Error::MessageTooLarge);
+                }
             }
         }
 
@@ -116,15 +139,9 @@ impl Decoder for StreamingDecoder {
             return Ok(None);
         }
 
-        // copy remaining bytes into new buffer
-        let new_src = BytesMut::from(&src[expected_complete_message_size..]);
-
         // Truncate all bytes which are not related
         // to the current message and are stored inside new_src
-        src.truncate(expected_complete_message_size);
-
-        // freeze buffer
-        let src_bytes = replace(src, new_src).freeze();
+        let src_bytes = src.split_to(expected_complete_message_size).freeze();
 
         // reset state
         self.head_progress = 0;
@@ -164,11 +181,11 @@ impl Decoder for StreamingDecoder {
         let body = src_bytes.slice(head_end..head_end + content_len);
         assert_eq!(content_len, body.len());
 
-        Ok(Some(DecodedMessage {
+        Ok(Some(Item::DecodedMessage(DecodedMessage {
             line: message_line.ok_or(Error::Malformed)?,
             headers,
             body,
             buffer: src_bytes,
-        }))
+        })))
     }
 }

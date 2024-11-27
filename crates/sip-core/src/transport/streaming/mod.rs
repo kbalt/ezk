@@ -1,16 +1,17 @@
 use crate::transport::managed::DropNotifier;
 use crate::transport::{Direction, Factory, ReceivedMessage, TpHandle, TpKey, Transport};
 use crate::{Endpoint, EndpointBuilder};
-use decode::StreamingDecoder;
+use decode::{Item, StreamingDecoder};
 use sip_types::uri::UriInfo;
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 use std::{fmt, io};
 use tokio::io::{split, AsyncRead, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::ToSocketAddrs;
 use tokio::sync::{broadcast, oneshot, Mutex};
-use tokio::time::{sleep, Sleep};
+use tokio::time::{interval, sleep, Sleep};
 use tokio_stream::StreamExt;
 use tokio_util::codec::FramedRead;
 
@@ -81,7 +82,7 @@ pub struct StreamingWrite<T> {
     remote: SocketAddr,
     incoming: bool,
 
-    socket: Mutex<WriteHalf<T>>,
+    write_half: Arc<Mutex<WriteHalf<T>>>,
 }
 
 impl<T: StreamingTransport> fmt::Debug for StreamingWrite<T> {
@@ -138,7 +139,7 @@ where
     }
 
     async fn send(&self, bytes: &[u8], _target: SocketAddr) -> io::Result<()> {
-        let mut socket = self.socket.lock().await;
+        let mut socket = self.write_half.lock().await;
         socket.write_all(bytes).await?;
         socket.flush().await?;
         Ok(())
@@ -176,10 +177,12 @@ where
 
         let (read, write) = split(stream);
 
+        let write_half = Arc::new(Mutex::new(write));
+
         let transport = StreamingWrite {
             bound: local,
             remote,
-            socket: Mutex::new(write),
+            write_half: write_half.clone(),
             incoming: false,
         };
 
@@ -190,6 +193,7 @@ where
         tokio::spawn(receive_task(
             endpoint.clone(),
             framed,
+            write_half,
             ReceiveTaskState::InUse(notifier),
             local,
             remote,
@@ -224,10 +228,12 @@ where
 
                 let (read, write) = split(stream);
 
+                let write_half = Arc::new(Mutex::new(write));
+
                 let transport = StreamingWrite {
                     bound: local,
                     remote,
-                    socket: Mutex::new(write),
+                    write_half: write_half.clone(),
                     incoming: true,
                 };
 
@@ -238,6 +244,7 @@ where
                 tokio::spawn(receive_task(
                     endpoint.clone(),
                     framed,
+                    write_half,
                     ReceiveTaskState::Unused(Box::pin(sleep(Duration::from_secs(32))), rx),
                     local,
                     remote,
@@ -257,6 +264,7 @@ enum ReceiveTaskState {
 async fn receive_task<T>(
     endpoint: Endpoint,
     mut framed: FramedRead<ReadHalf<T>, StreamingDecoder>,
+    write_half: Arc<Mutex<WriteHalf<T>>>,
     mut state: ReceiveTaskState,
     local: SocketAddr,
     remote: SocketAddr,
@@ -279,26 +287,30 @@ async fn receive_task<T>(
         tp_key,
     };
 
+    let mut keep_alive_request_interval = interval(Duration::from_secs(10));
+
     loop {
         let item = match &mut state {
             ReceiveTaskState::InUse(notifier) => {
                 tokio::select! {
-                    item = framed.next() => {
-                        item
-                    }
+                    item = framed.next() => item,
                     _ = notifier => {
                         log::debug!("all refs to transport dropped, destroying soon if not used");
                         let rx = endpoint.transports().set_unused(&tp_key);
                         state = ReceiveTaskState::Unused(Box::pin(sleep(Duration::from_secs(32))), rx);
                         continue;
                     }
+                    _ = keep_alive_request_interval.tick() => {
+                        if let Err(e) = write_half.lock().await.write(b"\r\n\r\n").await {
+                            log::debug!("Failed to send keep alive request, {e}");
+                        }
+                        continue;
+                    }
                 }
             }
             ReceiveTaskState::Unused(timeout, rx) => {
                 tokio::select! {
-                    item = framed.next() => {
-                        item
-                    }
+                    item = framed.next() => item,
                     notifier = rx => {
                         if let Ok(notifier) = notifier {
                             state = ReceiveTaskState::InUse(notifier);
@@ -308,6 +320,12 @@ async fn receive_task<T>(
                             log::error!("failed to receive notifier");
                             return;
                         }
+                    }
+                    _ = keep_alive_request_interval.tick() => {
+                        if let Err(e) = write_half.lock().await.write(b"\r\n\r\n").await {
+                            log::debug!("Failed to send keep alive request, {e}");
+                        }
+                        continue;
                     }
                     _ = timeout => {
                         log::debug!("dropping transport, not used anymore");
@@ -320,7 +338,18 @@ async fn receive_task<T>(
         let transport = endpoint.transports().set_used(&tp_key);
 
         let message = match item {
-            Some(Ok(item)) => item,
+            Some(Ok(Item::DecodedMessage(item))) => item,
+            Some(Ok(Item::KeepAliveRequest)) => {
+                if let Err(e) = write_half.lock().await.write(b"\r\n").await {
+                    log::debug!("Failed to respond to keep alive request, {e}");
+                }
+
+                continue;
+            }
+            Some(Ok(Item::KeepAliveResponse)) => {
+                // discard responses for now
+                continue;
+            }
             Some(Err(e)) => {
                 log::warn!("An error occurred when reading {} stream {}", T::NAME, e);
                 return;
