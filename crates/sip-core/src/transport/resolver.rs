@@ -1,10 +1,10 @@
+use hickory_resolver::error::{ResolveError, ResolveErrorKind};
+use hickory_resolver::proto::rr::rdata::{NAPTR, SRV};
+use hickory_resolver::proto::rr::{RData, RecordType};
+use hickory_resolver::{Name, TokioAsyncResolver};
 use multimap::MultiMap;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
-use trust_dns_resolver::error::{ResolveError, ResolveErrorKind};
-use trust_dns_resolver::proto::rr::rdata::{NAPTR, SRV};
-use trust_dns_resolver::proto::rr::{RData, RecordType};
-use trust_dns_resolver::{Name, TokioAsyncResolver};
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ServerEntry {

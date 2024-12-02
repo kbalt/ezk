@@ -573,7 +573,7 @@ impl EndpointBuilder {
     /// Set a `trust-dns-resolver` DNS resolver for the endpoint to use.
     ///
     /// Uses the system config by default.
-    pub fn set_dns_resolver(&mut self, dns_resolver: trust_dns_resolver::TokioAsyncResolver) {
+    pub fn set_dns_resolver(&mut self, dns_resolver: hickory_resolver::TokioAsyncResolver) {
         self.transports.set_dns_resolver(dns_resolver)
     }
 
