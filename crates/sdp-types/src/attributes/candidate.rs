@@ -108,64 +108,61 @@ impl IceCandidate {
         context(
     "parsing ice candidate",
             map_res(
-                preceded(
-                    tag("candidate:"),
-                    tuple((
-                        // foundation
-                        take_while_m_n(1, 32, ice_char),
-                        ws((
-                            // component id
-                            map_res(digit1, FromStr::from_str),
-                            // transport
-                            take_while(not_whitespace),
-                            // priority
-                            map_res(digit1, FromStr::from_str),
-                            // address
-                            UntaggedAddress::parse(src),
-                            // port
-                            map_res(digit1, FromStr::from_str),
-                            // candidate type
-                            preceded(tag("typ"), ws((take_while1(not_whitespace),))),
-                        )),
-                        // extensions
-                        many0(ws((
-                            // key
-                            take_while1(not_whitespace),
-                            // value
-                            take_while1(not_whitespace),
-                        ))),
+                tuple((
+                    // foundation
+                    take_while_m_n(1, 32, ice_char),
+                    ws((
+                        // component id
+                        map_res(digit1, FromStr::from_str),
+                        // transport
+                        take_while(not_whitespace),
+                        // priority
+                        map_res(digit1, FromStr::from_str),
+                        // address
+                        UntaggedAddress::parse(src),
+                        // port
+                        map_res(digit1, FromStr::from_str),
+                        // candidate type
+                        preceded(tag("typ"), ws((take_while1(not_whitespace),))),
                     )),
-                ),
-                |(foundation, (component, transport, priority, address, port, type_), p_ext)| -> Result<IceCandidate, InvalidCandidateParamError> {
-                    let mut unknown = vec![];
+                    // extensions
+                    many0(ws((
+                        // key
+                        take_while1(not_whitespace),
+                        // value
+                        take_while1(not_whitespace),
+                    ))),
+                )),
+            |(foundation, (component, transport, priority, address, port, type_), p_ext)| -> Result<IceCandidate, InvalidCandidateParamError> {
+                let mut unknown = vec![];
 
-                    let mut rel_addr = None;
-                    let mut rel_port = None;
+                let mut rel_addr = None;
+                let mut rel_port = None;
 
-                    for (key, value) in p_ext {
-                        match key {
-                            "raddr" => rel_addr = Some(UntaggedAddress::parse(src)(value).map_err(|_| InvalidCandidateParamError)?.1),
-                            "rport" => rel_port = Some(u16::from_str(value).map_err(|_| InvalidCandidateParamError)?),
-                            _ => unknown.push((
-                                BytesStr::from_parse(src, key),
-                                BytesStr::from_parse(src, value),
-                            )),
-                        }
+                for (key, value) in p_ext {
+                    match key {
+                        "raddr" => rel_addr = Some(UntaggedAddress::parse(src)(value).map_err(|_| InvalidCandidateParamError)?.1),
+                        "rport" => rel_port = Some(u16::from_str(value).map_err(|_| InvalidCandidateParamError)?),
+                        _ => unknown.push((
+                            BytesStr::from_parse(src, key),
+                            BytesStr::from_parse(src, value),
+                        )),
                     }
-
-                    Ok(IceCandidate {
-                        foundation: BytesStr::from_parse(src, foundation),
-                        component,
-                        transport: BytesStr::from_parse(src, transport),
-                        priority,
-                        address,
-                        port,
-                        typ: BytesStr::from_parse(src, type_.0),
-                        rel_addr,
-                        rel_port,
-                        unknown,
-                    })
                 }
+
+                Ok(IceCandidate {
+                    foundation: BytesStr::from_parse(src, foundation),
+                    component,
+                    transport: BytesStr::from_parse(src, transport),
+                    priority,
+                    address,
+                    port,
+                    typ: BytesStr::from_parse(src, type_.0),
+                    rel_addr,
+                    rel_port,
+                    unknown,
+                })
+            }
             )
         )(i)
     }
@@ -175,7 +172,7 @@ impl fmt::Display for IceCandidate {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "a=candidate:{} {} {} {} {} {} typ {}",
+            "{} {} {} {} {} {} typ {}",
             self.foundation,
             self.component,
             self.transport,
@@ -209,7 +206,7 @@ mod test {
     #[test]
     fn candidate() {
         let input = BytesStr::from_static(
-            "candidate:12 2 TCP 2105458942 192.168.56.1 9 typ host raddr 192.168.1.22 rport 123 tcptype active",
+            "12 2 TCP 2105458942 192.168.56.1 9 typ host raddr 192.168.1.22 rport 123 tcptype active",
         );
 
         let (rem, candidate) = IceCandidate::parse(input.as_ref(), &input).unwrap();
@@ -257,9 +254,6 @@ mod test {
             unknown: vec![],
         };
 
-        assert_eq!(
-            candidate.to_string(),
-            "a=candidate:1 1 UDP 1 127.0.0.1 9 typ host"
-        );
+        assert_eq!(candidate.to_string(), "1 1 UDP 1 127.0.0.1 9 typ host");
     }
 }

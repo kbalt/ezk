@@ -11,7 +11,7 @@ use std::fmt;
 /// > If not specified at all `sendrecv` is assumed by default
 ///
 /// [RFC8866](https://www.rfc-editor.org/rfc/rfc8866.html#section-6.7)
-#[derive(Default, Debug, Copy, Clone)]
+#[derive(Default, Debug, Copy, Clone, PartialEq)]
 pub enum Direction {
     /// Send and receive media data
     #[default]
@@ -49,6 +49,6 @@ impl Direction {
 
 impl fmt::Display for Direction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "a={}", self.as_str())
+        write!(f, "{}", self.as_str())
     }
 }

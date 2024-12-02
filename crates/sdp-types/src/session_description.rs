@@ -1,10 +1,11 @@
+use crate::attributes::Group;
 use crate::connection::Connection;
 use crate::media::Media;
 use crate::origin::Origin;
 use crate::time::Time;
 use crate::{bandwidth::Bandwidth, Rtcp};
 use crate::{
-    Direction, Fmtp, IceCandidate, IceOptions, IcePassword, IceUsernameFragment, RtpMap,
+    Direction, ExtMap, Fmtp, IceCandidate, IceOptions, IcePassword, IceUsernameFragment, RtpMap,
     SrtpCrypto, UnknownAttribute,
 };
 use bytesstr::BytesStr;
@@ -39,23 +40,29 @@ pub struct MediaDescription {
     /// Media description's media field (m=)
     pub media: Media,
 
-    /// Media direction
-    pub direction: Direction,
-
     /// Optional connection (c field)
     pub connection: Option<Connection>,
 
     /// Optional bandwidths (b fields)
     pub bandwidth: Vec<Bandwidth>,
 
+    /// Media direction attribute
+    pub direction: Direction,
+
     /// rtcp attribute
-    pub rtcp_attr: Option<Rtcp>,
+    pub rtcp: Option<Rtcp>,
+
+    /// rtcp-mux attribute
+    pub rtcp_mux: bool,
+
+    /// Media ID (a=mid)
+    pub mid: Option<BytesStr>,
 
     /// RTP Payload mappings
-    pub rtpmaps: Vec<RtpMap>,
+    pub rtpmap: Vec<RtpMap>,
 
     /// RTP encoding parameters
-    pub fmtps: Vec<Fmtp>,
+    pub fmtp: Vec<Fmtp>,
 
     /// ICE username fragment
     pub ice_ufrag: Option<IceUsernameFragment>,
@@ -72,6 +79,9 @@ pub struct MediaDescription {
     /// Crypto attributes
     pub crypto: Vec<SrtpCrypto>,
 
+    /// ExtMap attributes
+    pub extmap: Vec<ExtMap>,
+
     /// Additional attributes
     pub attributes: Vec<UnknownAttribute>,
 }
@@ -85,21 +95,29 @@ impl fmt::Display for MediaDescription {
         }
 
         for bw in &self.bandwidth {
-            write!(f, "{}\r\n", bw)?;
+            write!(f, "b={bw}\r\n")?;
         }
 
-        write!(f, "{}\r\n", self.direction)?;
+        write!(f, "a={}\r\n", self.direction)?;
 
-        if let Some(rtcp) = &self.rtcp_attr {
-            write!(f, "{}\r\n", rtcp)?;
+        if let Some(rtcp) = &self.rtcp {
+            write!(f, "a=rtcp:{}\r\n", rtcp)?;
         }
 
-        for rtpmap in &self.rtpmaps {
-            write!(f, "{}\r\n", rtpmap)?;
+        if self.rtcp_mux {
+            write!(f, "a=rtcp-mux\r\n")?;
         }
 
-        for fmtp in &self.fmtps {
-            write!(f, "{}\r\n", fmtp)?;
+        if let Some(mid) = &self.mid {
+            write!(f, "a=mid:{}\r\n", mid)?;
+        }
+
+        for rtpmap in &self.rtpmap {
+            write!(f, "a=rtpmap:{}\r\n", rtpmap)?;
+        }
+
+        for fmtp in &self.fmtp {
+            write!(f, "a=fmtp:{}\r\n", fmtp)?;
         }
 
         if let Some(ufrag) = &self.ice_ufrag {
@@ -110,8 +128,20 @@ impl fmt::Display for MediaDescription {
             write!(f, "{}\r\n", pwd)?;
         }
 
+        for candidate in &self.ice_candidates {
+            write!(f, "a=candidate:{candidate}\r\n")?;
+        }
+
+        if self.ice_end_of_candidates {
+            write!(f, "a=end-of-candidates\r\n")?;
+        }
+
         for crypto in &self.crypto {
             write!(f, "a=crypto:{crypto}\r\n")?;
+        }
+
+        for extmap in &self.extmap {
+            write!(f, "a=extmap:{extmap}\r\n")?;
         }
 
         for attr in &self.attributes {
@@ -126,23 +156,29 @@ impl fmt::Display for MediaDescription {
 /// parse SDP using [`SessionDescription::parse`].
 #[derive(Debug, Clone)]
 pub struct SessionDescription {
-    /// The name of the sdp session (s field)
-    pub name: BytesStr,
-
     /// Origin (o field)
     pub origin: Origin,
 
-    /// Session start/stop time (t field)
-    pub time: Time,
-
-    /// Global session media direction
-    pub direction: Direction,
+    /// The name of the sdp session (s field)
+    pub name: BytesStr,
 
     /// Optional connection (c field)
     pub connection: Option<Connection>,
 
     /// Bandwidth (b field)
     pub bandwidth: Vec<Bandwidth>,
+
+    /// Session start/stop time (t field)
+    pub time: Time,
+
+    /// Global session media direction attribute
+    pub direction: Direction,
+
+    /// Media groups (a=group)
+    pub group: Vec<Group>,
+
+    /// Extmap attribute (a=extmap)
+    pub extmap: Vec<ExtMap>,
 
     /// ICE options, omitted if empty
     pub ice_options: IceOptions,
@@ -181,25 +217,33 @@ impl SessionDescription {
 
 impl fmt::Display for SessionDescription {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "\
-v=0\r\n\
-{}\r\n\
-s={}\r\n\
-",
-            self.origin, self.name
-        )?;
+        write!(f, "v=0\r\n")?;
+        write!(f, "o={}\r\n", self.origin)?;
+        write!(f, "s={}\r\n", self.name)?;
 
         if let Some(conn) = &self.connection {
             write!(f, "{conn}\r\n")?;
         }
 
         for bw in &self.bandwidth {
-            write!(f, "{bw}\r\n")?;
+            write!(f, "b={bw}\r\n")?;
         }
 
-        write!(f, "{}\r\n{}", self.time, self.ice_options)?;
+        write!(f, "{}\r\n", self.time)?;
+
+        // omit direction here, since it is always written in media descriptions
+
+        for group in &self.group {
+            write!(f, "a=group:{group}\r\n")?;
+        }
+
+        for extmap in &self.extmap {
+            write!(f, "a=extmap:{extmap}\r\n")?;
+        }
+
+        if !self.ice_options.options.is_empty() {
+            write!(f, "a=ice-options:{}\r\n", self.ice_options)?;
+        }
 
         if self.ice_lite {
             f.write_str("a=ice-lite\r\n")?;
@@ -227,12 +271,14 @@ s={}\r\n\
 
 #[derive(Default)]
 struct Parser {
-    name: Option<BytesStr>,
     origin: Option<Origin>,
-    time: Option<Time>,
-    direction: Direction,
+    name: Option<BytesStr>,
     connection: Option<Connection>,
     bandwidth: Vec<Bandwidth>,
+    time: Option<Time>,
+    direction: Direction,
+    group: Vec<Group>,
+    extmap: Vec<ExtMap>,
     ice_options: IceOptions,
     ice_lite: bool,
     ice_ufrag: Option<IceUsernameFragment>,
@@ -290,17 +336,20 @@ impl Parser {
                 self.media_descriptions.push(MediaDescription {
                     media,
                     // inherit session direction
-                    direction: self.direction,
                     connection: None,
                     bandwidth: vec![],
-                    rtcp_attr: None,
-                    rtpmaps: vec![],
-                    fmtps: vec![],
+                    direction: self.direction,
+                    rtcp: None,
+                    rtcp_mux: false,
+                    mid: None,
+                    rtpmap: vec![],
+                    fmtp: vec![],
                     ice_ufrag: None,
                     ice_pwd: None,
                     ice_candidates: vec![],
                     ice_end_of_candidates: false,
                     crypto: vec![],
+                    extmap: vec![],
                     attributes: vec![],
                 });
             }
@@ -333,20 +382,27 @@ impl Parser {
         value: &str,
     ) -> Result<(), ParseSessionDescriptionError> {
         match name {
+            "mid" => {
+                if let Some(media_description) = self.media_descriptions.last_mut() {
+                    media_description.mid = Some(BytesStr::from_parse(src.as_ref(), value.trim()));
+                }
+
+                // TODO error here ?
+            }
             "rtpmap" => {
-                let (_, rtpmap) = RtpMap::parse(src.as_ref(), line).finish()?;
+                let (_, rtpmap) = RtpMap::parse(src.as_ref(), value).finish()?;
 
                 if let Some(media_description) = self.media_descriptions.last_mut() {
-                    media_description.rtpmaps.push(rtpmap);
+                    media_description.rtpmap.push(rtpmap);
                 }
 
                 // TODO error here ?
             }
             "fmtp" => {
-                let (_, fmtp) = Fmtp::parse(src.as_ref(), line).finish()?;
+                let (_, fmtp) = Fmtp::parse(src.as_ref(), value).finish()?;
 
                 if let Some(media_description) = self.media_descriptions.last_mut() {
-                    media_description.fmtps.push(fmtp);
+                    media_description.fmtp.push(fmtp);
                 }
 
                 // TODO error here ?
@@ -355,7 +411,7 @@ impl Parser {
                 let (_, rtcp) = Rtcp::parse(src.as_ref(), line).finish()?;
 
                 if let Some(media_description) = self.media_descriptions.last_mut() {
-                    media_description.rtcp_attr = Some(rtcp);
+                    media_description.rtcp = Some(rtcp);
                 }
 
                 // TODO error here?
@@ -403,6 +459,19 @@ impl Parser {
 
                 // TODO error here?
             }
+            "group" => {
+                let (_, group) = Group::parse(src.as_ref(), value).finish()?;
+                self.group.push(group);
+            }
+            "extmap" => {
+                let (_, extmap) = ExtMap::parse(src.as_ref(), value).finish()?;
+
+                if let Some(media_description) = self.media_descriptions.last_mut() {
+                    media_description.extmap.push(extmap);
+                } else {
+                    self.extmap.push(extmap);
+                }
+            }
             _ => {
                 let attr = UnknownAttribute {
                     name: src.slice_ref(name),
@@ -439,6 +508,11 @@ impl Parser {
 
                 // TODO error here?
             }
+            "rtcp-mux" => {
+                if let Some(media_description) = self.media_descriptions.last_mut() {
+                    media_description.rtcp_mux = true;
+                }
+            }
             _ => {
                 let attr = UnknownAttribute {
                     name: src.slice_ref(line),
@@ -460,10 +534,12 @@ impl Parser {
                 .origin
                 .ok_or(ParseSessionDescriptionError::MissingOrigin)?,
             name: self.name.ok_or(ParseSessionDescriptionError::MissingName)?,
-            time: self.time.ok_or(ParseSessionDescriptionError::MissingTime)?,
-            direction: self.direction,
             connection: self.connection,
             bandwidth: self.bandwidth,
+            time: self.time.ok_or(ParseSessionDescriptionError::MissingTime)?,
+            direction: self.direction,
+            group: self.group,
+            extmap: self.extmap,
             ice_options: self.ice_options,
             ice_lite: self.ice_lite,
             ice_ufrag: self.ice_ufrag,

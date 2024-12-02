@@ -3,11 +3,9 @@
 use bytes::Bytes;
 use bytesstr::BytesStr;
 use internal::{ws, IResult};
-use nom::bytes::complete::tag;
 use nom::character::complete::digit1;
 use nom::combinator::{map, map_res};
 use nom::error::context;
-use nom::sequence::preceded;
 use std::fmt;
 use std::str::FromStr;
 
@@ -30,14 +28,11 @@ impl Fmtp {
         context(
             "parsing fmtp",
             map(
-                preceded(
-                    tag("fmtp:"),
-                    ws((
-                        // format & remaining into params
-                        map_res(digit1, FromStr::from_str),
-                        |remaining| Ok(("", remaining)),
-                    )),
-                ),
+                ws((
+                    // format & remaining into params
+                    map_res(digit1, FromStr::from_str),
+                    |remaining| Ok(("", remaining)),
+                )),
                 |(format, params)| Fmtp {
                     format,
                     params: BytesStr::from_parse(src, params),
@@ -49,7 +44,7 @@ impl Fmtp {
 
 impl fmt::Display for Fmtp {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "a=fmtp:{} {}", self.format, self.params)
+        write!(f, "{} {}", self.format, self.params)
     }
 }
 
@@ -59,7 +54,7 @@ mod test {
 
     #[test]
     fn fmtp() {
-        let input = BytesStr::from_static("fmtp:111 some=param");
+        let input = BytesStr::from_static("111 some=param");
 
         let (rem, fmtp) = Fmtp::parse(input.as_ref(), &input).unwrap();
 
@@ -76,6 +71,6 @@ mod test {
             params: "some=param".into(),
         };
 
-        assert_eq!(fmtp.to_string(), "a=fmtp:111 some=param");
+        assert_eq!(fmtp.to_string(), "111 some=param");
     }
 }

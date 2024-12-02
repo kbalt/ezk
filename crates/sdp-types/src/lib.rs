@@ -16,7 +16,7 @@ mod tagged_address;
 mod time;
 
 pub use attributes::{
-    Direction, Fmtp, IceCandidate, IceOptions, IcePassword, IceUsernameFragment,
+    Direction, ExtMap, Fmtp, Group, IceCandidate, IceOptions, IcePassword, IceUsernameFragment,
     InvalidCandidateParamError, Rtcp, RtpMap, SrtpCrypto, SrtpFecOrder, SrtpKeyingMaterial,
     SrtpSessionParam, SrtpSuite, UnknownAttribute, UntaggedAddress,
 };

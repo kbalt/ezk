@@ -46,7 +46,7 @@ impl Bandwidth {
 
 impl fmt::Display for Bandwidth {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "b={}:{}", self.type_, self.bandwidth)
+        write!(f, "{}:{}", self.type_, self.bandwidth)
     }
 }
 
@@ -77,6 +77,6 @@ mod test {
             bandwidth: 96000,
         };
 
-        assert_eq!(origin.to_string(), "b=AS:96000");
+        assert_eq!(origin.to_string(), "AS:96000");
     }
 }

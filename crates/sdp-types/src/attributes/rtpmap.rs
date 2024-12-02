@@ -1,4 +1,4 @@
-//! RtpMap attribute (`a=rtpmap:...`)
+//! RtpMap attribute (`...`)
 
 use bytes::Bytes;
 use bytesstr::BytesStr;
@@ -37,33 +37,30 @@ impl RtpMap {
     pub fn parse<'i>(src: &Bytes, i: &'i str) -> IResult<&'i str, Self> {
         context(
             "parsing rtpmap",
-            preceded(
-                tag("rtpmap:"),
-                map(
-                    tuple((
-                        // payload num
-                        map_res(digit1, FromStr::from_str),
-                        // encoding
-                        ws((terminated(
-                            map(take_while(|c| c != '/'), |slice| {
-                                BytesStr::from_parse(src, slice)
-                            }),
-                            tag("/"),
-                        ),)),
-                        // clock rate
-                        map_res(digit1, FromStr::from_str),
-                        // optional params
-                        opt(preceded(tag("/"), |rem| {
-                            Ok(("", BytesStr::from_parse(src, rem)))
-                        })),
-                    )),
-                    |(payload, (encoding,), clock_rate, params)| RtpMap {
-                        payload,
-                        encoding,
-                        clock_rate,
-                        params,
-                    },
-                ),
+            map(
+                tuple((
+                    // payload num
+                    map_res(digit1, FromStr::from_str),
+                    // encoding
+                    ws((terminated(
+                        map(take_while(|c| c != '/'), |slice| {
+                            BytesStr::from_parse(src, slice)
+                        }),
+                        tag("/"),
+                    ),)),
+                    // clock rate
+                    map_res(digit1, FromStr::from_str),
+                    // optional params
+                    opt(preceded(tag("/"), |rem| {
+                        Ok(("", BytesStr::from_parse(src, rem)))
+                    })),
+                )),
+                |(payload, (encoding,), clock_rate, params)| RtpMap {
+                    payload,
+                    encoding,
+                    clock_rate,
+                    params,
+                },
             ),
         )(i)
     }
@@ -71,11 +68,7 @@ impl RtpMap {
 
 impl fmt::Display for RtpMap {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "a=rtpmap:{} {}/{}",
-            self.payload, self.encoding, self.clock_rate
-        )?;
+        write!(f, "{} {}/{}", self.payload, self.encoding, self.clock_rate)?;
 
         if let Some(params) = &self.params {
             let _ = write!(f, "/{}", params);
@@ -91,7 +84,7 @@ mod test {
 
     #[test]
     fn rtpmap() {
-        let input = BytesStr::from_static("rtpmap:0 PCMU/8000");
+        let input = BytesStr::from_static("0 PCMU/8000");
 
         let (rem, rtpmap) = RtpMap::parse(input.as_ref(), &input).unwrap();
 
@@ -105,7 +98,7 @@ mod test {
 
     #[test]
     fn rtpmap_params() {
-        let input = BytesStr::from_static("rtpmap:0 PCMU/8000/1");
+        let input = BytesStr::from_static("0 PCMU/8000/1");
 
         let (rem, rtpmap) = RtpMap::parse(input.as_ref(), &input).unwrap();
 
@@ -126,7 +119,7 @@ mod test {
             params: None,
         };
 
-        assert_eq!(rtpmap.to_string(), "a=rtpmap:0 PCMU/8000");
+        assert_eq!(rtpmap.to_string(), "0 PCMU/8000");
     }
 
     #[test]
@@ -138,6 +131,6 @@ mod test {
             params: Some("1".into()),
         };
 
-        assert_eq!(rtpmap.to_string(), "a=rtpmap:0 PCMU/8000/1");
+        assert_eq!(rtpmap.to_string(), "0 PCMU/8000/1");
     }
 }

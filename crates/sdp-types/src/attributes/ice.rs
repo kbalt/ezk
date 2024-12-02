@@ -41,13 +41,11 @@ impl fmt::Display for IceOptions {
             return Ok(());
         }
 
-        write!(f, "a=ice-options:")?;
-
         for option in &self.options {
             write!(f, " {}", option)?;
         }
 
-        f.write_str("\r\n")
+        Ok(())
     }
 }
 

@@ -55,7 +55,7 @@ impl fmt::Display for Origin {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "o={} {} {} {}",
+            "{} {} {} {}",
             self.username, self.session_id, self.session_version, self.address
         )
     }
@@ -93,7 +93,7 @@ mod test {
 
         assert_eq!(
             origin.to_string(),
-            "o=- 123456789 987654321 IN IP4 192.168.123.222"
+            "- 123456789 987654321 IN IP4 192.168.123.222"
         );
     }
 }
