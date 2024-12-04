@@ -180,13 +180,13 @@ pub struct SessionDescription {
     /// Extmap attribute (a=extmap)
     pub extmap: Vec<ExtMap>,
 
-    /// ICE options, omitted if empty
-    pub ice_options: IceOptions,
-
     /// If not present: false
     ///
     /// If specified an ice-lite implementation is used
     pub ice_lite: bool,
+
+    /// ICE options, omitted if empty
+    pub ice_options: IceOptions,
 
     /// ICE username fragment
     pub ice_ufrag: Option<IceUsernameFragment>,
@@ -382,6 +382,19 @@ impl Parser {
         value: &str,
     ) -> Result<(), ParseSessionDescriptionError> {
         match name {
+            "group" => {
+                let (_, group) = Group::parse(src.as_ref(), value).finish()?;
+                self.group.push(group);
+            }
+            "rtcp" => {
+                let (_, rtcp) = Rtcp::parse(src.as_ref(), value).finish()?;
+
+                if let Some(media_description) = self.media_descriptions.last_mut() {
+                    media_description.rtcp = Some(rtcp);
+                }
+
+                // TODO error here?
+            }
             "mid" => {
                 if let Some(media_description) = self.media_descriptions.last_mut() {
                     media_description.mid = Some(BytesStr::from_parse(src.as_ref(), value.trim()));
@@ -406,15 +419,6 @@ impl Parser {
                 }
 
                 // TODO error here ?
-            }
-            "rtcp" => {
-                let (_, rtcp) = Rtcp::parse(src.as_ref(), value).finish()?;
-
-                if let Some(media_description) = self.media_descriptions.last_mut() {
-                    media_description.rtcp = Some(rtcp);
-                }
-
-                // TODO error here?
             }
             "ice-lite" => {
                 self.ice_lite = true;
@@ -459,10 +463,6 @@ impl Parser {
 
                 // TODO error here?
             }
-            "group" => {
-                let (_, group) = Group::parse(src.as_ref(), value).finish()?;
-                self.group.push(group);
-            }
             "extmap" => {
                 let (_, extmap) = ExtMap::parse(src.as_ref(), value).finish()?;
 
@@ -501,17 +501,17 @@ impl Parser {
             "recvonly" => *direction = Direction::RecvOnly,
             "sendonly" => *direction = Direction::SendOnly,
             "inactive" => *direction = Direction::Inactive,
+            "rtcp-mux" => {
+                if let Some(media_description) = self.media_descriptions.last_mut() {
+                    media_description.rtcp_mux = true;
+                }
+            }
             "end-of-candidates" => {
                 if let Some(media_description) = self.media_descriptions.last_mut() {
                     media_description.ice_end_of_candidates = true;
                 }
 
                 // TODO error here?
-            }
-            "rtcp-mux" => {
-                if let Some(media_description) = self.media_descriptions.last_mut() {
-                    media_description.rtcp_mux = true;
-                }
             }
             _ => {
                 let attr = UnknownAttribute {
