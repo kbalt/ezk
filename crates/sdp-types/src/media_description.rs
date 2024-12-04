@@ -58,6 +58,9 @@ pub struct MediaDescription {
     /// ExtMap attributes
     pub extmap: Vec<ExtMap>,
 
+    /// Extmap allow mixed attribute (a=extmap-allow-mixed)
+    pub extmap_allow_mixed: bool,
+
     /// Additional attributes
     pub attributes: Vec<UnknownAttribute>,
 }
@@ -118,6 +121,10 @@ impl fmt::Display for MediaDescription {
 
         for extmap in &self.extmap {
             write!(f, "a=extmap:{extmap}\r\n")?;
+        }
+
+        if self.extmap_allow_mixed {
+            write!(f, "a=extmap-allow-mixed\r\n")?;
         }
 
         for attr in &self.attributes {

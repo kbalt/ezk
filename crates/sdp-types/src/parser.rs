@@ -37,6 +37,7 @@ pub(crate) struct Parser {
     direction: Direction,
     group: Vec<Group>,
     extmap: Vec<ExtMap>,
+    extmap_allow_mixed: bool,
     ice_options: IceOptions,
     ice_lite: bool,
     ice_ufrag: Option<IceUsernameFragment>,
@@ -108,6 +109,8 @@ impl Parser {
                     ice_end_of_candidates: false,
                     crypto: vec![],
                     extmap: vec![],
+                    // inherit extmap allow mixed attribute
+                    extmap_allow_mixed: self.extmap_allow_mixed,
                     attributes: vec![],
                 });
             }
@@ -259,6 +262,13 @@ impl Parser {
             "recvonly" => *direction = Direction::RecvOnly,
             "sendonly" => *direction = Direction::SendOnly,
             "inactive" => *direction = Direction::Inactive,
+            "extmap-allow-mixed" => {
+                self.extmap_allow_mixed = true;
+
+                if let Some(media_description) = self.media_descriptions.last_mut() {
+                    media_description.extmap_allow_mixed = true;
+                }
+            }
             "rtcp-mux" => {
                 if let Some(media_description) = self.media_descriptions.last_mut() {
                     media_description.rtcp_mux = true;
@@ -298,8 +308,9 @@ impl Parser {
             direction: self.direction,
             group: self.group,
             extmap: self.extmap,
-            ice_options: self.ice_options,
+            extmap_allow_mixed: self.extmap_allow_mixed,
             ice_lite: self.ice_lite,
+            ice_options: self.ice_options,
             ice_ufrag: self.ice_ufrag,
             ice_pwd: self.ice_pwd,
             attributes: self.attributes,

@@ -39,6 +39,9 @@ pub struct SessionDescription {
     /// Extmap attribute (a=extmap)
     pub extmap: Vec<ExtMap>,
 
+    /// Extmap allow mixed attribute (a=extmap-allow-mixed)
+    pub extmap_allow_mixed: bool,
+
     /// If not present: false
     ///
     /// If specified an ice-lite implementation is used
@@ -98,6 +101,10 @@ impl fmt::Display for SessionDescription {
 
         for extmap in &self.extmap {
             write!(f, "a=extmap:{extmap}\r\n")?;
+        }
+
+        if self.extmap_allow_mixed {
+            write!(f, "a=extmap-allow-mixed\r\n")?;
         }
 
         if !self.ice_options.options.is_empty() {
