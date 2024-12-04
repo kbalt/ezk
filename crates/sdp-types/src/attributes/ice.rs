@@ -74,12 +74,6 @@ impl IceUsernameFragment {
     }
 }
 
-impl fmt::Display for IceUsernameFragment {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "a=ice-ufrag:{}", self.ufrag)
-    }
-}
-
 /// Ice password attribute (`a=ice-pwd`)
 ///
 /// Session and Media Level attribute  
@@ -102,11 +96,5 @@ impl IcePassword {
                 pwd: BytesStr::from_parse(src, pwd),
             }),
         )(i)
-    }
-}
-
-impl fmt::Display for IcePassword {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "a=ice-pwd:{}", self.pwd)
     }
 }

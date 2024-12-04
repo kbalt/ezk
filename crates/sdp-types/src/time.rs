@@ -42,7 +42,7 @@ impl Time {
 
 impl fmt::Display for Time {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "t={} {}", self.start, self.stop)
+        write!(f, "{} {}", self.start, self.stop)
     }
 }
 

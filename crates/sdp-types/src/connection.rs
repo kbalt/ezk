@@ -53,7 +53,7 @@ impl Connection {
 
 impl fmt::Display for Connection {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "c={}", self.address)?;
+        write!(f, "{}", self.address)?;
 
         match self.address {
             TaggedAddress::IP4(_) | TaggedAddress::IP4FQDN(_) => {

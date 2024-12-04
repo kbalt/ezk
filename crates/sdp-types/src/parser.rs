@@ -109,7 +109,7 @@ impl Parser {
                     ice_end_of_candidates: false,
                     crypto: vec![],
                     extmap: vec![],
-                    // inherit extmap allow mixed attribute
+                    // inherit extmap allow mixed atr
                     extmap_allow_mixed: self.extmap_allow_mixed,
                     attributes: vec![],
                 });
@@ -127,7 +127,7 @@ impl Parser {
         line: &str,
     ) -> Result<(), ParseSessionDescriptionError> {
         if let Some((name, value)) = line.split_once(':') {
-            self.parse_attribute_with_value(src, line, name, value)?;
+            self.parse_attribute_with_value(src, name, value)?;
         } else {
             self.parse_attribute_without_value(src, line);
         }
@@ -138,7 +138,6 @@ impl Parser {
     fn parse_attribute_with_value(
         &mut self,
         src: &BytesStr,
-        line: &str,
         name: &str,
         value: &str,
     ) -> Result<(), ParseSessionDescriptionError> {
@@ -207,7 +206,7 @@ impl Parser {
                 }
             }
             "candidate" => {
-                let (_, candidate) = IceCandidate::parse(src.as_ref(), line).finish()?;
+                let (_, candidate) = IceCandidate::parse(src.as_ref(), value).finish()?;
 
                 if let Some(media_description) = self.media_descriptions.last_mut() {
                     media_description.ice_candidates.push(candidate);
@@ -266,7 +265,7 @@ impl Parser {
                 self.extmap_allow_mixed = true;
 
                 if let Some(media_description) = self.media_descriptions.last_mut() {
-                    media_description.extmap_allow_mixed = true;
+                    media_description.rtcp_mux = true;
                 }
             }
             "rtcp-mux" => {

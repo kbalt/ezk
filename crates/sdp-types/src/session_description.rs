@@ -84,14 +84,14 @@ impl fmt::Display for SessionDescription {
         write!(f, "s={}\r\n", self.name)?;
 
         if let Some(conn) = &self.connection {
-            write!(f, "{conn}\r\n")?;
+            write!(f, "c={conn}\r\n")?;
         }
 
         for bw in &self.bandwidth {
             write!(f, "b={bw}\r\n")?;
         }
 
-        write!(f, "{}\r\n", self.time)?;
+        write!(f, "t={}\r\n", self.time)?;
 
         // omit direction here, since it is always written in media descriptions
 
@@ -116,11 +116,11 @@ impl fmt::Display for SessionDescription {
         }
 
         if let Some(ufrag) = &self.ice_ufrag {
-            write!(f, "{ufrag}\r\n")?;
+            write!(f, "a=ice-ufrag:{}\r\n", ufrag.ufrag)?;
         }
 
         if let Some(pwd) = &self.ice_pwd {
-            write!(f, "{pwd}\r\n")?;
+            write!(f, "a=ice-pwd:{}\r\n", pwd.pwd)?;
         }
 
         for attr in &self.attributes {

@@ -2,8 +2,8 @@ use crate::connection::Connection;
 use crate::media::Media;
 use crate::{bandwidth::Bandwidth, Rtcp};
 use crate::{
-    Direction, ExtMap, Fmtp, IceCandidate, IcePassword, IceUsernameFragment, RtpMap, SrtpCrypto,
-    UnknownAttribute,
+    Direction, ExtMap, Fmtp, IceCandidate, IcePassword, IceUsernameFragment, MediaType, RtpMap,
+    SrtpCrypto, TransportProtocol, UnknownAttribute,
 };
 use bytesstr::BytesStr;
 use std::fmt::{self, Debug};
@@ -67,10 +67,10 @@ pub struct MediaDescription {
 
 impl fmt::Display for MediaDescription {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}\r\n", self.media)?;
+        write!(f, "m={}\r\n", self.media)?;
 
         if let Some(conn) = &self.connection {
-            write!(f, "{}\r\n", conn)?;
+            write!(f, "c={}\r\n", conn)?;
         }
 
         for bw in &self.bandwidth {
@@ -100,11 +100,11 @@ impl fmt::Display for MediaDescription {
         }
 
         if let Some(ufrag) = &self.ice_ufrag {
-            write!(f, "{}\r\n", ufrag)?;
+            write!(f, "a=ice-ufrag:{}\r\n", ufrag.ufrag)?;
         }
 
         if let Some(pwd) = &self.ice_pwd {
-            write!(f, "{}\r\n", pwd)?;
+            write!(f, "a=ice-pwd:{}\r\n", pwd.pwd)?;
         }
 
         for candidate in &self.ice_candidates {
@@ -132,5 +132,36 @@ impl fmt::Display for MediaDescription {
         }
 
         Ok(())
+    }
+}
+
+impl MediaDescription {
+    /// Create media description which signals rejected media
+    pub fn rejected(media_type: MediaType) -> Self {
+        MediaDescription {
+            media: Media {
+                media_type,
+                port: 0,
+                ports_num: None,
+                proto: TransportProtocol::RtpAvp,
+                fmts: vec![],
+            },
+            connection: None,
+            bandwidth: vec![],
+            direction: Direction::Inactive,
+            rtcp: None,
+            rtcp_mux: false,
+            mid: None,
+            rtpmap: vec![],
+            fmtp: vec![],
+            ice_ufrag: None,
+            ice_pwd: None,
+            ice_candidates: vec![],
+            ice_end_of_candidates: false,
+            crypto: vec![],
+            extmap: vec![],
+            extmap_allow_mixed: false,
+            attributes: vec![],
+        }
     }
 }
