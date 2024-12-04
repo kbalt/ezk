@@ -10,7 +10,9 @@ mod attributes;
 mod bandwidth;
 mod connection;
 mod media;
+mod media_description;
 mod origin;
+mod parser;
 mod session_description;
 mod tagged_address;
 mod time;
@@ -23,8 +25,10 @@ pub use attributes::{
 pub use bandwidth::Bandwidth;
 pub use connection::Connection;
 pub use media::{Media, MediaType, TransportProtocol};
+pub use media_description::MediaDescription;
 pub use origin::Origin;
-pub use session_description::{MediaDescription, ParseSessionDescriptionError, SessionDescription};
+pub use parser::ParseSessionDescriptionError;
+pub use session_description::SessionDescription;
 pub use tagged_address::TaggedAddress;
 pub use time::Time;
 
