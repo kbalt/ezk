@@ -2,8 +2,8 @@ use crate::connection::Connection;
 use crate::media::Media;
 use crate::{bandwidth::Bandwidth, Rtcp};
 use crate::{
-    Direction, ExtMap, Fmtp, IceCandidate, IcePassword, IceUsernameFragment, MediaType, RtpMap,
-    Setup, SrtpCrypto, Ssrc, TransportProtocol, UnknownAttribute,
+    Direction, ExtMap, Fingerprint, Fmtp, IceCandidate, IcePassword, IceUsernameFragment,
+    MediaType, RtpMap, Setup, SrtpCrypto, Ssrc, TransportProtocol, UnknownAttribute,
 };
 use bytesstr::BytesStr;
 use std::fmt::{self, Debug};
@@ -66,6 +66,9 @@ pub struct MediaDescription {
 
     /// Setup attribute (a=setup)
     pub setup: Option<Setup>,
+
+    /// Fingerprint attribute (a=fingerprint)
+    pub fingerprint: Vec<Fingerprint>,
 
     /// Additional attributes
     pub attributes: Vec<UnknownAttribute>,
@@ -141,6 +144,10 @@ impl fmt::Display for MediaDescription {
             write!(f, "a={setup}\r\n")?;
         }
 
+        for fingerprint in &self.fingerprint {
+            write!(f, "a=fingerprint:{fingerprint}\r\n")?;
+        }
+
         for attr in &self.attributes {
             write!(f, "{}\r\n", attr)?;
         }
@@ -177,6 +184,7 @@ impl MediaDescription {
             extmap_allow_mixed: false,
             ssrc: vec![],
             setup: None,
+            fingerprint: vec![],
             attributes: vec![],
         }
     }

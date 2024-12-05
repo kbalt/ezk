@@ -1,7 +1,7 @@
 use crate::{
-    Bandwidth, Connection, Direction, ExtMap, Fmtp, Group, IceCandidate, IceOptions, IcePassword,
-    IceUsernameFragment, Media, MediaDescription, Origin, Rtcp, RtpMap, SessionDescription, Setup,
-    SrtpCrypto, Ssrc, Time, UnknownAttribute,
+    Bandwidth, Connection, Direction, ExtMap, Fingerprint, Fmtp, Group, IceCandidate, IceOptions,
+    IcePassword, IceUsernameFragment, Media, MediaDescription, Origin, Rtcp, RtpMap,
+    SessionDescription, Setup, SrtpCrypto, Ssrc, Time, UnknownAttribute,
 };
 use bytesstr::BytesStr;
 use internal::verbose_error_to_owned;
@@ -43,6 +43,7 @@ pub(crate) struct Parser {
     ice_ufrag: Option<IceUsernameFragment>,
     ice_pwd: Option<IcePassword>,
     setup: Option<Setup>,
+    fingerprint: Vec<Fingerprint>,
     attributes: Vec<UnknownAttribute>,
     media_descriptions: Vec<MediaDescription>,
 }
@@ -114,6 +115,7 @@ impl Parser {
                     extmap_allow_mixed: self.extmap_allow_mixed,
                     ssrc: vec![],
                     setup: self.setup,
+                    fingerprint: vec![],
                     attributes: vec![],
                 });
             }
@@ -260,6 +262,15 @@ impl Parser {
                 }
                 // TODO error here?
             }
+            "fingerprint" => {
+                let (_, fingerprint) = Fingerprint::parse(src.as_ref(), value).finish()?;
+
+                if let Some(media_description) = self.media_descriptions.last_mut() {
+                    media_description.fingerprint.push(fingerprint);
+                } else {
+                    self.fingerprint.push(fingerprint)
+                }
+            }
             _ => {
                 let attr = UnknownAttribute {
                     name: src.slice_ref(name),
@@ -341,6 +352,7 @@ impl Parser {
             ice_ufrag: self.ice_ufrag,
             ice_pwd: self.ice_pwd,
             setup: self.setup,
+            fingerprint: self.fingerprint,
             attributes: self.attributes,
             media_descriptions: self.media_descriptions,
         })

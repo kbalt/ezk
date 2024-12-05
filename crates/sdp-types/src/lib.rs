@@ -18,9 +18,10 @@ mod tagged_address;
 mod time;
 
 pub use attributes::{
-    Direction, ExtMap, Fmtp, Group, IceCandidate, IceOptions, IcePassword, IceUsernameFragment,
-    InvalidCandidateParamError, Rtcp, RtpMap, Setup, SourceAttribute, SrtpCrypto, SrtpFecOrder,
-    SrtpKeyingMaterial, SrtpSessionParam, SrtpSuite, Ssrc, UnknownAttribute, UntaggedAddress,
+    Direction, ExtMap, Fingerprint, FingerprintAlgorithm, Fmtp, Group, IceCandidate, IceOptions,
+    IcePassword, IceUsernameFragment, InvalidCandidateParamError, Rtcp, RtpMap, Setup,
+    SourceAttribute, SrtpCrypto, SrtpFecOrder, SrtpKeyingMaterial, SrtpSessionParam, SrtpSuite,
+    Ssrc, UnknownAttribute, UntaggedAddress,
 };
 pub use bandwidth::Bandwidth;
 pub use connection::Connection;

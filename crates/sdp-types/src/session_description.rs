@@ -5,8 +5,8 @@ use crate::origin::Origin;
 use crate::parser::{ParseSessionDescriptionError, Parser};
 use crate::time::Time;
 use crate::{
-    Direction, ExtMap, IceOptions, IcePassword, IceUsernameFragment, MediaDescription, Setup,
-    UnknownAttribute,
+    Direction, ExtMap, Fingerprint, IceOptions, IcePassword, IceUsernameFragment, MediaDescription,
+    Setup, UnknownAttribute,
 };
 use bytesstr::BytesStr;
 use std::fmt::{self, Debug};
@@ -58,6 +58,9 @@ pub struct SessionDescription {
 
     /// Setup attribute (a=setup)
     pub setup: Option<Setup>,
+
+    /// Fingerprint attribute (a=fingerprint)
+    pub fingerprint: Vec<Fingerprint>,
 
     /// All attributes not parsed directly
     pub attributes: Vec<UnknownAttribute>,
@@ -128,6 +131,10 @@ impl fmt::Display for SessionDescription {
 
         if let Some(setup) = self.setup {
             write!(f, "a={setup}\r\n")?;
+        }
+
+        for fingerprint in &self.fingerprint {
+            write!(f, "a=fingerprint:{fingerprint}\r\n")?;
         }
 
         for attr in &self.attributes {
