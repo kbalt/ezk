@@ -3,7 +3,7 @@ use crate::media::Media;
 use crate::{bandwidth::Bandwidth, Rtcp};
 use crate::{
     Direction, ExtMap, Fmtp, IceCandidate, IcePassword, IceUsernameFragment, MediaType, RtpMap,
-    SrtpCrypto, Ssrc, TransportProtocol, UnknownAttribute,
+    Setup, SrtpCrypto, Ssrc, TransportProtocol, UnknownAttribute,
 };
 use bytesstr::BytesStr;
 use std::fmt::{self, Debug};
@@ -63,6 +63,9 @@ pub struct MediaDescription {
 
     /// SSRC attribute (a=ssrc)
     pub ssrc: Vec<Ssrc>,
+
+    /// Setup attribute (a=setup)
+    pub setup: Option<Setup>,
 
     /// Additional attributes
     pub attributes: Vec<UnknownAttribute>,
@@ -134,6 +137,10 @@ impl fmt::Display for MediaDescription {
             write!(f, "a=ssrc:{ssrc}\r\n")?;
         }
 
+        if let Some(setup) = self.setup {
+            write!(f, "a={setup}\r\n")?;
+        }
+
         for attr in &self.attributes {
             write!(f, "{}\r\n", attr)?;
         }
@@ -169,6 +176,7 @@ impl MediaDescription {
             extmap: vec![],
             extmap_allow_mixed: false,
             ssrc: vec![],
+            setup: None,
             attributes: vec![],
         }
     }

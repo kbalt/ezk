@@ -19,7 +19,7 @@ mod time;
 
 pub use attributes::{
     Direction, ExtMap, Fmtp, Group, IceCandidate, IceOptions, IcePassword, IceUsernameFragment,
-    InvalidCandidateParamError, Rtcp, RtpMap, SourceAttribute, SrtpCrypto, SrtpFecOrder,
+    InvalidCandidateParamError, Rtcp, RtpMap, Setup, SourceAttribute, SrtpCrypto, SrtpFecOrder,
     SrtpKeyingMaterial, SrtpSessionParam, SrtpSuite, Ssrc, UnknownAttribute, UntaggedAddress,
 };
 pub use bandwidth::Bandwidth;

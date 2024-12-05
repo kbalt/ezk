@@ -5,7 +5,7 @@ use crate::origin::Origin;
 use crate::parser::{ParseSessionDescriptionError, Parser};
 use crate::time::Time;
 use crate::{
-    Direction, ExtMap, IceOptions, IcePassword, IceUsernameFragment, MediaDescription,
+    Direction, ExtMap, IceOptions, IcePassword, IceUsernameFragment, MediaDescription, Setup,
     UnknownAttribute,
 };
 use bytesstr::BytesStr;
@@ -55,6 +55,9 @@ pub struct SessionDescription {
 
     /// ICE password
     pub ice_pwd: Option<IcePassword>,
+
+    /// Setup attribute (a=setup)
+    pub setup: Option<Setup>,
 
     /// All attributes not parsed directly
     pub attributes: Vec<UnknownAttribute>,
@@ -121,6 +124,10 @@ impl fmt::Display for SessionDescription {
 
         if let Some(pwd) = &self.ice_pwd {
             write!(f, "a=ice-pwd:{}\r\n", pwd.pwd)?;
+        }
+
+        if let Some(setup) = self.setup {
+            write!(f, "a={setup}\r\n")?;
         }
 
         for attr in &self.attributes {

@@ -1,6 +1,6 @@
 use crate::{
     Bandwidth, Connection, Direction, ExtMap, Fmtp, Group, IceCandidate, IceOptions, IcePassword,
-    IceUsernameFragment, Media, MediaDescription, Origin, Rtcp, RtpMap, SessionDescription,
+    IceUsernameFragment, Media, MediaDescription, Origin, Rtcp, RtpMap, SessionDescription, Setup,
     SrtpCrypto, Ssrc, Time, UnknownAttribute,
 };
 use bytesstr::BytesStr;
@@ -42,6 +42,7 @@ pub(crate) struct Parser {
     ice_lite: bool,
     ice_ufrag: Option<IceUsernameFragment>,
     ice_pwd: Option<IcePassword>,
+    setup: Option<Setup>,
     attributes: Vec<UnknownAttribute>,
     media_descriptions: Vec<MediaDescription>,
 }
@@ -112,6 +113,7 @@ impl Parser {
                     // inherit extmap allow mixed atr
                     extmap_allow_mixed: self.extmap_allow_mixed,
                     ssrc: vec![],
+                    setup: self.setup,
                     attributes: vec![],
                 });
             }
@@ -242,6 +244,22 @@ impl Parser {
 
                 // TODO error here?
             }
+            "setup" => {
+                let setup = match value {
+                    "active" => Setup::Active,
+                    "passive" => Setup::Passive,
+                    "actpass" => Setup::ActPass,
+                    "holdconn" => Setup::HoldConn,
+                    _ => return Ok(()),
+                };
+
+                if let Some(media_description) = self.media_descriptions.last_mut() {
+                    media_description.setup = Some(setup);
+                } else {
+                    self.setup = Some(setup);
+                }
+                // TODO error here?
+            }
             _ => {
                 let attr = UnknownAttribute {
                     name: src.slice_ref(name),
@@ -322,6 +340,7 @@ impl Parser {
             ice_options: self.ice_options,
             ice_ufrag: self.ice_ufrag,
             ice_pwd: self.ice_pwd,
+            setup: self.setup,
             attributes: self.attributes,
             media_descriptions: self.media_descriptions,
         })

@@ -11,6 +11,7 @@ mod group;
 mod ice;
 mod rtcp;
 mod rtpmap;
+mod setup;
 mod ssrc;
 
 pub use candidate::{IceCandidate, InvalidCandidateParamError, UntaggedAddress};
@@ -22,6 +23,7 @@ pub use group::Group;
 pub use ice::{IceOptions, IcePassword, IceUsernameFragment};
 pub use rtcp::Rtcp;
 pub use rtpmap::RtpMap;
+pub use setup::Setup;
 pub use ssrc::{SourceAttribute, Ssrc};
 
 /// `name:[value]` pair which contains an unparsed/unknown attribute
