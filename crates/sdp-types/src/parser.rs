@@ -262,10 +262,10 @@ impl Parser {
             "sendonly" => *direction = Direction::SendOnly,
             "inactive" => *direction = Direction::Inactive,
             "extmap-allow-mixed" => {
-                self.extmap_allow_mixed = true;
-
                 if let Some(media_description) = self.media_descriptions.last_mut() {
-                    media_description.rtcp_mux = true;
+                    media_description.extmap_allow_mixed = true;
+                } else {
+                    self.extmap_allow_mixed = true;
                 }
             }
             "rtcp-mux" => {
