@@ -1,7 +1,7 @@
 use crate::{
     Bandwidth, Connection, Direction, ExtMap, Fmtp, Group, IceCandidate, IceOptions, IcePassword,
     IceUsernameFragment, Media, MediaDescription, Origin, Rtcp, RtpMap, SessionDescription,
-    SrtpCrypto, Time, UnknownAttribute,
+    SrtpCrypto, Ssrc, Time, UnknownAttribute,
 };
 use bytesstr::BytesStr;
 use internal::verbose_error_to_owned;
@@ -111,6 +111,7 @@ impl Parser {
                     extmap: vec![],
                     // inherit extmap allow mixed atr
                     extmap_allow_mixed: self.extmap_allow_mixed,
+                    ssrc: vec![],
                     attributes: vec![],
                 });
             }
@@ -231,6 +232,15 @@ impl Parser {
                 } else {
                     self.extmap.push(extmap);
                 }
+            }
+            "ssrc" => {
+                let (_, ssrc) = Ssrc::parse(src.as_ref(), value).finish()?;
+
+                if let Some(media_description) = self.media_descriptions.last_mut() {
+                    media_description.ssrc.push(ssrc);
+                }
+
+                // TODO error here?
             }
             _ => {
                 let attr = UnknownAttribute {

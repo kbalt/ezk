@@ -76,7 +76,7 @@ impl IceUsernameFragment {
 
 /// Ice password attribute (`a=ice-pwd`)
 ///
-/// Session and Media Level attribute  
+/// Session and Media Level attribute
 /// If not present at media level the attribute at session level is taken as default.
 ///
 /// [RFC5245](https://datatracker.ietf.org/doc/html/rfc5245#section-15.4)
