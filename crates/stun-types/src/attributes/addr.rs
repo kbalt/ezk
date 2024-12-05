@@ -77,8 +77,8 @@ impl Attribute<'_> for MappedAddress {
 
     fn encode_len(&self) -> Result<u16, Error> {
         match self.0 {
-            SocketAddr::V4(_) => Ok(64),
-            SocketAddr::V6(_) => Ok(160),
+            SocketAddr::V4(_) => Ok(8),
+            SocketAddr::V6(_) => Ok(20),
         }
     }
 }
@@ -103,8 +103,8 @@ impl Attribute<'_> for XorMappedAddress {
 
     fn encode_len(&self) -> Result<u16, Error> {
         match self.0 {
-            SocketAddr::V4(_) => Ok(64),
-            SocketAddr::V6(_) => Ok(160),
+            SocketAddr::V4(_) => Ok(8),
+            SocketAddr::V6(_) => Ok(20),
         }
     }
 }
@@ -127,8 +127,8 @@ impl Attribute<'_> for AlternateServer {
 
     fn encode_len(&self) -> Result<u16, Error> {
         match self.0 {
-            SocketAddr::V4(_) => Ok(64),
-            SocketAddr::V6(_) => Ok(160),
+            SocketAddr::V4(_) => Ok(8),
+            SocketAddr::V6(_) => Ok(20),
         }
     }
 }

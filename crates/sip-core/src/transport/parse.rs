@@ -36,9 +36,7 @@ pub fn parse_complete(parser: Parser, bytes: &[u8]) -> Result<CompleteItem, Erro
     match is_stun_message(bytes) {
         stun_types::IsStunMessageInfo::TooShort
         | stun_types::IsStunMessageInfo::YesIncomplete { needed: _ } => Err(Error::FailedToParse),
-        stun_types::IsStunMessageInfo::Yes { remaining } => {
-            parse_complete_stun(&bytes[..bytes.len() - remaining])
-        }
+        stun_types::IsStunMessageInfo::Yes { len } => parse_complete_stun(&bytes[..len]),
         stun_types::IsStunMessageInfo::No => parse_complete_sip(parser, bytes),
     }
 }

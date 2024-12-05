@@ -68,8 +68,8 @@ pub enum IsStunMessageInfo {
     No,
 
     /// Buffer contains a STUN message.
-    /// Variant contains the remaining amount of bytes.
-    Yes { remaining: usize },
+    /// Variant contains length of the message.
+    Yes { len: usize },
 
     /// Buffer contains a STUN message, but its incomplete.
     /// Variant contains the needed amount of bytes message.
@@ -107,7 +107,8 @@ pub fn is_stun_message(i: &[u8]) -> IsStunMessageInfo {
         let needed = expected_msg_len - i.len();
         IsStunMessageInfo::YesIncomplete { needed }
     } else {
-        let remaining = i.len() - expected_msg_len;
-        IsStunMessageInfo::Yes { remaining }
+        IsStunMessageInfo::Yes {
+            len: expected_msg_len,
+        }
     }
 }
