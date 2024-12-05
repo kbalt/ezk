@@ -64,6 +64,6 @@ mod test {
     fn time_print() {
         let time = Time { start: 0, stop: 0 };
 
-        assert_eq!(time.to_string(), "t=0 0");
+        assert_eq!(time.to_string(), "0 0");
     }
 }

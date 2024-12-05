@@ -133,7 +133,7 @@ mod test {
             num: None,
         };
 
-        assert_eq!(connection.to_string(), "c=IN IP4 192.168.123.222");
+        assert_eq!(connection.to_string(), "IN IP4 192.168.123.222");
     }
 
     #[test]
@@ -144,7 +144,7 @@ mod test {
             num: None,
         };
 
-        assert_eq!(connection.to_string(), "c=IN IP4 192.168.0.1/127");
+        assert_eq!(connection.to_string(), "IN IP4 192.168.0.1/127");
     }
 
     #[test]
@@ -155,7 +155,7 @@ mod test {
             num: Some(3),
         };
 
-        assert_eq!(connection.to_string(), "c=IN IP4 192.168.0.1/127/3");
+        assert_eq!(connection.to_string(), "IN IP4 192.168.0.1/127/3");
     }
 
     #[test]
@@ -166,6 +166,6 @@ mod test {
             num: Some(3),
         };
 
-        assert_eq!(connection.to_string(), "c=IN IP4 192.168.0.1");
+        assert_eq!(connection.to_string(), "IN IP4 192.168.0.1");
     }
 }
