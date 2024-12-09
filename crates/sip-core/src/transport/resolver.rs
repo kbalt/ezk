@@ -1,7 +1,7 @@
 use hickory_resolver::ResolveError;
 use hickory_resolver::proto::rr::rdata::{NAPTR, SRV};
 use hickory_resolver::proto::rr::{RData, RecordType};
-use hickory_resolver::{Name, TokioAsyncResolver};
+use hickory_resolver::{Name, TokioResolver};
 use multimap::MultiMap;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
@@ -68,7 +68,7 @@ impl Transport {
 
 #[tracing::instrument(err, skip(dns_resolver, uri_port))]
 pub(super) async fn resolve_host(
-    dns_resolver: &TokioAsyncResolver,
+    dns_resolver: &TokioResolver,
     name: &str,
     uri_port: u16,
 ) -> io::Result<Vec<ServerEntry>> {
@@ -113,7 +113,7 @@ pub(super) async fn resolve_host(
 }
 
 async fn resolve_naptr_records(
-    dns_resolver: &TokioAsyncResolver,
+    dns_resolver: &TokioResolver,
     name: Name,
     entries: &mut Vec<ServerEntry>,
 ) -> Result<(), ResolveError> {
@@ -192,7 +192,7 @@ async fn resolve_naptr_records(
 }
 
 async fn resolve_srv_records(
-    dns_resolver: &TokioAsyncResolver,
+    dns_resolver: &TokioResolver,
     name: Name,
     transport: Option<Transport>,
     entries: &mut Vec<ServerEntry>,
@@ -245,7 +245,7 @@ async fn resolve_srv_records(
 }
 
 async fn resolve_a_records(
-    dns_resolver: &TokioAsyncResolver,
+    dns_resolver: &TokioResolver,
     name: Name,
     transport: Option<Transport>,
     port: u16,
