@@ -1,7 +1,7 @@
-use hickory_resolver::error::{ResolveError, ResolveErrorKind};
+use hickory_resolver::ResolveError;
 use hickory_resolver::proto::rr::rdata::{NAPTR, SRV};
 use hickory_resolver::proto::rr::{RData, RecordType};
-use hickory_resolver::{Name, TokioAsyncResolver};
+use hickory_resolver::{Name, TokioResolver};
 use multimap::MultiMap;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
@@ -68,7 +68,7 @@ impl Transport {
 
 #[tracing::instrument(err, skip(dns_resolver, uri_port))]
 pub(super) async fn resolve_host(
-    dns_resolver: &TokioAsyncResolver,
+    dns_resolver: &TokioResolver,
     name: &str,
     uri_port: u16,
 ) -> io::Result<Vec<ServerEntry>> {
@@ -113,7 +113,7 @@ pub(super) async fn resolve_host(
 }
 
 async fn resolve_naptr_records(
-    dns_resolver: &TokioAsyncResolver,
+    dns_resolver: &TokioResolver,
     name: Name,
     entries: &mut Vec<ServerEntry>,
 ) -> Result<(), ResolveError> {
@@ -130,7 +130,7 @@ async fn resolve_naptr_records(
     // Order records by 'order' field
     let mut naptr_records: Vec<&NAPTR> = lookup
         .record_iter()
-        .filter_map(|record| match record.data()? {
+        .filter_map(|record| match record.data() {
             RData::NAPTR(naptr) => Some(naptr),
             record_data => {
                 log::warn!("Got unexpected DNS record from NAPTR request, {record_data:?}");
@@ -192,7 +192,7 @@ async fn resolve_naptr_records(
 }
 
 async fn resolve_srv_records(
-    dns_resolver: &TokioAsyncResolver,
+    dns_resolver: &TokioResolver,
     name: Name,
     transport: Option<Transport>,
     entries: &mut Vec<ServerEntry>,
@@ -208,7 +208,7 @@ async fn resolve_srv_records(
     // Order SRV records by priority
     let mut srv_records: Vec<&SRV> = lookup
         .record_iter()
-        .filter_map(|record| match record.data()? {
+        .filter_map(|record| match record.data() {
             RData::SRV(srv) => Some(srv),
             _ => None,
         })
@@ -220,7 +220,7 @@ async fn resolve_srv_records(
     // Often we also get some A/AAAA records for the highest priority, so map them
     let ip_records: MultiMap<&Name, IpAddr> = lookup
         .record_iter()
-        .filter_map(|record| match record.data()? {
+        .filter_map(|record| match record.data() {
             RData::A(a) => Some((record.name(), IpAddr::from(a.0))),
             RData::AAAA(aaaa) => Some((record.name(), IpAddr::from(aaaa.0))),
             _ => None,
@@ -245,7 +245,7 @@ async fn resolve_srv_records(
 }
 
 async fn resolve_a_records(
-    dns_resolver: &TokioAsyncResolver,
+    dns_resolver: &TokioResolver,
     name: Name,
     transport: Option<Transport>,
     port: u16,
@@ -275,7 +275,7 @@ async fn resolve_a_records(
 fn filter_no_records<T>(e: Result<T, ResolveError>) -> Result<Option<T>, ResolveError> {
     match e {
         Ok(t) => Ok(Some(t)),
-        Err(e) if matches!(e.kind(), ResolveErrorKind::NoRecordsFound { .. }) => Ok(None),
+        Err(e) if e.proto().map_or(false, |p| p.is_no_records_found()) => Ok(None),
         Err(e) => Err(e),
     }
 }

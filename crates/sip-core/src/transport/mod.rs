@@ -302,7 +302,7 @@ pub(crate) struct Transports {
 
     stun: StunEndpoint<StunUser>,
 
-    dns_resolver: hickory_resolver::TokioAsyncResolver,
+    dns_resolver: hickory_resolver::TokioResolver,
 }
 
 impl Transports {
@@ -561,7 +561,7 @@ impl Transports {
 pub(crate) struct TransportsBuilder {
     unmanaged: Vec<TpHandle>,
     factories: Vec<Arc<dyn Factory>>,
-    dns_resolver: Option<hickory_resolver::TokioAsyncResolver>,
+    dns_resolver: Option<hickory_resolver::TokioResolver>,
 }
 
 impl TransportsBuilder {
@@ -575,13 +575,13 @@ impl TransportsBuilder {
         self.factories.push(factory);
     }
 
-    pub(crate) fn set_dns_resolver(&mut self, dns_resolver: hickory_resolver::TokioAsyncResolver) {
+    pub(crate) fn set_dns_resolver(&mut self, dns_resolver: hickory_resolver::TokioResolver) {
         self.dns_resolver = Some(dns_resolver);
     }
 
     pub(crate) fn build(&mut self) -> Transports {
         let dns_resolver = self.dns_resolver.take().unwrap_or_else(|| {
-            hickory_resolver::TokioAsyncResolver::tokio_from_system_conf()
+            hickory_resolver::TokioResolver::tokio_from_system_conf()
                 .expect("Failed to create default system DNS resolver")
         });
 
