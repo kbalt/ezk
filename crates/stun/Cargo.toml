@@ -1,6 +1,6 @@
 [package]
 name = "ezk-stun"
-version = "0.2.0"
+version = "0.3.0"
 description = "STUN endpoint for simple requests"
 categories = ["network-programming"]
 keywords = ["stun"]
@@ -17,4 +17,4 @@ stun-types.workspace = true
 tokio = { version = "1", features = ["time", "sync"] }
 parking_lot = "0.12"
 async-trait = "0.1"
-thiserror = "1"
+thiserror = "2"
