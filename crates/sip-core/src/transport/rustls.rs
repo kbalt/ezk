@@ -18,7 +18,7 @@ impl StreamingFactory for TlsConnector {
     async fn connect<A: ToSocketAddrs + Send>(
         &self,
         uri_info: &UriInfo,
-        addr: A,
+        addr: SocketAddr,
     ) -> io::Result<Self::Transport> {
         let server_name = match uri_info.host_port.host {
             Host::Name(ref name) => ServerName::try_from(name.as_str())
