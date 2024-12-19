@@ -57,6 +57,12 @@ pub enum TransportProtocol {
     /// SRTP with [RFC5124](https://www.rfc-editor.org/rfc/rfc5124.html)
     RtpSavpf,
 
+    /// DTLS-SRTP
+    UdpTlsRtpSavp,
+
+    /// DTLS-SRTP with [RFC5124](https://www.rfc-editor.org/rfc/rfc5124.html)
+    UdpTlsRtpSavpf,
+
     /// Other unknown
     Other(BytesStr),
 }
@@ -69,6 +75,12 @@ impl TransportProtocol {
                 map(tag("RTP/AVP"), |_| TransportProtocol::RtpAvp),
                 map(tag("RTP/SAVP"), |_| TransportProtocol::RtpSavp),
                 map(tag("RTP/SAVPF"), |_| TransportProtocol::RtpSavpf),
+                map(tag("UDP/TLS/RTP/SAVP"), |_| {
+                    TransportProtocol::UdpTlsRtpSavp
+                }),
+                map(tag("UDP/TLS/RTP/SAVPF"), |_| {
+                    TransportProtocol::UdpTlsRtpSavpf
+                }),
                 map(take_while1(not_whitespace), |tp| {
                     TransportProtocol::Other(BytesStr::from_parse(src, tp))
                 }),
@@ -84,6 +96,8 @@ impl fmt::Display for TransportProtocol {
             TransportProtocol::RtpAvp => f.write_str("RTP/AVP"),
             TransportProtocol::RtpSavp => f.write_str("RTP/SAVP"),
             TransportProtocol::RtpSavpf => f.write_str("RTP/SAVPF"),
+            TransportProtocol::UdpTlsRtpSavp => f.write_str("UDP/TLS/RTP/SAVP"),
+            TransportProtocol::UdpTlsRtpSavpf => f.write_str("UDP/TLS/RTP/SAVPF"),
             TransportProtocol::Other(str) => f.write_str(str),
         }
     }
