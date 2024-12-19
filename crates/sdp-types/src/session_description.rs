@@ -130,7 +130,7 @@ impl fmt::Display for SessionDescription {
         }
 
         if let Some(setup) = self.setup {
-            write!(f, "a={setup}\r\n")?;
+            write!(f, "a=setup:{setup}\r\n")?;
         }
 
         for fingerprint in &self.fingerprint {
