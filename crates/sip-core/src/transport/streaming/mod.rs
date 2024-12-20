@@ -54,7 +54,7 @@ pub trait StreamingFactory: Send + Sync + 'static {
     async fn connect<A: ToSocketAddrs + Send>(
         &self,
         uri_info: &UriInfo,
-        addr: A,
+        addr: SocketAddr,
     ) -> io::Result<Self::Transport>;
 }
 
@@ -171,7 +171,7 @@ where
     ) -> io::Result<TpHandle> {
         log::trace!("{} trying to connect to {}", self.name(), addr);
 
-        let stream = self.connect(uri_info, addr).await?;
+        let stream = self.connect::<SocketAddr>(uri_info, addr).await?;
         let local = stream.local_addr()?;
         let remote = stream.peer_addr()?;
 
