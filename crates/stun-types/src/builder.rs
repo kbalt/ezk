@@ -48,12 +48,12 @@ impl MessageBuilder {
     fn set_len(&mut self, len: u16) {
         self.head.set_len(len);
 
-        let [b0, b1, b2, b3] = u32::to_ne_bytes(self.head.0);
+        let [b0, b1, b2, b3] = u32::to_be_bytes(self.head.0);
 
-        self.buffer[0] = b3;
-        self.buffer[1] = b2;
-        self.buffer[2] = b1;
-        self.buffer[3] = b0;
+        self.buffer[0] = b0;
+        self.buffer[1] = b1;
+        self.buffer[2] = b2;
+        self.buffer[3] = b3;
     }
 
     pub fn add_attr<'a, A>(&mut self, attr: &A) -> Result<(), Error>
