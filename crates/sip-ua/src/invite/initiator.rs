@@ -93,6 +93,24 @@ impl Initiator {
         request
     }
 
+    pub fn create_cancel(&mut self) -> Request {
+        let mut request = self.dialog_builder.create_request(Method::CANCEL);
+
+        if self.support_100rel {
+            let prov_rel_str = BytesStr::from_static("100rel");
+            request.headers.insert_named(&Supported(prov_rel_str));
+        }
+
+        if self.support_timer {
+            let timer_str = BytesStr::from_static("timer");
+            request.headers.insert_named(&Supported(timer_str));
+
+            self.timer_config.populate_request(&mut request);
+        }
+
+        request
+    }
+
     pub async fn send_invite(&mut self, request: Request) -> Result<(), sip_core::Error> {
         let transaction = self
             .dialog_builder
@@ -102,6 +120,15 @@ impl Initiator {
 
         self.transaction = Some(transaction);
 
+        Ok(())
+    }
+
+    pub async fn send_cancel(&mut self, request: Request) -> Result<(), sip_core::Error> {
+        self.transaction
+            .as_ref()
+            .expect("must send cancel after create transaction")
+            .cancel(request, &mut self.dialog_builder.target_tp_info)
+            .await;
         Ok(())
     }
 
