@@ -147,6 +147,7 @@ impl ClientInvTsx {
     async fn handle_msg(&mut self, msg: TsxResponse) -> Result<Option<TsxResponse>> {
         match msg.line.code.kind() {
             CodeKind::Provisional => {
+                self.timeout = Instant::now() + T1 * 240; // 2 minutes
                 self.state = State::Proceeding;
             }
             CodeKind::Success => {
