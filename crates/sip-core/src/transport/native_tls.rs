@@ -16,7 +16,7 @@ impl StreamingFactory for TlsConnector {
     async fn connect<A: ToSocketAddrs + Send>(
         &self,
         uri_info: &UriInfo,
-        addr: A,
+        addr: SocketAddr,
     ) -> io::Result<Self::Transport> {
         // Best effort to guess the domain. If the `Host` a valid domain this will work,
         // but sometimes it might be an IP address or invalid domain. In that case this might succeed anyway

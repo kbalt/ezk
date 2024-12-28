@@ -4,18 +4,26 @@ use super::streaming::{
 use sip_types::uri::UriInfo;
 use std::io;
 use std::net::SocketAddr;
-use tokio::net::{TcpListener as TokioTcpListener, TcpStream, ToSocketAddrs};
+use tokio::net::{TcpListener as TokioTcpListener, TcpStream, TcpSocket, ToSocketAddrs};
 
 // ==== Connector
 
 #[derive(Default)]
 pub struct TcpConnector {
     _priv: (),
+    bind_addr: Option<SocketAddr>,
 }
 
 impl TcpConnector {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn new_with_bind(bind_addr: SocketAddr) -> Self {
+        Self {
+            bind_addr: Some(bind_addr),
+            ..Self::default()
+        }
     }
 }
 
@@ -26,9 +34,19 @@ impl StreamingFactory for TcpConnector {
     async fn connect<A: ToSocketAddrs + Send>(
         &self,
         _: &UriInfo,
-        addr: A,
+        addr: SocketAddr,
     ) -> io::Result<Self::Transport> {
-        TcpStream::connect(addr).await
+        if let Some(bind_addr) = self.bind_addr {
+            let socket = match bind_addr {
+                SocketAddr::V4(_) => TcpSocket::new_v4()?,
+                SocketAddr::V6(_) => TcpSocket::new_v6()?,
+            };
+            socket.bind(bind_addr)?;
+            let stream = socket.connect(addr).await?;
+            Ok(stream)
+        } else {
+            TcpStream::connect(addr).await
+        }
     }
 }
 
