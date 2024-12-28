@@ -36,7 +36,15 @@ impl Layer for InviteAcceptLayer {
         let dialog =
             Dialog::new_server(endpoint.clone(), self.dialog_layer, &invite, contact).unwrap();
 
-        let acceptor = Acceptor::new(dialog, self.invite_layer, invite).unwrap();
+        let acceptor = Acceptor::new(
+            dialog,
+            self.invite_layer,
+            invite,
+            Some(Box::new(|| {
+                println!("Call was cancelled");
+            })),
+        )
+        .unwrap();
 
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
