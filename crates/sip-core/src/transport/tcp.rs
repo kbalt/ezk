@@ -4,7 +4,7 @@ use super::streaming::{
 use sip_types::uri::UriInfo;
 use std::io;
 use std::net::SocketAddr;
-use tokio::net::{TcpListener as TokioTcpListener, TcpStream, TcpSocket, ToSocketAddrs};
+use tokio::net::{TcpListener as TokioTcpListener, TcpSocket, TcpStream, ToSocketAddrs};
 
 // ==== Connector
 
@@ -41,9 +41,9 @@ impl StreamingFactory for TcpConnector {
                 SocketAddr::V4(_) => TcpSocket::new_v4()?,
                 SocketAddr::V6(_) => TcpSocket::new_v6()?,
             };
+            socket.set_reuseaddr(true)?;
             socket.bind(bind_addr)?;
-            let stream = socket.connect(addr).await?;
-            Ok(stream)
+            socket.connect(addr).await
         } else {
             TcpStream::connect(addr).await
         }
