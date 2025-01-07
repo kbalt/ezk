@@ -379,8 +379,15 @@ impl Transports {
                 .unwrap_or(true);
 
             let security_level_matches = uri.allows_security_level(tp.secure());
+            let transport_param_matches = uri
+                .transport
+                .as_ref()
+                .map_or(true, |t| tp.matches_transport_param(t));
 
-            addr_familiy_supported && transport_name_matches && security_level_matches
+            addr_familiy_supported
+                && transport_name_matches
+                && security_level_matches
+                && transport_param_matches
         })
     }
 
@@ -415,6 +422,13 @@ impl Transports {
                 continue;
             }
 
+            // Check if the transport's name matches the transport parameter
+            if let Some(transport_param) = &uri.transport {
+                if !managed.transport.matches_transport_param(transport_param) {
+                    continue;
+                }
+            }
+
             log::trace!("selected transport: {}", managed.transport);
 
             if let Some(transport) = managed.try_get() {
@@ -443,6 +457,13 @@ impl Transports {
 
             if !uri.allows_security_level(factory.secure()) {
                 continue;
+            }
+
+            // Check if the transport's name matches the transport parameter
+            if let Some(transport_param) = &uri.transport {
+                if !factory.matches_transport_param(transport_param) {
+                    continue;
+                }
             }
 
             match factory.create(endpoint.clone(), uri, server.address).await {
