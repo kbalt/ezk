@@ -275,7 +275,7 @@ async fn resolve_a_records(
 fn filter_no_records<T>(e: Result<T, ResolveError>) -> Result<Option<T>, ResolveError> {
     match e {
         Ok(t) => Ok(Some(t)),
-        Err(e) if e.proto().map_or(false, |p| p.is_no_records_found()) => Ok(None),
+        Err(e) if e.proto().is_some_and(|p| p.is_no_records_found()) => Ok(None),
         Err(e) => Err(e),
     }
 }

@@ -41,7 +41,7 @@ pub fn parse_complete(parser: Parser, bytes: &[u8]) -> Result<CompleteItem, Erro
 }
 
 fn parse_complete_stun(bytes: &[u8]) -> Result<CompleteItem, Error> {
-    let msg = match Message::parse(bytes.into()) {
+    let msg = match Message::parse(bytes) {
         Ok(msg) => msg,
         Err(e) => {
             log::warn!("failed to parse complete stun message, {}", e);

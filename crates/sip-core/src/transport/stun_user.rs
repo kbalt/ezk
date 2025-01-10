@@ -4,7 +4,7 @@ use std::io;
 use std::net::SocketAddr;
 use stun::{IncomingMessage, StunEndpointUser};
 use stun_types::attributes::{MappedAddress, Software, XorMappedAddress};
-use stun_types::{transaction_id, Class, MessageBuilder, Method};
+use stun_types::{Class, MessageBuilder, Method, TransactionId};
 
 pub struct StunUser;
 
@@ -42,7 +42,7 @@ impl Transports {
             return Ok(transport.sent_by());
         }
 
-        let tsx_id = transaction_id();
+        let tsx_id = TransactionId::random();
 
         let mut msg = MessageBuilder::new(Class::Request, Method::Binding, tsx_id);
         msg.add_attr(&Software::new("ezk")).unwrap();
