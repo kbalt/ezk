@@ -1,9 +1,9 @@
 use crate::attributes::Attribute;
 use crate::header::{Class, MessageHead, MessageId, Method};
-use crate::{padding_u16, padding_usize, Error};
+use crate::{padding_u16, padding_usize, Error, TransactionId};
 use bytes::BufMut;
-use std::convert::TryFrom;
 
+/// Builder for a STUN message
 pub struct MessageBuilder {
     head: MessageHead,
     id: MessageId,
@@ -14,7 +14,8 @@ pub struct MessageBuilder {
 }
 
 impl MessageBuilder {
-    pub fn new(class: Class, method: Method, tsx_id: u128) -> Self {
+    /// Create a new message builder.
+    pub fn new(class: Class, method: Method, transaction_id: TransactionId) -> Self {
         let mut buffer = Vec::new();
 
         let mut typ = 0;
@@ -26,7 +27,7 @@ impl MessageBuilder {
         buffer.put_u32(head.0);
 
         let mut id = MessageId::new();
-        id.set_tsx_id(tsx_id);
+        id.set_transaction_id(transaction_id.0);
         buffer.put_u128(id.0);
 
         Self {
@@ -45,7 +46,8 @@ impl MessageBuilder {
         &self.id
     }
 
-    fn set_len(&mut self, len: u16) {
+    /// Set the length of the message
+    pub fn set_len(&mut self, len: u16) {
         self.head.set_len(len);
 
         let [b0, b1, b2, b3] = u32::to_be_bytes(self.head.0);
@@ -80,10 +82,6 @@ impl MessageBuilder {
             self.buffer.put_u16(enc_len);
         }
 
-        // set len before each encode for integrity attributes
-        // TODO: this cannot be right
-        self.set_len(u16::try_from(self.buffer.len() - 20)? + enc_len + padding);
-
         attr.encode(ctx, self)?;
 
         let padding_bytes = std::iter::repeat(0).take(padding_usize(usize::from(enc_len)));
@@ -92,7 +90,8 @@ impl MessageBuilder {
         Ok(())
     }
 
-    pub fn finish(self) -> Vec<u8> {
+    pub fn finish(mut self) -> Vec<u8> {
+        self.set_len((self.buffer.len() - 20).try_into().unwrap());
         self.buffer
     }
 

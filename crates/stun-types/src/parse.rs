@@ -1,6 +1,6 @@
 use crate::attributes::{Attribute, Fingerprint, MessageIntegrity, MessageIntegritySha256};
 use crate::header::{Class, MessageHead, MessageId, Method};
-use crate::{padding_usize, Error, COOKIE, NE};
+use crate::{padding_usize, Error, TransactionId, COOKIE, NE};
 use byteorder::ReadBytesExt;
 use bytes::Buf;
 use std::convert::TryFrom;
@@ -8,13 +8,13 @@ use std::io::Cursor;
 
 #[derive(Debug, Clone, Copy)]
 pub struct AttrSpan {
-    /// Index where the attribute begins
+    /// Index where the attribute's value begins
     pub begin: usize,
 
-    /// Index of end of the attribute
+    /// Index of end of the attribute's value
     pub end: usize,
 
-    /// End of the attribute including padding
+    /// End of the attribute's value including padding
     pub padding_end: usize,
 
     /// Attribute type id
@@ -35,7 +35,7 @@ pub struct Message {
 
     class: Class,
     method: Method,
-    tsx_id: u128,
+    transaction_id: TransactionId,
 
     attributes: Vec<AttrSpan>,
 }
@@ -49,8 +49,8 @@ impl Message {
         self.method
     }
 
-    pub fn tsx_id(&self) -> u128 {
-        self.tsx_id
+    pub fn transaction_id(&self) -> TransactionId {
+        self.transaction_id
     }
 
     pub fn parse(buffer: impl Into<Vec<u8>>) -> Result<Message, Error> {
@@ -116,15 +116,13 @@ impl Message {
             cursor.set_position(u64::try_from(padding_end)?);
         }
 
-        let tsx_id = id.tsx_id();
-
         Ok(Message {
             buffer: cursor.into_inner(),
             head,
             id,
             class,
             method,
-            tsx_id,
+            transaction_id: TransactionId(id.transaction_id()),
             attributes,
         })
     }

@@ -18,13 +18,14 @@ bitfield! {
 
 bitfield! {
     /// Internal bitfield representing the cookie + transaction id
+    #[derive(Debug, Clone, Copy)]
     pub struct MessageId(u128);
 
     u32;
     pub cookie, set_cookie: 127,  96;
 
     u128;
-    pub tsx_id, set_tsx_id: 95, 0;
+    pub transaction_id, set_transaction_id: 95, 0;
 }
 
 impl MessageId {

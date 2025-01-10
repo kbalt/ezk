@@ -1,6 +1,7 @@
 #![warn(unreachable_pub)]
 
 use byteorder::ReadBytesExt;
+use rand::Rng;
 use std::io::{self, Cursor};
 use std::num::TryFromIntError;
 use std::str::Utf8Error;
@@ -57,9 +58,32 @@ fn padding_usize(n: usize) -> usize {
     }
 }
 
-/// Returns a random 96 bit number.
-pub fn transaction_id() -> u128 {
-    rand::random::<u128>() & !((u32::MAX as u128) << 96)
+/// 96 bit STUN transaction id
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TransactionId(u128);
+
+impl TransactionId {
+    const MAX: u128 = (1 << 96) - 1;
+
+    /// Returns the inner numeric representation of the transaction id
+    pub fn as_u128(self) -> u128 {
+        self.0
+    }
+
+    /// Create a new transaction id from the given value
+    ///
+    /// # Panics
+    ///
+    /// Panics if the given value is larger than 96 bits
+    pub fn new(v: u128) -> Self {
+        assert!(v <= Self::MAX);
+        Self(v)
+    }
+
+    /// Generate a new random transaction id
+    pub fn random() -> Self {
+        Self(rand::thread_rng().gen_range(0..Self::MAX))
+    }
 }
 
 /// Return value of [`is_stun_message`]

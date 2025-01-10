@@ -72,13 +72,15 @@ mod test {
         builder::MessageBuilder,
         header::{Class, Method},
         parse::Message,
+        TransactionId,
     };
 
     use super::ErrorCode;
 
     #[test]
     fn error_code() {
-        let mut builder = MessageBuilder::new(Class::Error, Method::Binding, 1234);
+        let mut builder =
+            MessageBuilder::new(Class::Error, Method::Binding, TransactionId::new(128));
         builder
             .add_attr(&ErrorCode {
                 number: 400,

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::time::Duration;
-use stun_types::Message;
+use stun_types::{Message, TransactionId};
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 
@@ -15,7 +15,7 @@ pub trait TransportInfo {
 
 pub struct Request<'r, T> {
     pub bytes: &'r [u8],
-    pub tsx_id: u128,
+    pub tsx_id: TransactionId,
     pub transport: &'r T,
 }
 
@@ -53,7 +53,7 @@ pub trait StunEndpointUser: Send + Sync {
 /// send/receive behavior.
 pub struct StunEndpoint<U: StunEndpointUser> {
     user: U,
-    transactions: Mutex<HashMap<u128, Transaction>>,
+    transactions: Mutex<HashMap<TransactionId, Transaction>>,
 }
 
 struct Transaction {
@@ -81,7 +81,7 @@ impl<U: StunEndpointUser> StunEndpoint<U> {
         request: Request<'_, U::Transport>,
         target: SocketAddr,
     ) -> io::Result<Option<Message>> {
-        struct DropGuard<'s, U>(&'s StunEndpoint<U>, u128)
+        struct DropGuard<'s, U>(&'s StunEndpoint<U>, TransactionId)
         where
             U: StunEndpointUser;
 
@@ -132,7 +132,7 @@ impl<U: StunEndpointUser> StunEndpoint<U> {
     pub async fn receive(&self, message: Message, source: SocketAddr, transport: U::Transport) {
         {
             let mut transactions = self.transactions.lock();
-            if let Some(Transaction { sender }) = transactions.remove(&message.tsx_id()) {
+            if let Some(Transaction { sender }) = transactions.remove(&message.transaction_id()) {
                 let _ = sender.send(message);
                 return;
             }

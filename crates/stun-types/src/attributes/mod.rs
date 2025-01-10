@@ -23,6 +23,8 @@ pub use integrity::*;
 pub use password_algs::*;
 pub use user_hash::*;
 
+pub(crate) const ATTRIBUTE_HEADER_LEN: usize = 4;
+
 pub trait Attribute<'s> {
     type Context;
     const TYPE: u16;
