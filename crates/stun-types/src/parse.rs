@@ -177,7 +177,7 @@ impl Message {
 
     /// Access the message with the given length set.
     ///
-    /// E.g. Integrity of the message is comuted with the length set to the end of previous attribute
+    /// E.g. Integrity of the message is computed with the length set to the end of previous attribute
     pub fn with_msg_len<F, R>(&mut self, len: u16, f: F) -> R
     where
         F: FnOnce(&mut Self) -> R,

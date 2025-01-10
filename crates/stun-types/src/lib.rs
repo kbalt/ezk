@@ -82,7 +82,7 @@ impl TransactionId {
 
     /// Generate a new random transaction id
     pub fn random() -> Self {
-        Self(rand::thread_rng().gen_range(0..Self::MAX))
+        Self(rand::thread_rng().gen_range(0..=Self::MAX))
     }
 }
 
