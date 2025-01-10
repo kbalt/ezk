@@ -1,5 +1,5 @@
 use crate::builder::MessageBuilder;
-use crate::parse::{ParsedAttr, ParsedMessage};
+use crate::parse::{AttrSpan, Message};
 use crate::{Error, NE};
 use byteorder::ReadBytesExt;
 use bytes::BufMut;
@@ -27,11 +27,7 @@ pub trait Attribute<'s> {
     type Context;
     const TYPE: u16;
 
-    fn decode(
-        ctx: Self::Context,
-        msg: &'s mut ParsedMessage,
-        attr: ParsedAttr,
-    ) -> Result<Self, Error>
+    fn decode(ctx: Self::Context, msg: &'s mut Message, attr: AttrSpan) -> Result<Self, Error>
     where
         Self: Sized;
 
@@ -52,11 +48,7 @@ impl<'s, const TYPE: u16> Attribute<'s> for StringAttribute<'s, TYPE> {
     type Context = ();
     const TYPE: u16 = TYPE;
 
-    fn decode(
-        _: Self::Context,
-        msg: &'s mut ParsedMessage,
-        attr: ParsedAttr,
-    ) -> Result<Self, Error> {
+    fn decode(_: Self::Context, msg: &'s mut Message, attr: AttrSpan) -> Result<Self, Error> {
         Ok(Self(from_utf8(attr.get_value(msg.buffer()))?))
     }
 
@@ -82,11 +74,7 @@ impl<'s, const TYPE: u16> Attribute<'s> for BytesAttribute<'s, TYPE> {
     type Context = ();
     const TYPE: u16 = TYPE;
 
-    fn decode(
-        _: Self::Context,
-        msg: &'s mut ParsedMessage,
-        attr: ParsedAttr,
-    ) -> Result<Self, Error> {
+    fn decode(_: Self::Context, msg: &'s mut Message, attr: AttrSpan) -> Result<Self, Error> {
         Ok(Self(attr.get_value(msg.buffer())))
     }
 
@@ -116,7 +104,7 @@ impl Attribute<'_> for UnknownAttributes {
     type Context = ();
     const TYPE: u16 = 0x000A;
 
-    fn decode(_: Self::Context, msg: &mut ParsedMessage, attr: ParsedAttr) -> Result<Self, Error> {
+    fn decode(_: Self::Context, msg: &mut Message, attr: AttrSpan) -> Result<Self, Error> {
         let mut value = attr.get_value(msg.buffer());
 
         let mut attributes = vec![];

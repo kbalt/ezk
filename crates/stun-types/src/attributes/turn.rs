@@ -1,6 +1,6 @@
 use super::{Attribute, BytesAttribute, XorMappedAddress};
 use crate::builder::MessageBuilder;
-use crate::parse::{ParsedAttr, ParsedMessage};
+use crate::parse::{AttrSpan, Message};
 use crate::{Error, NE};
 use byteorder::ReadBytesExt;
 use bytes::BufMut;
@@ -14,7 +14,7 @@ impl Attribute<'_> for ChannelNumber {
     type Context = ();
     const TYPE: u16 = 0x000C;
 
-    fn decode(_: Self::Context, msg: &mut ParsedMessage, attr: ParsedAttr) -> Result<Self, Error> {
+    fn decode(_: Self::Context, msg: &mut Message, attr: AttrSpan) -> Result<Self, Error> {
         Ok(Self(attr.get_value(msg.buffer()).read_u16::<NE>()?))
     }
 
@@ -37,7 +37,7 @@ impl Attribute<'_> for Lifetime {
     type Context = ();
     const TYPE: u16 = 0x000D;
 
-    fn decode(_: Self::Context, msg: &mut ParsedMessage, attr: ParsedAttr) -> Result<Self, Error> {
+    fn decode(_: Self::Context, msg: &mut Message, attr: AttrSpan) -> Result<Self, Error> {
         Ok(Self(attr.get_value(msg.buffer()).read_u32::<NE>()?))
     }
 
@@ -59,11 +59,7 @@ impl Attribute<'_> for XorPeerAddress {
     type Context = ();
     const TYPE: u16 = 0x0012;
 
-    fn decode(
-        ctx: Self::Context,
-        msg: &mut ParsedMessage,
-        attr: ParsedAttr,
-    ) -> Result<Self, Error> {
+    fn decode(ctx: Self::Context, msg: &mut Message, attr: AttrSpan) -> Result<Self, Error> {
         XorMappedAddress::decode(ctx, msg, attr).map(|xma| Self(xma.0))
     }
 
@@ -86,11 +82,7 @@ impl Attribute<'_> for XorRelayedAddress {
     type Context = ();
     const TYPE: u16 = 0x0016;
 
-    fn decode(
-        ctx: Self::Context,
-        msg: &mut ParsedMessage,
-        attr: ParsedAttr,
-    ) -> Result<Self, Error> {
+    fn decode(ctx: Self::Context, msg: &mut Message, attr: AttrSpan) -> Result<Self, Error> {
         XorMappedAddress::decode(ctx, msg, attr).map(|xma| Self(xma.0))
     }
 
@@ -110,7 +102,7 @@ impl Attribute<'_> for EvenPort {
     type Context = ();
     const TYPE: u16 = 0x0018;
 
-    fn decode(_: Self::Context, msg: &mut ParsedMessage, attr: ParsedAttr) -> Result<Self, Error> {
+    fn decode(_: Self::Context, msg: &mut Message, attr: AttrSpan) -> Result<Self, Error> {
         Ok(Self(attr.get_value(msg.buffer()).read_u8()? == 1))
     }
 
@@ -135,7 +127,7 @@ impl Attribute<'_> for RequestedTransport {
     type Context = ();
     const TYPE: u16 = 0x0019;
 
-    fn decode(_: Self::Context, msg: &mut ParsedMessage, attr: ParsedAttr) -> Result<Self, Error> {
+    fn decode(_: Self::Context, msg: &mut Message, attr: AttrSpan) -> Result<Self, Error> {
         Ok(Self {
             protocol_number: attr.get_value(msg.buffer()).read_u8()?,
         })
@@ -161,7 +153,7 @@ impl Attribute<'_> for DontFragment {
     type Context = ();
     const TYPE: u16 = 0x001A;
 
-    fn decode(_: Self::Context, _: &mut ParsedMessage, _: ParsedAttr) -> Result<Self, Error> {
+    fn decode(_: Self::Context, _: &mut Message, _: AttrSpan) -> Result<Self, Error> {
         Ok(Self)
     }
 
@@ -181,7 +173,7 @@ impl Attribute<'_> for ReservationToken {
     type Context = ();
     const TYPE: u16 = 0x0022;
 
-    fn decode(_: Self::Context, msg: &mut ParsedMessage, attr: ParsedAttr) -> Result<Self, Error> {
+    fn decode(_: Self::Context, msg: &mut Message, attr: AttrSpan) -> Result<Self, Error> {
         Ok(Self(attr.get_value(msg.buffer()).try_into().map_err(
             |_| Error::InvalidData("reservation token must be 8 bytes"),
         )?))

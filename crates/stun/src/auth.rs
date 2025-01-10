@@ -2,8 +2,7 @@ use stun_types::attributes::{
     MessageIntegrity, MessageIntegrityKey, MessageIntegritySha256, Nonce, PasswordAlgorithm, Realm,
     Username, ALGORITHM_MD5, ALGORITHM_SHA256,
 };
-use stun_types::builder::MessageBuilder;
-use stun_types::parse::ParsedMessage;
+use stun_types::{Message, MessageBuilder};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -30,7 +29,7 @@ pub enum StunCredential {
 impl StunCredential {
     pub fn authenticate(
         &mut self,
-        response: &mut ParsedMessage,
+        response: &mut Message,
         mut msg: MessageBuilder,
     ) -> Result<(), Error> {
         match &*self {
@@ -47,7 +46,7 @@ impl StunCredential {
                 username,
                 password,
             } => {
-                let key = if let Some(alg) = response.get_attr::<PasswordAlgorithm>() {
+                let key = if let Some(alg) = response.attribute::<PasswordAlgorithm>() {
                     let alg = alg?;
 
                     match alg.algorithm {
@@ -63,7 +62,7 @@ impl StunCredential {
                     MessageIntegrityKey::new_long_term_md5(username, realm, password)
                 };
 
-                let nonce = response.get_attr::<Nonce>().ok_or(Error::MissingNonce)??;
+                let nonce = response.attribute::<Nonce>().ok_or(Error::MissingNonce)??;
 
                 msg.add_attr(&Nonce::new(nonce.0))?;
                 msg.add_attr(&Realm::new(realm))?;

@@ -4,9 +4,7 @@ use std::io;
 use std::net::SocketAddr;
 use stun::{IncomingMessage, StunEndpointUser};
 use stun_types::attributes::{MappedAddress, Software, XorMappedAddress};
-use stun_types::builder::MessageBuilder;
-use stun_types::header::{Class, Method};
-use stun_types::transaction_id;
+use stun_types::{transaction_id, Class, MessageBuilder, Method};
 
 pub struct StunUser;
 
@@ -63,10 +61,10 @@ impl Transports {
             .ok_or(StunError::RequestTimedOut)?;
 
         // TODO fix these errors
-        if let Some(addr) = response.get_attr::<XorMappedAddress>() {
+        if let Some(addr) = response.attribute::<XorMappedAddress>() {
             addr.map(|addr| addr.0)
                 .map_err(StunError::MalformedResponse)
-        } else if let Some(addr) = response.get_attr::<MappedAddress>() {
+        } else if let Some(addr) = response.attribute::<MappedAddress>() {
             addr.map(|addr| addr.0)
                 .map_err(StunError::MalformedResponse)
         } else {

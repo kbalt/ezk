@@ -1,6 +1,6 @@
 use super::Attribute;
 use crate::builder::MessageBuilder;
-use crate::parse::{ParsedAttr, ParsedMessage};
+use crate::parse::{AttrSpan, Message};
 use crate::Error;
 use hmac::digest::core_api::BlockSizeUser;
 use hmac::digest::{Digest, Update};
@@ -46,11 +46,7 @@ impl<'k> Attribute<'_> for MessageIntegrity<'k> {
     type Context = &'k MessageIntegrityKey<'k>;
     const TYPE: u16 = 0x0008;
 
-    fn decode(
-        ctx: Self::Context,
-        msg: &mut ParsedMessage,
-        attr: ParsedAttr,
-    ) -> Result<Self, Error> {
+    fn decode(ctx: Self::Context, msg: &mut Message, attr: AttrSpan) -> Result<Self, Error> {
         let hmac: SimpleHmac<Sha1> = SimpleHmac::new_from_slice(&ctx.0)
             .map_err(|_| Error::InvalidData("invalid key length"))?;
 
@@ -81,11 +77,7 @@ impl<'k> Attribute<'_> for MessageIntegritySha256<'k> {
     type Context = &'k MessageIntegrityKey<'k>;
     const TYPE: u16 = 0x001C;
 
-    fn decode(
-        ctx: Self::Context,
-        msg: &mut ParsedMessage,
-        attr: ParsedAttr,
-    ) -> Result<Self, Error> {
+    fn decode(ctx: Self::Context, msg: &mut Message, attr: AttrSpan) -> Result<Self, Error> {
         let hmac: SimpleHmac<Sha256> = SimpleHmac::new_from_slice(&ctx.0)
             .map_err(|_| Error::InvalidData("invalid key length"))?;
 
@@ -110,8 +102,8 @@ impl<'k> Attribute<'_> for MessageIntegritySha256<'k> {
 
 fn message_integrity_decode<D>(
     mut hmac: SimpleHmac<D>,
-    msg: &mut ParsedMessage,
-    attr: ParsedAttr,
+    msg: &mut Message,
+    attr: AttrSpan,
 ) -> Result<(), Error>
 where
     D: Digest + BlockSizeUser,
@@ -152,7 +144,7 @@ mod test {
     use crate::attributes::Software;
     use crate::builder::MessageBuilder;
     use crate::header::{Class, Method};
-    use crate::parse::ParsedMessage;
+    use crate::parse::Message;
 
     #[test]
     fn selftest_sha1() {
@@ -170,9 +162,9 @@ mod test {
         let bytes = message.finish();
         let bytes = Vec::from(&bytes[..]);
 
-        let mut msg = ParsedMessage::parse(bytes).unwrap();
+        let mut msg = Message::parse(bytes).unwrap();
 
-        msg.get_attr_with::<MessageIntegrity>(&MessageIntegrityKey::new_short_term(password))
+        msg.attribute_with::<MessageIntegrity>(&MessageIntegrityKey::new_short_term(password))
             .unwrap()
             .unwrap();
     }
@@ -193,10 +185,12 @@ mod test {
         let bytes = message.finish();
         let bytes = Vec::from(&bytes[..]);
 
-        let mut msg = ParsedMessage::parse(bytes).unwrap();
+        let mut msg = Message::parse(bytes).unwrap();
 
-        msg.get_attr_with::<MessageIntegritySha256>(&MessageIntegrityKey::new_short_term(password))
-            .unwrap()
-            .unwrap();
+        msg.attribute_with::<MessageIntegritySha256>(&MessageIntegrityKey::new_short_term(
+            password,
+        ))
+        .unwrap()
+        .unwrap();
     }
 }

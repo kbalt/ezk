@@ -5,8 +5,7 @@ use sip_types::msg::{Line, MessageLine, PullParser};
 use sip_types::parse::{ParseCtx, Parser};
 use sip_types::Headers;
 use std::str::from_utf8;
-use stun_types::is_stun_message;
-use stun_types::parse::ParsedMessage;
+use stun_types::{is_stun_message, Message};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -17,7 +16,7 @@ pub enum Error {
 pub enum CompleteItem {
     KeepAliveRequest,
     KeepAliveResponse,
-    Stun(ParsedMessage),
+    Stun(Message),
     Sip {
         line: MessageLine,
         headers: Headers,
@@ -42,7 +41,7 @@ pub fn parse_complete(parser: Parser, bytes: &[u8]) -> Result<CompleteItem, Erro
 }
 
 fn parse_complete_stun(bytes: &[u8]) -> Result<CompleteItem, Error> {
-    let msg = match ParsedMessage::parse(bytes.into()) {
+    let msg = match Message::parse(bytes.into()) {
         Ok(msg) => msg,
         Err(e) => {
             log::warn!("failed to parse complete stun message, {}", e);

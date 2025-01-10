@@ -3,6 +3,7 @@ use bitfield::bitfield;
 use std::convert::TryFrom;
 
 bitfield! {
+    /// Internal bitfield representing the STUN message head
     pub struct MessageHead(u32);
 
     u8;
@@ -16,6 +17,7 @@ bitfield! {
 }
 
 bitfield! {
+    /// Internal bitfield representing the cookie + transaction id
     pub struct MessageId(u128);
 
     u32;
@@ -33,6 +35,7 @@ impl MessageId {
     }
 }
 
+/// STUN class
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub enum Class {
     Request,
@@ -49,7 +52,7 @@ impl Class {
     const SUCCESS: u16 = 0x100;
     const ERROR: u16 = 0x110;
 
-    pub fn set(&self, typ: &mut u16) {
+    pub(crate) fn set_bits(&self, typ: &mut u16) {
         *typ &= Method::MASK;
 
         match self {
@@ -75,6 +78,7 @@ impl TryFrom<u16> for Class {
     }
 }
 
+/// STUN/TURN Methods
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub enum Method {
     // === STUN ===
@@ -103,7 +107,7 @@ impl Method {
     const CREATE_PERMISSION: u16 = 0x8;
     const CHANNEL_BIND: u16 = 0x9;
 
-    pub fn set(&self, typ: &mut u16) {
+    pub(crate) fn set_bits(&self, typ: &mut u16) {
         *typ &= Class::MASK;
 
         match self {
@@ -126,6 +130,12 @@ impl TryFrom<u16> for Method {
     fn try_from(value: u16) -> Result<Self, Self::Error> {
         match value & Self::MASK {
             Self::BINDING => Ok(Self::Binding),
+            Self::ALLOCATE => Ok(Self::Allocate),
+            Self::REFRESH => Ok(Self::Refresh),
+            Self::SEND => Ok(Self::Send),
+            Self::DATA => Ok(Self::Data),
+            Self::CREATE_PERMISSION => Ok(Self::CreatePermission),
+            Self::CHANNEL_BIND => Ok(Self::ChannelBind),
             _ => Err(Error::InvalidData("unknown method")),
         }
     }

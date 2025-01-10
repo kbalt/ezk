@@ -1,13 +1,18 @@
+#![warn(unreachable_pub)]
+
 use byteorder::ReadBytesExt;
-use header::{MessageHead, MessageId};
 use std::io::{self, Cursor};
 use std::num::TryFromIntError;
 use std::str::Utf8Error;
 
 pub mod attributes;
-pub mod builder;
-pub mod header;
-pub mod parse;
+mod builder;
+mod header;
+mod parse;
+
+pub use builder::MessageBuilder;
+pub use header::{Class, MessageHead, MessageId, Method};
+pub use parse::{AttrSpan, Message};
 
 type NE = byteorder::NetworkEndian;
 

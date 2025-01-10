@@ -7,7 +7,7 @@ use std::convert::TryFrom;
 use std::io::Cursor;
 
 #[derive(Debug, Clone, Copy)]
-pub struct ParsedAttr {
+pub struct AttrSpan {
     /// Index where the attribute begins
     pub begin: usize,
 
@@ -21,28 +21,40 @@ pub struct ParsedAttr {
     pub typ: u16,
 }
 
-impl ParsedAttr {
+impl AttrSpan {
     pub fn get_value<'b>(&self, buf: &'b [u8]) -> &'b [u8] {
         &buf[self.begin..self.end]
     }
 }
 
-pub struct ParsedMessage {
+pub struct Message {
     buffer: Vec<u8>,
 
     head: MessageHead,
     id: MessageId,
 
-    pub class: Class,
-    pub method: Method,
-    pub tsx_id: u128,
+    class: Class,
+    method: Method,
+    tsx_id: u128,
 
-    pub attributes: Vec<ParsedAttr>,
+    attributes: Vec<AttrSpan>,
 }
 
-impl ParsedMessage {
-    pub fn parse(buffer: Vec<u8>) -> Result<ParsedMessage, Error> {
-        let mut cursor = Cursor::new(buffer);
+impl Message {
+    pub fn class(&self) -> Class {
+        self.class
+    }
+
+    pub fn method(&self) -> Method {
+        self.method
+    }
+
+    pub fn tsx_id(&self) -> u128 {
+        self.tsx_id
+    }
+
+    pub fn parse(buffer: impl Into<Vec<u8>>) -> Result<Message, Error> {
+        let mut cursor = Cursor::new(buffer.into());
 
         let head = cursor.read_u32::<NE>()?;
         let head = MessageHead(head);
@@ -92,7 +104,7 @@ impl ParsedMessage {
                 value_end -= counted_padding;
             }
 
-            let attr = ParsedAttr {
+            let attr = AttrSpan {
                 begin: value_begin,
                 end: value_end,
                 padding_end,
@@ -106,7 +118,7 @@ impl ParsedMessage {
 
         let tsx_id = id.tsx_id();
 
-        Ok(ParsedMessage {
+        Ok(Message {
             buffer: cursor.into_inner(),
             head,
             id,
@@ -117,14 +129,16 @@ impl ParsedMessage {
         })
     }
 
-    pub fn get_attr<'a, A>(&'a mut self) -> Option<Result<A, Error>>
+    /// Try to read an attribute from the message
+    pub fn attribute<'a, A>(&'a mut self) -> Option<Result<A, Error>>
     where
         A: Attribute<'a, Context = ()> + 'a,
     {
-        self.get_attr_with(())
+        self.attribute_with(())
     }
 
-    pub fn get_attr_with<'a, A>(&'a mut self, ctx: A::Context) -> Option<Result<A, Error>>
+    /// Try to read an attribute from the message with a required context (like a key to verify the integrity of the message)
+    pub fn attribute_with<'a, A>(&'a mut self, ctx: A::Context) -> Option<Result<A, Error>>
     where
         A: Attribute<'a> + 'a,
     {
@@ -163,6 +177,9 @@ impl ParsedMessage {
         self.buffer[3] = b3;
     }
 
+    /// Access the message with the given length set.
+    ///
+    /// E.g. Integrity of the message is comuted with the length set to the end of previous attribute
     pub fn with_msg_len<F, R>(&mut self, len: u16, f: F) -> R
     where
         F: FnOnce(&mut Self) -> R,
@@ -177,14 +194,17 @@ impl ParsedMessage {
         result
     }
 
+    /// Return the raw message
     pub fn buffer(&self) -> &[u8] {
         &self.buffer
     }
 
+    /// Header of the STUN message
     pub fn head(&self) -> &MessageHead {
         &self.head
     }
 
+    /// ID of the STUN message (cookie + transaction)
     pub fn id(&self) -> &MessageId {
         &self.id
     }

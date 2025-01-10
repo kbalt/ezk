@@ -1,7 +1,7 @@
 use super::Attribute;
 use crate::{
     builder::MessageBuilder,
-    parse::{ParsedAttr, ParsedMessage},
+    parse::{AttrSpan, Message},
     Error, NE,
 };
 use byteorder::ReadBytesExt;
@@ -13,7 +13,7 @@ impl Attribute<'_> for Priority {
     type Context = ();
     const TYPE: u16 = 0x0024;
 
-    fn decode(_: Self::Context, msg: &mut ParsedMessage, attr: ParsedAttr) -> Result<Self, Error> {
+    fn decode(_: Self::Context, msg: &mut Message, attr: AttrSpan) -> Result<Self, Error> {
         let mut value = attr.get_value(msg.buffer());
 
         if value.len() != 4 {
@@ -42,11 +42,7 @@ impl Attribute<'_> for UseCandidate {
     type Context = ();
     const TYPE: u16 = 0x0025;
 
-    fn decode(
-        _: Self::Context,
-        _msg: &mut ParsedMessage,
-        _attr: ParsedAttr,
-    ) -> Result<Self, Error> {
+    fn decode(_: Self::Context, _msg: &mut Message, _attr: AttrSpan) -> Result<Self, Error> {
         Ok(Self)
     }
 
@@ -65,7 +61,7 @@ impl Attribute<'_> for IceControlled {
     type Context = ();
     const TYPE: u16 = 0x8029;
 
-    fn decode(_: Self::Context, msg: &mut ParsedMessage, attr: ParsedAttr) -> Result<Self, Error> {
+    fn decode(_: Self::Context, msg: &mut Message, attr: AttrSpan) -> Result<Self, Error> {
         let mut value = attr.get_value(msg.buffer());
 
         if value.len() != 8 {
@@ -94,7 +90,7 @@ impl Attribute<'_> for IceControlling {
     type Context = ();
     const TYPE: u16 = 0x802A;
 
-    fn decode(_: Self::Context, msg: &mut ParsedMessage, attr: ParsedAttr) -> Result<Self, Error> {
+    fn decode(_: Self::Context, msg: &mut Message, attr: AttrSpan) -> Result<Self, Error> {
         let mut value = attr.get_value(msg.buffer());
 
         if value.len() != 8 {

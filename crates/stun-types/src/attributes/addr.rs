@@ -1,6 +1,6 @@
 use super::Attribute;
 use crate::builder::MessageBuilder;
-use crate::parse::{ParsedAttr, ParsedMessage};
+use crate::parse::{AttrSpan, Message};
 use crate::{Error, COOKIE, NE};
 use byteorder::ReadBytesExt;
 use bytes::BufMut;
@@ -66,7 +66,7 @@ impl Attribute<'_> for MappedAddress {
 
     const TYPE: u16 = 0x0001;
 
-    fn decode(_: Self::Context, msg: &mut ParsedMessage, attr: ParsedAttr) -> Result<Self, Error> {
+    fn decode(_: Self::Context, msg: &mut Message, attr: AttrSpan) -> Result<Self, Error> {
         decode_addr(attr.get_value(msg.buffer()), 0, 0, 0).map(Self)
     }
 
@@ -90,7 +90,7 @@ impl Attribute<'_> for XorMappedAddress {
     type Context = ();
     const TYPE: u16 = 0x0020;
 
-    fn decode(_: Self::Context, msg: &mut ParsedMessage, attr: ParsedAttr) -> Result<Self, Error> {
+    fn decode(_: Self::Context, msg: &mut Message, attr: AttrSpan) -> Result<Self, Error> {
         let xor128 = msg.id().0;
         decode_addr(attr.get_value(msg.buffer()), XOR16, COOKIE, xor128).map(Self)
     }
@@ -116,7 +116,7 @@ impl Attribute<'_> for AlternateServer {
     type Context = ();
     const TYPE: u16 = 0x8023;
 
-    fn decode(_: Self::Context, msg: &mut ParsedMessage, attr: ParsedAttr) -> Result<Self, Error> {
+    fn decode(_: Self::Context, msg: &mut Message, attr: AttrSpan) -> Result<Self, Error> {
         decode_addr(attr.get_value(msg.buffer()), 0, 0, 0).map(Self)
     }
 

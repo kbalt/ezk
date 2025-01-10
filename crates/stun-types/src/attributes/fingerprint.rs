@@ -1,6 +1,6 @@
 use super::Attribute;
 use crate::builder::MessageBuilder;
-use crate::parse::{ParsedAttr, ParsedMessage};
+use crate::parse::{AttrSpan, Message};
 use crate::{Error, NE};
 use byteorder::ReadBytesExt;
 use bytes::BufMut;
@@ -61,7 +61,7 @@ impl Attribute<'_> for Fingerprint {
     type Context = ();
     const TYPE: u16 = 0x8028;
 
-    fn decode(_: Self::Context, msg: &mut ParsedMessage, attr: ParsedAttr) -> Result<Self, Error> {
+    fn decode(_: Self::Context, msg: &mut Message, attr: AttrSpan) -> Result<Self, Error> {
         let mut value = attr.get_value(msg.buffer());
 
         if value.len() != 4 {

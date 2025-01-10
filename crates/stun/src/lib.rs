@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::time::Duration;
-use stun_types::parse::ParsedMessage;
+use stun_types::Message;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 
@@ -20,7 +20,7 @@ pub struct Request<'r, T> {
 }
 
 pub struct IncomingMessage<T> {
-    pub message: ParsedMessage,
+    pub message: Message,
     pub source: SocketAddr,
     pub transport: T,
 }
@@ -57,7 +57,7 @@ pub struct StunEndpoint<U: StunEndpointUser> {
 }
 
 struct Transaction {
-    sender: oneshot::Sender<ParsedMessage>,
+    sender: oneshot::Sender<Message>,
 }
 
 impl<U: StunEndpointUser> StunEndpoint<U> {
@@ -80,7 +80,7 @@ impl<U: StunEndpointUser> StunEndpoint<U> {
         &self,
         request: Request<'_, U::Transport>,
         target: SocketAddr,
-    ) -> io::Result<Option<ParsedMessage>> {
+    ) -> io::Result<Option<Message>> {
         struct DropGuard<'s, U>(&'s StunEndpoint<U>, u128)
         where
             U: StunEndpointUser;
@@ -129,15 +129,10 @@ impl<U: StunEndpointUser> StunEndpoint<U> {
     }
 
     /// Pass a received STUN message to the endpoint for further processing
-    pub async fn receive(
-        &self,
-        message: ParsedMessage,
-        source: SocketAddr,
-        transport: U::Transport,
-    ) {
+    pub async fn receive(&self, message: Message, source: SocketAddr, transport: U::Transport) {
         {
             let mut transactions = self.transactions.lock();
-            if let Some(Transaction { sender }) = transactions.remove(&message.tsx_id) {
+            if let Some(Transaction { sender }) = transactions.remove(&message.tsx_id()) {
                 let _ = sender.send(message);
                 return;
             }

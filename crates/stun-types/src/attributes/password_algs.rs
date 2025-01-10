@@ -1,6 +1,6 @@
 use super::Attribute;
 use crate::builder::MessageBuilder;
-use crate::parse::{ParsedAttr, ParsedMessage};
+use crate::parse::{AttrSpan, Message};
 use crate::{padding_usize, Error, NE};
 use byteorder::ReadBytesExt;
 use bytes::BufMut;
@@ -18,11 +18,7 @@ impl<'s> Attribute<'s> for PasswordAlgorithms<'s> {
     type Context = ();
     const TYPE: u16 = 0x8002;
 
-    fn decode(
-        _: Self::Context,
-        msg: &'s mut ParsedMessage,
-        attr: ParsedAttr,
-    ) -> Result<Self, Error> {
+    fn decode(_: Self::Context, msg: &'s mut Message, attr: AttrSpan) -> Result<Self, Error> {
         let mut value = attr.get_value(msg.buffer());
 
         let mut algorithms = vec![];
@@ -79,11 +75,7 @@ impl<'s> Attribute<'s> for PasswordAlgorithm<'s> {
     type Context = ();
     const TYPE: u16 = 0x001D;
 
-    fn decode(
-        _: Self::Context,
-        msg: &'s mut ParsedMessage,
-        attr: ParsedAttr,
-    ) -> Result<Self, Error> {
+    fn decode(_: Self::Context, msg: &'s mut Message, attr: AttrSpan) -> Result<Self, Error> {
         let mut value = attr.get_value(msg.buffer());
 
         let alg = value.read_u16::<NE>()?;

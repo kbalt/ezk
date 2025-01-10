@@ -22,7 +22,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::ops::Index;
 use std::sync::Arc;
 use std::{fmt, io};
-use stun_types::parse::ParsedMessage;
+use stun_types::Message;
 use tokio::sync::broadcast;
 use tracing::Instrument;
 
@@ -463,7 +463,7 @@ impl Endpoint {
     }
 
     /// Pass a received STUN message to the endpoint for further processing
-    pub fn receive_stun(&self, message: ParsedMessage, source: SocketAddr, transport: TpHandle) {
+    pub fn receive_stun(&self, message: Message, source: SocketAddr, transport: TpHandle) {
         let this = self.clone();
         tokio::spawn(async move {
             this.transports()

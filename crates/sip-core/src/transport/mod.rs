@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use std::{fmt, io};
 use stun::StunEndpoint;
-use stun_types::parse::ParsedMessage;
+use stun_types::Message;
 use tokio::sync::oneshot;
 
 mod managed;
@@ -568,12 +568,7 @@ impl Transports {
         self.transports.lock().remove(tp_key);
     }
 
-    pub async fn receive_stun(
-        &self,
-        message: ParsedMessage,
-        source: SocketAddr,
-        transport: TpHandle,
-    ) {
+    pub async fn receive_stun(&self, message: Message, source: SocketAddr, transport: TpHandle) {
         self.stun.receive(message, source, transport).await
     }
 }

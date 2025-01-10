@@ -18,8 +18,8 @@ impl MessageBuilder {
         let mut buffer = Vec::new();
 
         let mut typ = 0;
-        method.set(&mut typ);
-        class.set(&mut typ);
+        method.set_bits(&mut typ);
+        class.set_bits(&mut typ);
 
         let mut head = MessageHead(0);
         head.set_typ(typ);
@@ -56,6 +56,7 @@ impl MessageBuilder {
         self.buffer[3] = b3;
     }
 
+    /// Serialize the attribute into the builder
     pub fn add_attr<'a, A>(&mut self, attr: &A) -> Result<(), Error>
     where
         A: Attribute<'a, Context = ()>,
@@ -63,6 +64,7 @@ impl MessageBuilder {
         self.add_attr_with(attr, ())
     }
 
+    /// Serialize the attribute into the builder with a given context (e.g. a key to calculate the integrity)
     pub fn add_attr_with<'a, A>(&mut self, attr: &A, ctx: A::Context) -> Result<(), Error>
     where
         A: Attribute<'a>,
@@ -79,6 +81,7 @@ impl MessageBuilder {
         }
 
         // set len before each encode for integrity attributes
+        // TODO: this cannot be right
         self.set_len(u16::try_from(self.buffer.len() - 20)? + enc_len + padding);
 
         attr.encode(ctx, self)?;

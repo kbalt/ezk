@@ -1,6 +1,6 @@
 use super::Attribute;
 use crate::builder::MessageBuilder;
-use crate::parse::{ParsedAttr, ParsedMessage};
+use crate::parse::{AttrSpan, Message};
 use crate::Error;
 use sha1::Digest;
 use sha2::Sha256;
@@ -22,7 +22,7 @@ impl Attribute<'_> for UserHash {
     type Context = ();
     const TYPE: u16 = 0x001E;
 
-    fn decode(_: Self::Context, msg: &mut ParsedMessage, attr: ParsedAttr) -> Result<Self, Error> {
+    fn decode(_: Self::Context, msg: &mut Message, attr: AttrSpan) -> Result<Self, Error> {
         let value = attr.get_value(msg.buffer());
 
         if value.len() != 32 {

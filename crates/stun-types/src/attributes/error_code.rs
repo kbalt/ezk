@@ -1,6 +1,6 @@
 use super::Attribute;
 use crate::builder::MessageBuilder;
-use crate::parse::{ParsedAttr, ParsedMessage};
+use crate::parse::{AttrSpan, Message};
 use crate::{Error, NE};
 use bitfield::bitfield;
 use byteorder::ReadBytesExt;
@@ -24,11 +24,7 @@ impl<'s> Attribute<'s> for ErrorCode<'s> {
     type Context = ();
     const TYPE: u16 = 0x0009;
 
-    fn decode(
-        _: Self::Context,
-        msg: &'s mut ParsedMessage,
-        attr: ParsedAttr,
-    ) -> Result<Self, Error> {
+    fn decode(_: Self::Context, msg: &'s mut Message, attr: AttrSpan) -> Result<Self, Error> {
         let mut value = attr.get_value(msg.buffer());
 
         if value.len() < 4 {
@@ -75,7 +71,7 @@ mod test {
     use crate::{
         builder::MessageBuilder,
         header::{Class, Method},
-        parse::ParsedMessage,
+        parse::Message,
     };
 
     use super::ErrorCode;
@@ -92,8 +88,8 @@ mod test {
 
         let bytes = builder.finish();
 
-        let mut parsed = ParsedMessage::parse(bytes.to_vec()).unwrap();
-        let err = parsed.get_attr::<ErrorCode>().unwrap().unwrap();
+        let mut parsed = Message::parse(bytes.to_vec()).unwrap();
+        let err = parsed.attribute::<ErrorCode>().unwrap().unwrap();
 
         assert_eq!(err.number, 400);
         assert_eq!(err.reason, "Bad Request");
