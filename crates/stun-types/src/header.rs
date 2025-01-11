@@ -2,6 +2,8 @@ use crate::{Error, COOKIE};
 use bitfield::bitfield;
 use std::convert::TryFrom;
 
+pub(crate) const STUN_HEADER_LENGTH: usize = 20;
+
 bitfield! {
     /// Internal bitfield representing the STUN message head
     pub struct MessageHead(u32);

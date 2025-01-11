@@ -1,5 +1,6 @@
 use super::{Attribute, ATTRIBUTE_HEADER_LEN};
 use crate::builder::MessageBuilder;
+use crate::header::STUN_HEADER_LENGTH;
 use crate::parse::{AttrSpan, Message};
 use crate::Error;
 use hmac::digest::core_api::BlockSizeUser;
@@ -59,9 +60,7 @@ impl<'k> Attribute<'_> for MessageIntegrity<'k> {
         let hmac: SimpleHmac<Sha1> = SimpleHmac::new_from_slice(&ctx.0)
             .map_err(|_| Error::InvalidData("invalid key length"))?;
 
-        message_integrity_encode(hmac, builder);
-
-        Ok(())
+        message_integrity_encode(hmac, builder)
     }
 
     fn encode_len(&self) -> Result<u16, Error> {
@@ -90,9 +89,7 @@ impl<'k> Attribute<'_> for MessageIntegritySha256<'k> {
         let hmac: SimpleHmac<Sha256> = SimpleHmac::new_from_slice(&ctx.0)
             .map_err(|_| Error::InvalidData("invalid key length"))?;
 
-        message_integrity_encode(hmac, builder);
-
-        Ok(())
+        message_integrity_encode(hmac, builder)
     }
 
     fn encode_len(&self) -> Result<u16, Error> {
@@ -114,35 +111,41 @@ where
     // the end of the MESSAGE-INTEGRITY attribute.
 
     // The length of the message is temprorarily set to the end of the previous attribute
-    msg.with_msg_len(u16::try_from(attr.padding_end)?, |msg| {
-        // Get the digest from the received attribute
-        let received_digest = attr.get_value(msg.buffer());
+    msg.with_msg_len(
+        u16::try_from(attr.padding_end - STUN_HEADER_LENGTH)?,
+        |msg| {
+            // Get the digest from the received attribute
+            let received_digest = attr.get_value(msg.buffer());
 
-        // Get all bytes before the integrity attribute to calculate the hmac over
-        let message = &msg.buffer()[..attr.begin - ATTRIBUTE_HEADER_LEN];
+            // Get all bytes before the integrity attribute to calculate the hmac over
+            let message = &msg.buffer()[..attr.begin - ATTRIBUTE_HEADER_LEN];
 
-        // Calculate the expected digest,
-        Update::update(&mut hmac, message);
-        let calculated_digest = hmac.finalize().into_bytes();
+            // Calculate the expected digest,
+            Update::update(&mut hmac, message);
+            let calculated_digest = hmac.finalize().into_bytes();
 
-        // Compare the received and calculated digest
-        if calculated_digest.as_slice() != received_digest {
-            return Err(Error::InvalidData("failed to verify message integrity"));
-        }
+            // Compare the received and calculated digest
+            if calculated_digest.as_slice() != received_digest {
+                return Err(Error::InvalidData("failed to verify message integrity"));
+            }
 
-        Ok(())
-    })
+            Ok(())
+        },
+    )
 }
 
-fn message_integrity_encode<D>(mut hmac: SimpleHmac<D>, builder: &mut MessageBuilder)
+fn message_integrity_encode<D>(
+    mut hmac: SimpleHmac<D>,
+    builder: &mut MessageBuilder,
+) -> Result<(), Error>
 where
     D: Digest + BlockSizeUser,
 {
     // 4 bytes containing type and length is already written into the buffer
     let message_length_with_integrity_attribute =
-        builder.buffer().len() + <D as Digest>::output_size();
+        (builder.buffer().len() + <D as Digest>::output_size()) - STUN_HEADER_LENGTH;
 
-    builder.set_len(message_length_with_integrity_attribute.try_into().unwrap());
+    builder.set_len(message_length_with_integrity_attribute.try_into()?);
 
     // Calculate the digest of the message up until the previous attribute
     let data = builder.buffer();
@@ -151,6 +154,8 @@ where
     let digest = hmac.finalize().into_bytes();
 
     builder.buffer().extend_from_slice(&digest);
+
+    Ok(())
 }
 
 #[cfg(test)]

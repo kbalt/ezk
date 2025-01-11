@@ -1,5 +1,6 @@
-use super::Attribute;
+use super::{Attribute, ATTRIBUTE_HEADER_LEN};
 use crate::builder::MessageBuilder;
+use crate::header::STUN_HEADER_LENGTH;
 use crate::parse::{AttrSpan, Message};
 use crate::{Error, NE};
 use byteorder::ReadBytesExt;
@@ -62,29 +63,39 @@ impl Attribute<'_> for Fingerprint {
     const TYPE: u16 = 0x8028;
 
     fn decode(_: Self::Context, msg: &mut Message, attr: AttrSpan) -> Result<Self, Error> {
-        let mut value = attr.get_value(msg.buffer());
+        msg.with_msg_len(
+            u16::try_from(attr.padding_end - STUN_HEADER_LENGTH)?,
+            |msg| {
+                let mut value = attr.get_value(msg.buffer());
 
-        if value.len() != 4 {
-            return Err(Error::InvalidData("fingerprint value must be 4 bytes"));
-        }
+                if value.len() != 4 {
+                    return Err(Error::InvalidData("fingerprint value must be 4 bytes"));
+                }
 
-        let attr_value = value.read_u32::<NE>()?;
+                let attr_value = value.read_u32::<NE>()?;
+                let data = &msg.buffer()[..attr.begin - ATTRIBUTE_HEADER_LEN];
+                let crc = Self::crc32(data) ^ 0x5354554e;
 
-        let data = &msg.buffer()[..attr.begin];
+                if crc != attr_value {
+                    return Err(Error::InvalidData("failed to verify message fingerprint"));
+                }
 
-        let crc = Self::crc32(data) ^ 0x5354554e;
-
-        if crc != attr_value {
-            return Err(Error::InvalidData("failed to verify message fingerprint"));
-        }
-
-        Ok(Self)
+                Ok(Self)
+            },
+        )
     }
 
     fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
-        let data = builder.buffer();
-        let data = &data[..data.len() - 4];
+        // First set the length of the message to the end of the fingerprint attribute
+        // 4 bytes containing type and length is already written into the buffer
+        let message_length_with_fingerprint_attribute =
+            (builder.buffer().len() + 4) - STUN_HEADER_LENGTH;
 
+        builder.set_len(message_length_with_fingerprint_attribute.try_into()?);
+
+        // Calculate the checksum
+        let data = builder.buffer();
+        let data = &data[..data.len() - ATTRIBUTE_HEADER_LEN];
         let crc = Self::crc32(data) ^ 0x5354554e;
 
         builder.buffer().put_u32(crc);
