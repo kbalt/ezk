@@ -110,7 +110,7 @@ where
     // The Length field of the STUN message header is adjusted to point to
     // the end of the MESSAGE-INTEGRITY attribute.
 
-    // The length of the message is temprorarily set to the end of the previous attribute
+    // The length of the message is temporarily set to the end of the previous attribute
     msg.with_msg_len(
         u16::try_from(attr.padding_end - STUN_HEADER_LENGTH)?,
         |msg| {

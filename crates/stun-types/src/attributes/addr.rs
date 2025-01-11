@@ -41,7 +41,7 @@ fn encode_addr(addr: SocketAddr, buf: &mut Vec<u8>, xor16: u16, xor32: u32, xor1
             buf.put_u8(1);
             buf.put_u16(addr.port() ^ xor16);
 
-            let ip = u32::from_ne_bytes(addr.ip().octets());
+            let ip = u32::from_be_bytes(addr.ip().octets());
             let ip = ip ^ xor32;
 
             buf.put_u32(ip);
@@ -50,7 +50,7 @@ fn encode_addr(addr: SocketAddr, buf: &mut Vec<u8>, xor16: u16, xor32: u32, xor1
             buf.put_u8(2);
             buf.put_u16(addr.port() ^ xor16);
 
-            let ip = u128::from_ne_bytes(addr.ip().octets());
+            let ip = u128::from_be_bytes(addr.ip().octets());
             let ip = ip ^ xor128;
 
             buf.put_u128(ip);
