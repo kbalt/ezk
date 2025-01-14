@@ -6,7 +6,7 @@ use crate::transport::{OutgoingParts, OutgoingRequest, TargetTransportInfo};
 use crate::Result;
 use crate::{Endpoint, Request};
 use bytes::Bytes;
-use sip_types::header::typed::CSeq;
+use sip_types::header::typed::{CSeq, MaxForwards};
 use sip_types::header::HeaderError;
 use sip_types::msg::RequestLine;
 use sip_types::{CodeKind, Headers, Method, Name};
@@ -204,6 +204,7 @@ fn create_ack(
         .msg
         .headers
         .clone_into(&mut headers, Name::CALL_ID)?;
+    headers.insert_named(&MaxForwards(70));
 
     let cseq = request.msg.headers.get_named::<CSeq>()?;
 
