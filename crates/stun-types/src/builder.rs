@@ -1,12 +1,12 @@
 use crate::attributes::Attribute;
-use crate::header::{Class, MessageHead, MessageId, Method};
-use crate::{padding_u16, padding_usize, Error, TransactionId};
+use crate::header::{Class, MessageHead, Method, STUN_HEADER_LENGTH};
+use crate::{padding_u16, padding_usize, Error, TransactionId, COOKIE};
 use bytes::BufMut;
 
 /// Builder for a STUN message
 pub struct MessageBuilder {
     head: MessageHead,
-    id: MessageId,
+    transaction_id: TransactionId,
 
     padding_in_value_len: bool,
 
@@ -26,24 +26,19 @@ impl MessageBuilder {
         head.set_typ(typ);
         buffer.put_u32(head.0);
 
-        let mut id = MessageId::new();
-        id.set_transaction_id(transaction_id.0);
-        buffer.put_u128(id.0);
+        buffer.put_u32(COOKIE);
+        buffer.put_slice(&transaction_id.0);
 
         Self {
             head,
+            transaction_id,
             padding_in_value_len: true,
-            id,
             buffer,
         }
     }
 
     pub fn padding_in_value_len(&mut self, b: bool) {
         self.padding_in_value_len = b;
-    }
-
-    pub fn id(&self) -> &MessageId {
-        &self.id
     }
 
     /// Set the length of the message
@@ -90,8 +85,20 @@ impl MessageBuilder {
         Ok(())
     }
 
+    pub fn id(&self) -> u128 {
+        let cookie = COOKIE.to_be_bytes();
+        let tsx = self.transaction_id.0;
+
+        let mut id = [0u8; 16];
+
+        id[..4].copy_from_slice(&cookie);
+        id[4..].copy_from_slice(&tsx);
+
+        u128::from_be_bytes(id)
+    }
+
     pub fn finish(mut self) -> Vec<u8> {
-        self.set_len((self.buffer.len() - 20).try_into().unwrap());
+        self.set_len((self.buffer.len() - STUN_HEADER_LENGTH).try_into().unwrap());
         self.buffer
     }
 

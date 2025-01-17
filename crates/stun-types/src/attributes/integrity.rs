@@ -172,7 +172,7 @@ mod test {
         let password = "abc123";
 
         let mut message =
-            MessageBuilder::new(Class::Request, Method::Binding, TransactionId::new(123));
+            MessageBuilder::new(Class::Request, Method::Binding, TransactionId::new([0; 12]));
 
         message.add_attr(&Software::new("ezk-stun")).unwrap();
         message
@@ -196,7 +196,7 @@ mod test {
         let password = "abc123";
 
         let mut message =
-            MessageBuilder::new(Class::Request, Method::Binding, TransactionId::new(123));
+            MessageBuilder::new(Class::Request, Method::Binding, TransactionId::new([0; 12]));
 
         message.add_attr(&Software::new("ezk-stun")).unwrap();
         message

@@ -1,7 +1,6 @@
 #![warn(unreachable_pub)]
 
 use byteorder::ReadBytesExt;
-use rand::Rng;
 use std::io::{self, Cursor};
 use std::num::TryFromIntError;
 use std::str::Utf8Error;
@@ -12,7 +11,7 @@ mod header;
 mod parse;
 
 pub use builder::MessageBuilder;
-pub use header::{Class, MessageHead, MessageId, Method};
+pub use header::{Class, MessageHead, Method};
 pub use parse::{AttrSpan, Message};
 
 type NE = byteorder::NetworkEndian;
@@ -60,29 +59,17 @@ fn padding_usize(n: usize) -> usize {
 
 /// 96 bit STUN transaction id
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TransactionId(u128);
+pub struct TransactionId([u8; 12]);
 
 impl TransactionId {
-    const MAX: u128 = (1 << 96) - 1;
-
-    /// Returns the inner numeric representation of the transaction id
-    pub fn as_u128(self) -> u128 {
-        self.0
-    }
-
     /// Create a new transaction id from the given value
-    ///
-    /// # Panics
-    ///
-    /// Panics if the given value is larger than 96 bits
-    pub fn new(v: u128) -> Self {
-        assert!(v <= Self::MAX);
+    pub fn new(v: [u8; 12]) -> Self {
         Self(v)
     }
 
     /// Generate a new random transaction id
     pub fn random() -> Self {
-        Self(rand::thread_rng().gen_range(0..=Self::MAX))
+        Self(rand::random())
     }
 }
 
@@ -123,10 +110,9 @@ pub fn is_stun_message(i: &[u8]) -> IsStunMessageInfo {
         return IsStunMessageInfo::No;
     }
 
-    let id = cursor.read_u128::<NE>().unwrap();
-    let id = MessageId(id);
+    let cookie = cursor.read_u32::<NE>().unwrap();
 
-    if id.cookie() != COOKIE {
+    if cookie != COOKIE {
         return IsStunMessageInfo::No;
     }
 

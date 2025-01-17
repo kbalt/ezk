@@ -80,7 +80,7 @@ mod test {
     #[test]
     fn error_code() {
         let mut builder =
-            MessageBuilder::new(Class::Error, Method::Binding, TransactionId::new(128));
+            MessageBuilder::new(Class::Error, Method::Binding, TransactionId::new([0; 12]));
         builder
             .add_attr(&ErrorCode {
                 number: 400,

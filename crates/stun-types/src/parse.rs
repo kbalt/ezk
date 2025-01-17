@@ -1,10 +1,10 @@
 use crate::attributes::{Attribute, Fingerprint, MessageIntegrity, MessageIntegritySha256};
-use crate::header::{Class, MessageHead, MessageId, Method};
+use crate::header::{Class, MessageHead, Method};
 use crate::{padding_usize, Error, TransactionId, COOKIE, NE};
 use byteorder::ReadBytesExt;
 use bytes::Buf;
 use std::convert::TryFrom;
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 
 #[derive(Debug, Clone, Copy)]
 pub struct AttrSpan {
@@ -31,7 +31,7 @@ pub struct Message {
     buffer: Vec<u8>,
 
     head: MessageHead,
-    id: MessageId,
+    id: u128,
 
     class: Class,
     method: Method,
@@ -53,6 +53,10 @@ impl Message {
         self.transaction_id
     }
 
+    pub(crate) fn id(&self) -> u128 {
+        self.id
+    }
+
     pub fn parse(buffer: impl Into<Vec<u8>>) -> Result<Message, Error> {
         let mut cursor = Cursor::new(buffer.into());
 
@@ -64,9 +68,16 @@ impl Message {
         }
 
         let id = cursor.read_u128::<NE>()?;
-        let id = MessageId(id);
 
-        if id.cookie() != COOKIE {
+        let (cookie, transaction_id) = {
+            let mut cursor = Cursor::new(id.to_be_bytes());
+            let cookie = cursor.read_u32::<NE>()?;
+            let mut transaction_id = [0u8; 12];
+            cursor.read_exact(&mut transaction_id)?;
+            (cookie, transaction_id)
+        };
+
+        if cookie != COOKIE {
             return Err(Error::InvalidData("not a stun message"));
         }
 
@@ -81,27 +92,13 @@ impl Message {
             let padding = padding_usize(attr_len);
 
             let value_begin = usize::try_from(cursor.position())?;
-            let mut value_end = value_begin + attr_len;
+            let value_end = value_begin + attr_len;
             let padding_end = value_end + padding;
 
             if padding_end > cursor.get_ref().len() {
                 return Err(Error::InvalidData(
                     "Invalid attribute length in STUN message",
                 ));
-            }
-
-            // https://datatracker.ietf.org/doc/html/rfc8489#section-14
-            // explicitly states that the length field must contain the
-            // value length __prior__ to padding. Some stun agents have
-            // the padding included in the length anyway. This double
-            // checks and removes all bytes from the end of the value.
-            if padding == 0 {
-                let value = &cursor.get_ref()[value_begin..value_end];
-
-                // count all zero bytes at the end of the value
-                let counted_padding = value.iter().rev().take_while(|&&b| b == 0).count();
-
-                value_end -= counted_padding;
             }
 
             let attr = AttrSpan {
@@ -122,7 +119,7 @@ impl Message {
             id,
             class,
             method,
-            transaction_id: TransactionId(id.transaction_id()),
+            transaction_id: TransactionId(transaction_id),
             attributes,
         })
     }
@@ -200,10 +197,5 @@ impl Message {
     /// Header of the STUN message
     pub fn head(&self) -> &MessageHead {
         &self.head
-    }
-
-    /// ID of the STUN message (cookie + transaction)
-    pub fn id(&self) -> &MessageId {
-        &self.id
     }
 }

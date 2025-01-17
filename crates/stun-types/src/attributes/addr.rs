@@ -91,12 +91,12 @@ impl Attribute<'_> for XorMappedAddress {
     const TYPE: u16 = 0x0020;
 
     fn decode(_: Self::Context, msg: &mut Message, attr: AttrSpan) -> Result<Self, Error> {
-        let xor128 = msg.id().0;
+        let xor128 = msg.id();
         decode_addr(attr.get_value(msg.buffer()), XOR16, COOKIE, xor128).map(Self)
     }
 
     fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
-        let xor128 = builder.id().0;
+        let xor128 = builder.id();
         encode_addr(self.0, builder.buffer(), XOR16, COOKIE, xor128);
         Ok(())
     }

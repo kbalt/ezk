@@ -1,4 +1,4 @@
-use crate::{Error, COOKIE};
+use crate::Error;
 use bitfield::bitfield;
 use std::convert::TryFrom;
 
@@ -16,26 +16,6 @@ bitfield! {
 
     #[allow(clippy::len_without_is_empty)]
     pub len, set_len: 15, 0;
-}
-
-bitfield! {
-    /// Internal bitfield representing the cookie + transaction id
-    #[derive(Debug, Clone, Copy)]
-    pub struct MessageId(u128);
-
-    u32;
-    pub cookie, set_cookie: 127,  96;
-
-    u128;
-    pub transaction_id, set_transaction_id: 95, 0;
-}
-
-impl MessageId {
-    pub(crate) fn new() -> Self {
-        let mut new = Self(0);
-        new.set_cookie(COOKIE);
-        new
-    }
 }
 
 /// STUN class
