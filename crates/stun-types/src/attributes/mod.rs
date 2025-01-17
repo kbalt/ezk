@@ -33,7 +33,7 @@ pub trait Attribute<'s> {
     where
         Self: Sized;
 
-    fn encode(&self, ctx: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error>;
+    fn encode(&self, ctx: Self::Context, builder: &mut MessageBuilder);
 
     fn encode_len(&self) -> Result<u16, Error>;
 }
@@ -54,9 +54,8 @@ impl<'s, const TYPE: u16> Attribute<'s> for StringAttribute<'s, TYPE> {
         Ok(Self(from_utf8(attr.get_value(msg.buffer()))?))
     }
 
-    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
+    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) {
         builder.buffer().extend_from_slice(self.0.as_ref());
-        Ok(())
     }
 
     fn encode_len(&self) -> Result<u16, Error> {
@@ -80,9 +79,8 @@ impl<'s, const TYPE: u16> Attribute<'s> for BytesAttribute<'s, TYPE> {
         Ok(Self(attr.get_value(msg.buffer())))
     }
 
-    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
+    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) {
         builder.buffer().extend_from_slice(self.0);
-        Ok(())
     }
 
     fn encode_len(&self) -> Result<u16, Error> {
@@ -118,12 +116,10 @@ impl Attribute<'_> for UnknownAttributes {
         Ok(Self(attributes))
     }
 
-    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
+    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) {
         for &attr in &self.0 {
             builder.buffer().put_u16(attr);
         }
-
-        Ok(())
     }
 
     fn encode_len(&self) -> Result<u16, Error> {

@@ -8,59 +8,39 @@ use hmac::digest::{Digest, Update};
 use hmac::{Mac, SimpleHmac};
 use sha1::Sha1;
 use sha2::Sha256;
-use std::borrow::Cow;
 use std::convert::TryFrom;
-use std::marker::PhantomData;
 
-pub struct MessageIntegrityKey<'s>(Cow<'s, [u8]>);
+pub fn long_term_password_md5(username: &str, realm: &str, password: &str) -> Vec<u8> {
+    md5::compute(format!("{}:{}:{}", username, realm, password).as_bytes()).to_vec()
+}
 
-impl<'s> MessageIntegrityKey<'s> {
-    pub fn new_long_term_md5(username: &str, realm: &str, password: &str) -> Self {
-        let key = md5::compute(format!("{}:{}:{}", username, realm, password))
-            .0
-            .to_vec();
+pub fn long_term_password_sha256(username: &str, realm: &str, password: &str) -> Vec<u8> {
+    Sha256::digest(format!("{}:{}:{}", username, realm, password).as_bytes()).to_vec()
+}
 
-        Self(Cow::Owned(key))
-    }
+pub struct MessageIntegrityKey(SimpleHmac<Sha1>);
 
-    pub fn new_long_term_sha256(username: &str, realm: &str, password: &str) -> Self {
-        let key =
-            Sha256::digest(format!("{}:{}:{}", username, realm, password).as_bytes()).to_vec();
-
-        Self(Cow::Owned(key))
-    }
-
-    pub fn new_short_term(password: &'s str) -> Self {
-        Self(Cow::Borrowed(password.as_bytes()))
-    }
-
-    pub fn new_raw(raw: Cow<'s, [u8]>) -> Self {
-        Self(raw)
+impl MessageIntegrityKey {
+    pub fn new(key: impl AsRef<[u8]>) -> Self {
+        Self(SimpleHmac::new_from_slice(key.as_ref()).expect("any key length is valid"))
     }
 }
 
 /// [RFC8489](https://datatracker.ietf.org/doc/html/rfc8489#section-14.5)
-#[derive(Default)]
-pub struct MessageIntegrity<'k>(PhantomData<&'k ()>);
+pub struct MessageIntegrity;
 
-impl<'k> Attribute<'_> for MessageIntegrity<'k> {
-    type Context = &'k MessageIntegrityKey<'k>;
+impl Attribute<'_> for MessageIntegrity {
+    type Context = MessageIntegrityKey;
     const TYPE: u16 = 0x0008;
 
     fn decode(ctx: Self::Context, msg: &mut Message, attr: AttrSpan) -> Result<Self, Error> {
-        let hmac: SimpleHmac<Sha1> = SimpleHmac::new_from_slice(&ctx.0)
-            .map_err(|_| Error::InvalidData("invalid key length"))?;
+        message_integrity_decode(ctx.0, msg, attr)?;
 
-        message_integrity_decode(hmac, msg, attr)?;
-
-        Ok(Self(PhantomData))
+        Ok(Self)
     }
 
-    fn encode(&self, ctx: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
-        let hmac: SimpleHmac<Sha1> = SimpleHmac::new_from_slice(&ctx.0)
-            .map_err(|_| Error::InvalidData("invalid key length"))?;
-
-        message_integrity_encode(hmac, builder)
+    fn encode(&self, ctx: Self::Context, builder: &mut MessageBuilder) {
+        message_integrity_encode(ctx.0, builder)
     }
 
     fn encode_len(&self) -> Result<u16, Error> {
@@ -68,28 +48,29 @@ impl<'k> Attribute<'_> for MessageIntegrity<'k> {
     }
 }
 
-/// [RFC8489](https://datatracker.ietf.org/doc/html/rfc8489#section-14.6)
-#[derive(Default)]
-pub struct MessageIntegritySha256<'k>(PhantomData<&'k ()>);
+pub struct MessageIntegritySha256Key(SimpleHmac<Sha256>);
 
-impl<'k> Attribute<'_> for MessageIntegritySha256<'k> {
-    type Context = &'k MessageIntegrityKey<'k>;
+impl MessageIntegritySha256Key {
+    pub fn new(key: impl AsRef<[u8]>) -> Self {
+        Self(SimpleHmac::new_from_slice(key.as_ref()).expect("any key length is valid"))
+    }
+}
+
+/// [RFC8489](https://datatracker.ietf.org/doc/html/rfc8489#section-14.6)
+pub struct MessageIntegritySha256;
+
+impl Attribute<'_> for MessageIntegritySha256 {
+    type Context = MessageIntegritySha256Key;
     const TYPE: u16 = 0x001C;
 
     fn decode(ctx: Self::Context, msg: &mut Message, attr: AttrSpan) -> Result<Self, Error> {
-        let hmac: SimpleHmac<Sha256> = SimpleHmac::new_from_slice(&ctx.0)
-            .map_err(|_| Error::InvalidData("invalid key length"))?;
+        message_integrity_decode(ctx.0, msg, attr)?;
 
-        message_integrity_decode(hmac, msg, attr)?;
-
-        Ok(Self(PhantomData))
+        Ok(Self)
     }
 
-    fn encode(&self, ctx: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
-        let hmac: SimpleHmac<Sha256> = SimpleHmac::new_from_slice(&ctx.0)
-            .map_err(|_| Error::InvalidData("invalid key length"))?;
-
-        message_integrity_encode(hmac, builder)
+    fn encode(&self, ctx: Self::Context, builder: &mut MessageBuilder) {
+        message_integrity_encode(ctx.0, builder)
     }
 
     fn encode_len(&self) -> Result<u16, Error> {
@@ -134,10 +115,7 @@ where
     )
 }
 
-fn message_integrity_encode<D>(
-    mut hmac: SimpleHmac<D>,
-    builder: &mut MessageBuilder,
-) -> Result<(), Error>
+fn message_integrity_encode<D>(mut hmac: SimpleHmac<D>, builder: &mut MessageBuilder)
 where
     D: Digest + BlockSizeUser,
 {
@@ -145,7 +123,11 @@ where
     let message_length_with_integrity_attribute =
         (builder.buffer().len() + <D as Digest>::output_size()) - STUN_HEADER_LENGTH;
 
-    builder.set_len(message_length_with_integrity_attribute.try_into()?);
+    builder.set_len(
+        message_length_with_integrity_attribute
+            .try_into()
+            .expect("stun messages must fit withing 65535 bytes"),
+    );
 
     // Calculate the digest of the message up until the previous attribute
     let data = builder.buffer();
@@ -154,13 +136,13 @@ where
     let digest = hmac.finalize().into_bytes();
 
     builder.buffer().extend_from_slice(&digest);
-
-    Ok(())
 }
 
 #[cfg(test)]
 mod test {
-    use super::{MessageIntegrity, MessageIntegrityKey, MessageIntegritySha256};
+    use super::{
+        MessageIntegrity, MessageIntegrityKey, MessageIntegritySha256, MessageIntegritySha256Key,
+    };
     use crate::attributes::Software;
     use crate::builder::MessageBuilder;
     use crate::header::{Class, Method};
@@ -174,19 +156,15 @@ mod test {
         let mut message =
             MessageBuilder::new(Class::Request, Method::Binding, TransactionId::new([0; 12]));
 
-        message.add_attr(&Software::new("ezk-stun")).unwrap();
-        message
-            .add_attr_with(
-                &MessageIntegrity::default(),
-                &MessageIntegrityKey::new_short_term(password),
-            )
-            .unwrap();
+        message.add_attr(Software::new("ezk-stun"));
+        message.add_attr_with(MessageIntegrity, MessageIntegrityKey::new(password));
+
         let bytes = message.finish();
         let bytes = Vec::from(&bytes[..]);
 
         let mut msg = Message::parse(bytes).unwrap();
 
-        msg.attribute_with::<MessageIntegrity>(&MessageIntegrityKey::new_short_term(password))
+        msg.attribute_with::<MessageIntegrity>(MessageIntegrityKey::new(password))
             .unwrap()
             .unwrap();
     }
@@ -198,22 +176,19 @@ mod test {
         let mut message =
             MessageBuilder::new(Class::Request, Method::Binding, TransactionId::new([0; 12]));
 
-        message.add_attr(&Software::new("ezk-stun")).unwrap();
-        message
-            .add_attr_with(
-                &MessageIntegritySha256::default(),
-                &MessageIntegrityKey::new_short_term(password),
-            )
-            .unwrap();
+        message.add_attr(Software::new("ezk-stun"));
+        message.add_attr_with(
+            MessageIntegritySha256,
+            MessageIntegritySha256Key::new(password),
+        );
+
         let bytes = message.finish();
         let bytes = Vec::from(&bytes[..]);
 
         let mut msg = Message::parse(bytes).unwrap();
 
-        msg.attribute_with::<MessageIntegritySha256>(&MessageIntegrityKey::new_short_term(
-            password,
-        ))
-        .unwrap()
-        .unwrap();
+        msg.attribute_with::<MessageIntegritySha256>(MessageIntegritySha256Key::new(password))
+            .unwrap()
+            .unwrap();
     }
 }

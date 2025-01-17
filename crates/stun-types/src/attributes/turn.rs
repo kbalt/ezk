@@ -18,11 +18,9 @@ impl Attribute<'_> for ChannelNumber {
         Ok(Self(attr.get_value(msg.buffer()).read_u16::<NE>()?))
     }
 
-    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
+    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) {
         builder.buffer().put_u16(self.0);
         builder.buffer().put_u16(0);
-
-        Ok(())
     }
 
     fn encode_len(&self) -> Result<u16, Error> {
@@ -41,10 +39,8 @@ impl Attribute<'_> for Lifetime {
         Ok(Self(attr.get_value(msg.buffer()).read_u32::<NE>()?))
     }
 
-    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
+    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) {
         builder.buffer().put_u32(self.0);
-
-        Ok(())
     }
 
     fn encode_len(&self) -> Result<u16, Error> {
@@ -63,7 +59,7 @@ impl Attribute<'_> for XorPeerAddress {
         XorMappedAddress::decode(ctx, msg, attr).map(|xma| Self(xma.0))
     }
 
-    fn encode(&self, ctx: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
+    fn encode(&self, ctx: Self::Context, builder: &mut MessageBuilder) {
         XorMappedAddress(self.0).encode(ctx, builder)
     }
 
@@ -86,7 +82,7 @@ impl Attribute<'_> for XorRelayedAddress {
         XorMappedAddress::decode(ctx, msg, attr).map(|xma| Self(xma.0))
     }
 
-    fn encode(&self, ctx: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
+    fn encode(&self, ctx: Self::Context, builder: &mut MessageBuilder) {
         XorMappedAddress(self.0).encode(ctx, builder)
     }
 
@@ -106,10 +102,8 @@ impl Attribute<'_> for EvenPort {
         Ok(Self(attr.get_value(msg.buffer()).read_u8()? == 1))
     }
 
-    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
+    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) {
         builder.buffer().put_u8(if self.0 { 1 } else { 0 });
-
-        Ok(())
     }
 
     fn encode_len(&self) -> Result<u16, Error> {
@@ -133,12 +127,10 @@ impl Attribute<'_> for RequestedTransport {
         })
     }
 
-    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
+    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) {
         builder.buffer().put_u8(self.protocol_number);
         builder.buffer().put_u8(0);
         builder.buffer().put_u16(0);
-
-        Ok(())
     }
 
     fn encode_len(&self) -> Result<u16, Error> {
@@ -157,9 +149,7 @@ impl Attribute<'_> for DontFragment {
         Ok(Self)
     }
 
-    fn encode(&self, _: Self::Context, _: &mut MessageBuilder) -> Result<(), Error> {
-        Ok(())
-    }
+    fn encode(&self, _: Self::Context, _: &mut MessageBuilder) {}
 
     fn encode_len(&self) -> Result<u16, Error> {
         Ok(0)
@@ -179,10 +169,8 @@ impl Attribute<'_> for ReservationToken {
         )?))
     }
 
-    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
+    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) {
         builder.buffer().extend_from_slice(&self.0[..]);
-
-        Ok(())
     }
 
     fn encode_len(&self) -> Result<u16, Error> {

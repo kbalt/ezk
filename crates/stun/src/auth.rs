@@ -1,6 +1,7 @@
 use stun_types::attributes::{
-    MessageIntegrity, MessageIntegrityKey, MessageIntegritySha256, Nonce, PasswordAlgorithm, Realm,
-    Username, ALGORITHM_MD5, ALGORITHM_SHA256,
+    long_term_password_md5, long_term_password_sha256, MessageIntegrity, MessageIntegrityKey,
+    MessageIntegritySha256, MessageIntegritySha256Key, Nonce, PasswordAlgorithm, Realm, Username,
+    ALGORITHM_MD5, ALGORITHM_SHA256,
 };
 use stun_types::{Message, MessageBuilder};
 
@@ -34,12 +35,13 @@ impl StunCredential {
     ) -> Result<(), Error> {
         match &*self {
             StunCredential::ShortTerm { username, password } => {
-                msg.add_attr(&Username::new(username))?;
+                msg.add_attr(Username::new(username));
 
-                let key = MessageIntegrityKey::new_short_term(password);
-
-                msg.add_attr_with(&MessageIntegritySha256::default(), &key)?;
-                msg.add_attr_with(&MessageIntegrity::default(), &key)?;
+                msg.add_attr_with(
+                    MessageIntegritySha256,
+                    MessageIntegritySha256Key::new(password),
+                );
+                msg.add_attr_with(MessageIntegrity, MessageIntegrityKey::new(password));
             }
             StunCredential::LongTerm {
                 realm,
@@ -50,26 +52,22 @@ impl StunCredential {
                     let alg = alg?;
 
                     match alg.algorithm {
-                        ALGORITHM_MD5 => {
-                            MessageIntegrityKey::new_long_term_md5(username, realm, password)
-                        }
-                        ALGORITHM_SHA256 => {
-                            MessageIntegrityKey::new_long_term_sha256(username, realm, password)
-                        }
+                        ALGORITHM_MD5 => long_term_password_md5(username, realm, password),
+                        ALGORITHM_SHA256 => long_term_password_sha256(username, realm, password),
                         _ => return Err(Error::UnknownAlgorithm),
                     }
                 } else {
-                    MessageIntegrityKey::new_long_term_md5(username, realm, password)
+                    long_term_password_md5(username, realm, password)
                 };
 
                 let nonce = response.attribute::<Nonce>().ok_or(Error::MissingNonce)??;
 
-                msg.add_attr(&Nonce::new(nonce.0))?;
-                msg.add_attr(&Realm::new(realm))?;
-                msg.add_attr(&Username::new(username))?;
+                msg.add_attr(Nonce::new(nonce.0));
+                msg.add_attr(Realm::new(realm));
+                msg.add_attr(Username::new(username));
 
-                msg.add_attr_with(&MessageIntegritySha256::default(), &key)?;
-                msg.add_attr_with(&MessageIntegrity::default(), &key)?;
+                msg.add_attr_with(MessageIntegritySha256, MessageIntegritySha256Key::new(&key));
+                msg.add_attr_with(MessageIntegrity, MessageIntegrityKey::new(&key));
             }
         }
 

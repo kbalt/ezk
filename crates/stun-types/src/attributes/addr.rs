@@ -70,9 +70,8 @@ impl Attribute<'_> for MappedAddress {
         decode_addr(attr.get_value(msg.buffer()), 0, 0, 0).map(Self)
     }
 
-    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
+    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) {
         encode_addr(self.0, builder.buffer(), 0, 0, 0);
-        Ok(())
     }
 
     fn encode_len(&self) -> Result<u16, Error> {
@@ -95,10 +94,9 @@ impl Attribute<'_> for XorMappedAddress {
         decode_addr(attr.get_value(msg.buffer()), XOR16, COOKIE, xor128).map(Self)
     }
 
-    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
+    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) {
         let xor128 = builder.id();
         encode_addr(self.0, builder.buffer(), XOR16, COOKIE, xor128);
-        Ok(())
     }
 
     fn encode_len(&self) -> Result<u16, Error> {
@@ -120,9 +118,8 @@ impl Attribute<'_> for AlternateServer {
         decode_addr(attr.get_value(msg.buffer()), 0, 0, 0).map(Self)
     }
 
-    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
+    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) {
         encode_addr(self.0, builder.buffer(), 0, 0, 0);
-        Ok(())
     }
 
     fn encode_len(&self) -> Result<u16, Error> {

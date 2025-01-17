@@ -32,9 +32,8 @@ impl Attribute<'_> for UserHash {
         Ok(Self(<[u8; 32]>::try_from(value).unwrap()))
     }
 
-    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
+    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) {
         builder.buffer().extend_from_slice(&self.0);
-        Ok(())
     }
 
     fn encode_len(&self) -> Result<u16, Error> {

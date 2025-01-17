@@ -39,17 +39,17 @@ impl<'s> Attribute<'s> for PasswordAlgorithms<'s> {
         Ok(Self { algorithms })
     }
 
-    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
+    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) {
         for (alg, params) in &self.algorithms {
             let padding = padding_usize(params.len());
 
             builder.buffer().put_u16(*alg);
-            builder.buffer().put_u16(u16::try_from(params.len())?);
+            builder.buffer().put_u16(
+                u16::try_from(params.len()).expect("params must be smaller than 65535 bytes"),
+            );
             builder.buffer().extend_from_slice(params);
             builder.buffer().extend((0..padding).map(|_| 0));
         }
-
-        Ok(())
     }
 
     fn encode_len(&self) -> Result<u16, Error> {
@@ -93,15 +93,15 @@ impl<'s> Attribute<'s> for PasswordAlgorithm<'s> {
         })
     }
 
-    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
+    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) {
         let padding = padding_usize(self.params.len());
 
         builder.buffer().put_u16(self.algorithm);
-        builder.buffer().put_u16(u16::try_from(self.params.len())?);
+        builder.buffer().put_u16(
+            u16::try_from(self.params.len()).expect("params must be smaller than 65535 bytes"),
+        );
         builder.buffer().extend_from_slice(self.params);
         builder.buffer().extend((0..padding).map(|_| 0));
-
-        Ok(())
     }
 
     fn encode_len(&self) -> Result<u16, Error> {

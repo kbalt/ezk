@@ -23,12 +23,9 @@ impl Attribute<'_> for Priority {
         Ok(Self(value.read_u32::<NE>()?))
     }
 
-    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
+    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) {
         let data = builder.buffer();
-
         data.put_u32(self.0);
-
-        Ok(())
     }
 
     fn encode_len(&self) -> Result<u16, Error> {
@@ -46,9 +43,7 @@ impl Attribute<'_> for UseCandidate {
         Ok(Self)
     }
 
-    fn encode(&self, _: Self::Context, _builder: &mut MessageBuilder) -> Result<(), Error> {
-        Ok(())
-    }
+    fn encode(&self, _: Self::Context, _builder: &mut MessageBuilder) {}
 
     fn encode_len(&self) -> Result<u16, Error> {
         Ok(0)
@@ -71,12 +66,9 @@ impl Attribute<'_> for IceControlled {
         Ok(Self(value.read_u64::<NE>()?))
     }
 
-    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
+    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) {
         let data = builder.buffer();
-
         data.put_u64(self.0);
-
-        Ok(())
     }
 
     fn encode_len(&self) -> Result<u16, Error> {
@@ -100,12 +92,9 @@ impl Attribute<'_> for IceControlling {
         Ok(Self(value.read_u64::<NE>()?))
     }
 
-    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
+    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) {
         let data = builder.buffer();
-
         data.put_u64(self.0);
-
-        Ok(())
     }
 
     fn encode_len(&self) -> Result<u16, Error> {

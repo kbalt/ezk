@@ -1,6 +1,6 @@
 use crate::attributes::Attribute;
 use crate::header::{Class, MessageHead, Method, STUN_HEADER_LENGTH};
-use crate::{padding_u16, padding_usize, Error, TransactionId, COOKIE};
+use crate::{padding_u16, padding_usize, TransactionId, COOKIE};
 use bytes::BufMut;
 
 /// Builder for a STUN message
@@ -54,7 +54,7 @@ impl MessageBuilder {
     }
 
     /// Serialize the attribute into the builder
-    pub fn add_attr<'a, A>(&mut self, attr: &A) -> Result<(), Error>
+    pub fn add_attr<'a, A>(&mut self, attr: A)
     where
         A: Attribute<'a, Context = ()>,
     {
@@ -62,7 +62,7 @@ impl MessageBuilder {
     }
 
     /// Serialize the attribute into the builder with a given context (e.g. a key to calculate the integrity)
-    pub fn add_attr_with<'a, A>(&mut self, attr: &A, ctx: A::Context) -> Result<(), Error>
+    pub fn add_attr_with<'a, A>(&mut self, attr: A, ctx: A::Context)
     where
         A: Attribute<'a>,
     {
@@ -77,12 +77,10 @@ impl MessageBuilder {
             self.buffer.put_u16(enc_len);
         }
 
-        attr.encode(ctx, self)?;
+        attr.encode(ctx, self);
 
         let padding_bytes = std::iter::repeat(0).take(padding_usize(usize::from(enc_len)));
         self.buffer.extend(padding_bytes);
-
-        Ok(())
     }
 
     pub fn id(&self) -> u128 {

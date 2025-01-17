@@ -46,7 +46,7 @@ impl<'s> Attribute<'s> for ErrorCode<'s> {
         })
     }
 
-    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
+    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) {
         let class = self.number / 100;
         let number = self.number % 100;
 
@@ -57,8 +57,6 @@ impl<'s> Attribute<'s> for ErrorCode<'s> {
 
         builder.buffer().put_u32(head.0);
         builder.buffer().extend_from_slice(self.reason.as_ref());
-
-        Ok(())
     }
 
     fn encode_len(&self) -> Result<u16, Error> {
@@ -81,12 +79,10 @@ mod test {
     fn error_code() {
         let mut builder =
             MessageBuilder::new(Class::Error, Method::Binding, TransactionId::new([0; 12]));
-        builder
-            .add_attr(&ErrorCode {
-                number: 400,
-                reason: "Bad Request",
-            })
-            .unwrap();
+        builder.add_attr(ErrorCode {
+            number: 400,
+            reason: "Bad Request",
+        });
 
         let bytes = builder.finish();
 

@@ -85,13 +85,17 @@ impl Attribute<'_> for Fingerprint {
         )
     }
 
-    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) -> Result<(), Error> {
+    fn encode(&self, _: Self::Context, builder: &mut MessageBuilder) {
         // First set the length of the message to the end of the fingerprint attribute
         // 4 bytes containing type and length is already written into the buffer
         let message_length_with_fingerprint_attribute =
             (builder.buffer().len() + 4) - STUN_HEADER_LENGTH;
 
-        builder.set_len(message_length_with_fingerprint_attribute.try_into()?);
+        builder.set_len(
+            message_length_with_fingerprint_attribute
+                .try_into()
+                .expect("stun messages must fit withing 65535 bytes"),
+        );
 
         // Calculate the checksum
         let data = builder.buffer();
@@ -99,8 +103,6 @@ impl Attribute<'_> for Fingerprint {
         let crc = Self::crc32(data) ^ 0x5354554e;
 
         builder.buffer().put_u32(crc);
-
-        Ok(())
     }
 
     fn encode_len(&self) -> Result<u16, Error> {
