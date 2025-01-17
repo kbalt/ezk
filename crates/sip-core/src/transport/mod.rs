@@ -382,7 +382,7 @@ impl Transports {
             let transport_param_matches = uri
                 .transport
                 .as_ref()
-                .map_or(true, |t| tp.matches_transport_param(t));
+                .is_none_or(|t| tp.matches_transport_param(t));
 
             addr_familiy_supported
                 && transport_name_matches

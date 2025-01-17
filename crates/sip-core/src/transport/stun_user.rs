@@ -45,7 +45,7 @@ impl Transports {
         let tsx_id = TransactionId::random();
 
         let mut msg = MessageBuilder::new(Class::Request, Method::Binding, tsx_id);
-        msg.add_attr(&Software::new("ezk")).unwrap();
+        msg.add_attr(Software::new("ezk"));
         let bytes = msg.finish();
 
         let request = stun::Request {

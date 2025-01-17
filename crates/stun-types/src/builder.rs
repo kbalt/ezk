@@ -32,7 +32,7 @@ impl MessageBuilder {
         Self {
             head,
             transaction_id,
-            padding_in_value_len: true,
+            padding_in_value_len: false,
             buffer,
         }
     }
