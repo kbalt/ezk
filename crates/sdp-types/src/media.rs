@@ -51,6 +51,9 @@ pub enum TransportProtocol {
     /// RTP over UDP
     RtpAvp,
 
+    /// RTP with [RFC4585](https://www.rfc-editor.org/rfc/rfc4585.html)
+    RtpAvpf,
+
     /// SRTP over UDP
     RtpSavp,
 
@@ -71,16 +74,17 @@ impl TransportProtocol {
     pub fn parse(src: &Bytes) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
         move |i| {
             alt((
-                map(tag("udp"), |_| TransportProtocol::Unspecified),
-                map(tag("RTP/AVP"), |_| TransportProtocol::RtpAvp),
-                map(tag("RTP/SAVP"), |_| TransportProtocol::RtpSavp),
-                map(tag("RTP/SAVPF"), |_| TransportProtocol::RtpSavpf),
-                map(tag("UDP/TLS/RTP/SAVP"), |_| {
-                    TransportProtocol::UdpTlsRtpSavp
-                }),
                 map(tag("UDP/TLS/RTP/SAVPF"), |_| {
                     TransportProtocol::UdpTlsRtpSavpf
                 }),
+                map(tag("UDP/TLS/RTP/SAVP"), |_| {
+                    TransportProtocol::UdpTlsRtpSavp
+                }),
+                map(tag("RTP/SAVPF"), |_| TransportProtocol::RtpSavpf),
+                map(tag("RTP/SAVP"), |_| TransportProtocol::RtpSavp),
+                map(tag("RTP/AVPF"), |_| TransportProtocol::RtpAvpf),
+                map(tag("RTP/AVP"), |_| TransportProtocol::RtpAvp),
+                map(tag("udp"), |_| TransportProtocol::Unspecified),
                 map(take_while1(not_whitespace), |tp| {
                     TransportProtocol::Other(BytesStr::from_parse(src, tp))
                 }),
@@ -94,6 +98,7 @@ impl fmt::Display for TransportProtocol {
         match self {
             TransportProtocol::Unspecified => f.write_str("udp"),
             TransportProtocol::RtpAvp => f.write_str("RTP/AVP"),
+            TransportProtocol::RtpAvpf => f.write_str("RTP/AVPF"),
             TransportProtocol::RtpSavp => f.write_str("RTP/SAVP"),
             TransportProtocol::RtpSavpf => f.write_str("RTP/SAVPF"),
             TransportProtocol::UdpTlsRtpSavp => f.write_str("UDP/TLS/RTP/SAVP"),
@@ -166,15 +171,15 @@ mod test {
 
     #[test]
     fn media() {
-        let input = BytesStr::from_static("audio 49170 RTP/AVP 0");
+        let input = BytesStr::from_static("audio 54647 RTP/AVPF 96 97 98 0 8 18 101 99 100");
 
         let (rem, media) = Media::parse(input.as_ref(), &input).unwrap();
 
         assert_eq!(media.media_type, MediaType::Audio);
-        assert_eq!(media.port, 49170);
+        assert_eq!(media.port, 54647);
         assert!(media.ports_num.is_none());
-        assert_eq!(media.proto, TransportProtocol::RtpAvp);
-        assert_eq!(media.fmts, [0]);
+        assert_eq!(media.proto, TransportProtocol::RtpAvpf);
+        assert_eq!(media.fmts, [96, 97, 98, 0, 8, 18, 101, 99, 100]);
 
         assert!(rem.is_empty());
     }
