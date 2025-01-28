@@ -1,5 +1,7 @@
-use crate::{Codec, Codecs, DirectionBools};
+use crate::{Codec, Codecs};
 use sdp_types::{Direction, MediaDescription};
+
+use super::DirectionBools;
 
 pub(super) struct LocalMedia {
     pub(super) codecs: Codecs,

@@ -1,9 +1,7 @@
-use crate::{
-    events::{TransportConnectionState, TransportRequiredChanges},
-    opt_min,
-    rtp::extensions::RtpExtensionIdsExt,
-    Error, TransportType,
+use super::{
+    opt_min, rtp::extensions::RtpExtensionIdsExt, TransportChange, TransportConnectionState,
 };
+use crate::{Error, TransportId, TransportType};
 use dtls_srtp::{make_ssl_context, DtlsSetup, DtlsSrtpSession, DtlsState};
 use ice::{
     Component, IceAgent, IceConnectionState, IceCredentials, IceEvent, IceGatheringState,
@@ -128,15 +126,16 @@ enum TransportKind {
 
 impl Transport {
     pub(crate) fn create_from_offer(
+        id: TransportId,
         state: &mut SessionTransportState,
-        mut required_changes: TransportRequiredChanges<'_>,
+        changes: &mut Vec<TransportChange>,
         session_desc: &SessionDescription,
         remote_media_desc: &MediaDescription,
     ) -> Result<Option<Self>, Error> {
         if remote_media_desc.rtcp_mux {
-            required_changes.require_socket();
+            changes.push(TransportChange::CreateSocket(id));
         } else {
-            required_changes.require_socket_pair();
+            changes.push(TransportChange::CreateSocketPair(id));
         }
 
         let (remote_rtp_address, remote_rtcp_address) =
@@ -460,32 +459,46 @@ impl Transport {
         match PacketKind::identify(&pkt.data) {
             PacketKind::Rtp => {
                 // Handle incoming RTP packet
-                if let TransportKind::SdesSrtp { inbound, .. }
-                | TransportKind::DtlsSrtp {
-                    srtp: Some((inbound, _)),
-                    ..
-                } = &mut self.kind
-                {
-                    inbound.unprotect(&mut pkt.data).unwrap();
+                match &mut self.kind {
+                    TransportKind::Rtp => {}
+                    TransportKind::SdesSrtp { inbound, .. } => {
+                        inbound.unprotect(&mut pkt.data).unwrap();
+                    }
+                    TransportKind::DtlsSrtp { srtp, .. } => match srtp {
+                        Some((inbound, _)) => {
+                            inbound.unprotect(&mut pkt.data).unwrap();
+                        }
+                        None => {
+                            log::debug!("Got RTP packet on DTLS/SRTP transport before handshake was complete, discarding");
+                            return ReceivedPacket::Ignore;
+                        }
+                    },
                 }
 
                 match RtpPacket::parse(self.negotiated_extension_ids, pkt.data) {
                     Ok(packet) => ReceivedPacket::Rtp(packet),
                     Err(e) => {
                         log::warn!("Failed to parse RTP packet, {e}");
-                        ReceivedPacket::TransportSpecific
+                        ReceivedPacket::Ignore
                     }
                 }
             }
             PacketKind::Rtcp => {
                 // Handle incoming RTCP packet
-                if let TransportKind::SdesSrtp { inbound, .. }
-                | TransportKind::DtlsSrtp {
-                    srtp: Some((inbound, _)),
-                    ..
-                } = &mut self.kind
-                {
-                    inbound.unprotect_rtcp(&mut pkt.data).unwrap();
+                match &mut self.kind {
+                    TransportKind::Rtp => {}
+                    TransportKind::SdesSrtp { inbound, .. } => {
+                        inbound.unprotect_rtcp(&mut pkt.data).unwrap();
+                    }
+                    TransportKind::DtlsSrtp { srtp, .. } => match srtp {
+                        Some((inbound, _)) => {
+                            inbound.unprotect_rtcp(&mut pkt.data).unwrap();
+                        }
+                        None => {
+                            log::debug!("Got RTCP packet on DTLS/SRTP transport before handshake was complete, discarding");
+                            return ReceivedPacket::Ignore;
+                        }
+                    },
                 }
 
                 ReceivedPacket::Rtcp(pkt.data)
@@ -495,12 +508,12 @@ impl Transport {
                     ice_agent.receive(pkt);
                 }
 
-                ReceivedPacket::TransportSpecific
+                ReceivedPacket::Ignore
             }
             PacketKind::Dtls => {
                 // We only expect DTLS traffic on the rtp socket
                 if pkt.component != Component::Rtp {
-                    return ReceivedPacket::TransportSpecific;
+                    return ReceivedPacket::Ignore;
                 }
 
                 if let TransportKind::DtlsSrtp { dtls, srtp, .. } = &mut self.kind {
@@ -520,11 +533,11 @@ impl Transport {
                     }
                 }
 
-                ReceivedPacket::TransportSpecific
+                ReceivedPacket::Ignore
             }
             PacketKind::Unknown => {
                 // Discard
-                ReceivedPacket::TransportSpecific
+                ReceivedPacket::Ignore
             }
         }
     }
@@ -606,7 +619,7 @@ impl Transport {
 pub(crate) enum ReceivedPacket {
     Rtp(RtpPacket),
     Rtcp(Vec<u8>),
-    TransportSpecific,
+    Ignore,
 }
 
 fn resolve_rtp_and_rtcp_address(
