@@ -1,0 +1,47 @@
+[package]
+name = "ezk-sip"
+version = "0.1.0"
+description = "High level SIP abstractions with support for media"
+categories = ["network-programming", "multimedia"]
+keywords = ["sip"]
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["tls-rustls", "tls-native-tls"]
+
+tls-rustls = ["sip-core/tls-rustls", "dep:tokio-rustls"]
+tls-native-tls = ["sip-core/tls-native-tls", "dep:tokio-native-tls"]
+
+[dependencies]
+sip-core.workspace = true
+sip-types.workspace = true
+sip-ua.workspace = true
+sip-auth.workspace = true
+rtc.workspace = true
+rtp.workspace = true
+
+tokio-rustls = { workspace = true, optional = true }
+tokio-native-tls = { workspace = true, optional = true }
+
+async-trait = "0.1"
+bytes = "1"
+bytesstr = "1"
+slotmap = "1"
+thiserror = "2"
+tokio = { version = "1", features = [
+    "net",
+    "rt-multi-thread",
+    "sync",
+    "macros",
+    "io-util",
+] }
+tokio-util = { version = "0.7", features = [] }
+log = "0.4"
+futures-sink = "0.3"
+
+[dev-dependencies]
+env_logger = "0.11"
