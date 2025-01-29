@@ -12,6 +12,7 @@ use sip_core::{
 use sip_types::header::typed::CSeq;
 use sip_types::{Code, Method};
 use std::collections::HashMap;
+use std::fmt;
 use std::mem::replace;
 use std::sync::Arc;
 use tokio::sync::mpsc::error::SendError;
@@ -44,7 +45,6 @@ struct Inner {
     awaited_prack: pl::Mutex<Option<AwaitedPrack>>,
 }
 
-#[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 enum InviteSessionState {
     /// Provisional state before a final response was sent
@@ -52,6 +52,7 @@ enum InviteSessionState {
         dialog: Dialog,
         tsx: ServerInvTsx,
         invite: IncomingRequest,
+        on_cancel: Option<Box<dyn FnOnce() + Send + 'static>>,
     },
 
     /// Cancelled: A CANCEL Request for the invite has been received
@@ -70,6 +71,27 @@ enum InviteSessionState {
     Terminated,
 }
 
+impl fmt::Debug for InviteSessionState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UasProvisional {
+                dialog,
+                tsx,
+                invite,
+                on_cancel: _,
+            } => f
+                .debug_struct("UasProvisional")
+                .field("dialog", dialog)
+                .field("tsx", tsx)
+                .field("invite", invite)
+                .finish(),
+            Self::Cancelled => write!(f, "Cancelled"),
+            Self::Established { evt_sink: _ } => f.debug_struct("Established").finish(),
+            Self::Terminated => write!(f, "Terminated"),
+        }
+    }
+}
+
 impl InviteSessionState {
     /// Set the state to Cancelled and return the pending transaction, if the current state is Provisional
     fn set_cancelled(&mut self) -> Option<(Dialog, ServerInvTsx, IncomingRequest)> {
@@ -78,8 +100,13 @@ impl InviteSessionState {
                 dialog,
                 tsx,
                 invite,
+                on_cancel,
             } = replace(self, InviteSessionState::Cancelled)
             {
+                if let Some(on_cancel) = on_cancel {
+                    on_cancel();
+                }
+
                 Some((dialog, tsx, invite))
             } else {
                 unreachable!()
@@ -100,6 +127,7 @@ impl InviteSessionState {
                 dialog,
                 tsx,
                 invite,
+                on_cancel: _,
             } = replace(self, InviteSessionState::Established { evt_sink })
             {
                 Some((dialog, tsx, invite))
@@ -252,6 +280,7 @@ impl Usage for InviteUsage {
                         dialog,
                         tsx,
                         invite,
+                        on_cancel: _
                     } => {
                         if let Err(e) = self
                             .handle_bye_in_provisional_state(
