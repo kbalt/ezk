@@ -1,6 +1,6 @@
 [package]
 name = "ezk-stun-types"
-version = "0.2.0"
+version = "0.3.0"
 description = "STUN/TURN message types"
 categories = ["network-programming"]
 keywords = ["stun", "turn"]
@@ -13,8 +13,8 @@ repository.workspace = true
 
 [dependencies]
 byteorder = "1.4"
-rand = "0.8"
-bitfield = "0.17"
+rand = "0.9"
+bitfield = "0.18"
 bytes = "1"
 hmac = "0.12"
 sha1 = "0.10"

@@ -1,6 +1,6 @@
 [package]
 name = "ezk-sip-core"
-version = "0.5.2"
+version = "0.6.0"
 description = "SIP core crate providing abstrations over transport and transactions"
 categories = ["network-programming", "multimedia"]
 keywords = ["sip"]
@@ -32,9 +32,9 @@ async-trait = "0.1"
 log = "0.4"
 thiserror = "2"
 parking_lot = "0.12"
-rand = "0.8"
+rand = "0.9"
 bytesstr = "1"
-downcast-rs = "1"
+downcast-rs = "2"
 hickory-resolver = "0.25.0-alpha.4"
 multimap = "0.10"
 nom = "7"

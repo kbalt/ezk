@@ -1,6 +1,6 @@
 [package]
 name = "ezk-sip-auth"
-version = "0.2.0"
+version = "0.3.0"
 description = "RFC8769 compliant SIP authentication"
 categories = ["network-programming", "multimedia"]
 keywords = ["sip", "auth"]
@@ -18,5 +18,5 @@ bytesstr = "1"
 md5 = "0.7"
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
-thiserror = "1"
+thiserror = "2"
 log = "0.4"

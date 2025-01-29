@@ -108,12 +108,12 @@ pub struct TsxMessage {
 }
 
 fn generate_branch() -> BytesStr {
-    use rand::distributions::Alphanumeric;
-    use rand::{thread_rng, Rng};
+    use rand::distr::Alphanumeric;
+    use rand::{rng, Rng};
 
     consts::RFC3261_BRANCH_PREFIX
         .bytes()
-        .chain(thread_rng().sample_iter(Alphanumeric).take(23))
+        .chain(rng().sample_iter(Alphanumeric).take(23))
         .map(char::from)
         .collect::<String>()
         .into()

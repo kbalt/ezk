@@ -1,6 +1,6 @@
 [package]
 name = "ezk-sip-ua"
-version = "0.5.0"
+version = "0.6.0"
 description = "Low level SIP user agent utilities"
 categories = ["network-programming", "multimedia"]
 keywords = ["sip"]
@@ -20,7 +20,7 @@ bytesstr = "1"
 async-trait = "0.1"
 parking_lot = "0.12"
 tracing = "0.1"
-rand = "0.8"
+rand = "0.9"
 tokio = "1"
 thiserror = "2"
 slotmap = "1"
