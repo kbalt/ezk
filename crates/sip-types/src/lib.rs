@@ -18,8 +18,8 @@ mod method;
 pub mod msg;
 pub mod parse;
 
-pub use code::Code;
 pub use code::CodeKind;
+pub use code::StatusCode;
 
 pub use method::Method;
 

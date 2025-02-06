@@ -1,6 +1,6 @@
 //! Contains SIP message parts and parser
 
-use crate::code::Code;
+use crate::code::StatusCode;
 use crate::method::Method;
 use crate::parse::{token, whitespace, ParseCtx};
 use crate::print::{AppendCtx, Print, PrintCtx};
@@ -157,7 +157,7 @@ impl RequestLine {
 /// The leading line of a SIP response message
 #[derive(Debug, Clone)]
 pub struct StatusLine {
-    pub code: Code,
+    pub code: StatusCode,
     pub reason: Option<BytesStr>,
 }
 
@@ -187,7 +187,7 @@ impl StatusLine {
                 ),
                 move |(code, _, reason): (_, _, Option<&str>)| -> StatusLine {
                     StatusLine {
-                        code: Code::from(code),
+                        code: StatusCode::from(code),
                         reason: reason.and_then(|reason| match reason.trim() {
                             "" => None,
                             s => Some(BytesStr::from_parse(ctx.src, s)),

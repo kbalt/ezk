@@ -5,9 +5,9 @@ type Repr = u16;
 
 /// Code is a representation of an SIP-Code encoded in an u16
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Code(Repr);
+pub struct StatusCode(Repr);
 
-impl fmt::Debug for Code {
+impl fmt::Debug for StatusCode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut tuple = f.debug_tuple("Code");
         tuple.field(&self.0);
@@ -43,7 +43,7 @@ pub enum CodeKind {
     Custom,
 }
 
-impl Code {
+impl StatusCode {
     /// Returns the [CodeKind] of the code
     ///
     /// # Example
@@ -75,23 +75,23 @@ impl Code {
     }
 }
 
-impl FromStr for Code {
+impl FromStr for StatusCode {
     type Err = <Repr as FromStr>::Err;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Code(Repr::from_str(s)?))
+        Ok(StatusCode(Repr::from_str(s)?))
     }
 }
 
-impl From<Repr> for Code {
-    fn from(r: Repr) -> Code {
-        Code(r)
+impl From<Repr> for StatusCode {
+    fn from(r: Repr) -> StatusCode {
+        StatusCode(r)
     }
 }
 
 macro_rules! codes {
     ($($(#[$comments:meta])* [$code:expr => $name:ident, $text:literal];)*) => {
-        impl Code {
+        impl StatusCode {
             /// Returns the default response-text for a known Code
             pub fn text(self) -> Option<&'static str> {
                 match self.0 {
@@ -102,7 +102,7 @@ macro_rules! codes {
 
             $(
             $(#[$comments])*
-            pub const $name: Code = Code($code);
+            pub const $name: StatusCode = StatusCode($code);
             )*
         }
     };

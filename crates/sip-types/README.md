@@ -14,7 +14,3 @@
 [docs-url]: https://docs.rs/ezk-sip-types/latest
 
 Provides a SIP message parser and SIP components which can be parsed or serialized into a message.
-
-Following RFC were taken into account when building the parsers & serialization
-
-- [RFC3261](https://www.rfc-editor.org/rfc/rfc3261.html) - SIP: Session Initiation Protocol

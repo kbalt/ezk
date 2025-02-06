@@ -150,6 +150,16 @@ impl DigestChallenge {
     }
 }
 
+impl ExtendValues for DigestChallenge {
+    fn extend_values(&self, ctx: PrintCtx<'_>, values: &mut OneOrMore) {
+        values.push(self.print_ctx(ctx).to_string().into());
+    }
+
+    fn create_values(&self, ctx: PrintCtx<'_>) -> OneOrMore {
+        OneOrMore::One(self.print_ctx(ctx).to_string().into())
+    }
+}
+
 impl Print for DigestChallenge {
     fn print(&self, f: &mut fmt::Formatter<'_>, _ctx: PrintCtx<'_>) -> fmt::Result {
         write!(
@@ -385,6 +395,16 @@ impl DigestResponse {
             userhash,
             other,
         })
+    }
+}
+
+impl ExtendValues for DigestResponse {
+    fn extend_values(&self, ctx: PrintCtx<'_>, values: &mut OneOrMore) {
+        values.push(self.print_ctx(ctx).to_string().into());
+    }
+
+    fn create_values(&self, ctx: PrintCtx<'_>) -> OneOrMore {
+        OneOrMore::One(self.print_ctx(ctx).to_string().into())
     }
 }
 
@@ -1326,8 +1346,6 @@ mod test {
         let name_str = "Oh Long Johnson";
 
         let username = Username::new(name_str.into()).to_string();
-
-        println!("{}", username);
 
         assert_eq!(username, "username*=UTF-8''Oh%20Long%20Johnson")
     }
