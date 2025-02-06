@@ -19,8 +19,9 @@ pub(crate) fn whitespace(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\r' | '\n')
 }
 
+#[rustfmt::skip]
 pub(crate) fn token(c: char) -> bool {
-    lookup_table!(c => alpha; num; '-', '.', '!', '%', '*', '_', '`', '\'', '~', '+')
+    c.is_alphanumeric() || matches!(c, '-' | '.' | '!' | '%' | '*' | '_' | '`' | '\'' | '~' | '+')
 }
 
 /// Can be used to extend the parsing capabilities of this library.

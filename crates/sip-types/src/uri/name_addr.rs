@@ -92,7 +92,7 @@ impl Print for NameAddr {
 }
 
 fn display(c: char) -> bool {
-    !lookup_table!(c => ':', '\r', '\n', '<')
+    !matches!(c, ':' | '\r' | '\n' | '<')
 }
 
 #[cfg(test)]

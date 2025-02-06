@@ -139,12 +139,14 @@ impl Print for SipUri {
 
 encode_set!(user, USER_SET);
 
+#[rustfmt::skip]
 fn user(c: char) -> bool {
-    lookup_table!(c => alpha; num; '-', '_', '.', '!', '~', '*', '\'', '(', ')', '%', '&', '=', '+', '$', ',', ';', '?', '/')
+    c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '!' | '~' | '*' | '\'' | '(' | ')' | '%' | '&' | '=' | '+' | '$' | ',' | ';' | '?' | '/')
 }
 
+#[rustfmt::skip]
 fn password(c: char) -> bool {
-    lookup_table!(c => alpha; num; '-', '_', '.', '!', '~', '*', '\'', '(', ')', '%', '&', '=', '+', '$', ',')
+    c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '!' | '~' | '*' | '\'' | '(' | ')' | '%' | '&' | '=' | '+' | '$' | ',')
 }
 
 impl SipUri {

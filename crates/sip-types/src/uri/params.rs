@@ -207,7 +207,11 @@ pub trait ParamsSpec {
 pub enum HPS {}
 
 fn header_char(c: char) -> bool {
-    lookup_table!(c => alpha; num; '[', ']', '/', /*'=',*/ ':', '+', '$', '-', '_', '.', '!', '~', '*', '\'', '(', ')')
+    c.is_alphanumeric()
+        || matches!(
+            c,
+            '['| ']'| '/'| /*'=' |*/ ':'| '+'| '$'| '-'| '_'| '.'| '!'| '~'| '*'| '\''| '(' | ')'
+        )
 }
 
 encode_set!(header_char, HPS_SET);
@@ -222,8 +226,9 @@ impl ParamsSpec for HPS {
 /// Common Param Specification for URIs (;some=value;other=value)
 pub enum CPS {}
 
+#[rustfmt::skip]
 fn param_char(c: char) -> bool {
-    lookup_table!(c => alpha; num; '%', '-', '_', '.', '!', '~', '*', '\'', '(', ')', '[', ']', '/', ':', '&', '+', '$', '`')
+    c.is_alphanumeric() || matches!(c, '%' | '-' | '_' | '.' | '!' | '~' | '*' | '\'' | '(' | ')' | '[' | ']' | '/' | ':' | '&' | '+' | '$' | '`')
 }
 
 encode_set!(param_char, CPS_SET);
