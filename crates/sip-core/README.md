@@ -14,11 +14,3 @@
 [docs-url]: https://docs.rs/ezk-sip-core/latest
 
 SIP core library providing abstractions for transports and SIP transactions.
-
-It is the centerpiece of any stateful SIP applications as it provides the `Endpoint`
-which holds all low level information about the SIP Stack (transport/transaction state).
-
-While not complete, transport and transaction management are implemented after the following RFCs:
-
-- [RFC3261](https://www.rfc-editor.org/rfc/rfc3261.html) - SIP: Session Initiation Protocol
-- [RFC6026](https://www.rfc-editor.org/rfc/rfc6026.html) - Correct Transaction Handling for 2xx Responses to SIP INVITE Requests

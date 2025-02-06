@@ -26,7 +26,6 @@ pub mod transport;
 
 pub use endpoint::Endpoint;
 pub use endpoint::EndpointBuilder;
-pub use endpoint::LayerKey;
 pub use error::{Error, Result, StunError};
 pub use may_take::MayTake;
 
@@ -125,6 +124,15 @@ impl IncomingRequest {
         };
 
         tsx
+    }
+
+    /// Make a clone of the request data, allowing access to the requests data if the `IncomingRequest`
+    pub fn clone_request(&self) -> Request {
+        Request {
+            line: self.line.clone(),
+            headers: self.headers.clone(),
+            body: self.body.clone(),
+        }
     }
 }
 

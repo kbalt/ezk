@@ -266,7 +266,7 @@ pub struct OutgoingParts {
     /// Transport the message will be sent with
     pub transport: TpHandle,
 
-    /// Adress the message will be sent to
+    /// Address the message will be sent to
     pub destination: SocketAddr,
 
     /// Buffer the message got printed into

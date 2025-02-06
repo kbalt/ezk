@@ -4,7 +4,7 @@ use crate::util::{random_sequence_number, random_string};
 use bytes::Bytes;
 use sip_core::transaction::TsxResponse;
 use sip_core::transport::TargetTransportInfo;
-use sip_core::{Endpoint, LayerKey, Request};
+use sip_core::{Endpoint, Request};
 use sip_types::header::typed::{CSeq, CallID, Contact, FromTo, MaxForwards};
 use sip_types::header::HeaderError;
 use sip_types::msg::RequestLine;
@@ -15,7 +15,6 @@ use tokio::sync::Mutex;
 #[derive(Debug)]
 pub struct ClientDialogBuilder {
     pub endpoint: Endpoint,
-    pub dialog_layer: LayerKey<DialogLayer>,
     pub local_cseq: u32,
     pub local_fromto: FromTo,
     pub peer_fromto: FromTo,
@@ -29,14 +28,12 @@ pub struct ClientDialogBuilder {
 impl ClientDialogBuilder {
     pub fn new(
         endpoint: Endpoint,
-        dialog_layer: LayerKey<DialogLayer>,
         local_addr: NameAddr,
         local_contact: Contact,
         target: Box<dyn Uri>,
     ) -> Self {
         Self {
             endpoint,
-            dialog_layer,
             local_cseq: random_sequence_number(),
             local_fromto: FromTo::new(local_addr, Some(random_string())),
             peer_fromto: FromTo::new(NameAddr::uri(target.clone()), None),
@@ -79,7 +76,6 @@ impl ClientDialogBuilder {
 
         let dialog = Dialog {
             endpoint: self.endpoint.clone(),
-            dialog_layer: self.dialog_layer,
             local_cseq: self.local_cseq.into(),
             local_fromto: self.local_fromto.clone(),
             peer_fromto: response.base_headers.to.clone(),
@@ -92,7 +88,8 @@ impl ClientDialogBuilder {
         };
 
         let entry = DialogEntry::new(None);
-        self.endpoint[self.dialog_layer]
+        self.endpoint
+            .layer::<DialogLayer>()
             .dialogs
             .lock()
             .insert(dialog.key(), entry);

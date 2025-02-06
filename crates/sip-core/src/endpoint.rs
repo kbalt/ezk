@@ -14,12 +14,11 @@ use sip_types::msg::{MessageLine, StatusLine};
 use sip_types::parse::{ParseCtx, Parser};
 use sip_types::print::{AppendCtx, BytesPrint, PrintCtx};
 use sip_types::uri::Uri;
-use sip_types::{Code, Headers, Method, Name};
+use sip_types::{Headers, Method, Name, StatusCode};
+use std::any::type_name;
 use std::fmt::Write;
-use std::marker::PhantomData;
 use std::mem::take;
 use std::net::{IpAddr, SocketAddr};
-use std::ops::Index;
 use std::sync::Arc;
 use std::{fmt, io};
 use stun_types::Message;
@@ -263,7 +262,7 @@ impl Endpoint {
     pub fn create_response(
         &self,
         request: &IncomingRequest,
-        code: Code,
+        code: StatusCode,
         reason: Option<BytesStr>,
     ) -> OutgoingResponse {
         assert_ne!(request.line.method, Method::ACK);
@@ -276,7 +275,7 @@ impl Endpoint {
         headers.insert_named(&request.base_headers.call_id);
         headers.insert_named(&request.base_headers.cseq);
 
-        if code == Code::TRYING {
+        if code == StatusCode::TRYING {
             let _ = request.headers.clone_into(&mut headers, Name::TIMESTAMP);
         }
 
@@ -448,8 +447,11 @@ impl Endpoint {
             return Ok(());
         }
 
-        let response =
-            self.create_response(&request, Code::CALL_OR_TRANSACTION_DOES_NOT_EXIST, None);
+        let response = self.create_response(
+            &request,
+            StatusCode::CALL_OR_TRANSACTION_DOES_NOT_EXIST,
+            None,
+        );
 
         if request.line.method == Method::INVITE {
             let tsx = self.create_server_inv_tsx(&mut request);
@@ -489,6 +491,18 @@ impl Endpoint {
 
     pub(crate) fn transports(&self) -> &Transports {
         &self.inner.transports
+    }
+
+    /// Access a layer inside the endpoint
+    ///
+    /// Panics if the layer does not exist in the endpoint
+    pub fn layer<L: Layer>(&self) -> &L {
+        self.inner
+            .layer
+            .iter()
+            .find_map(|l| l.downcast_ref())
+            .ok_or_else(|| format!("endpoint is missing ayer {}", type_name::<L>()))
+            .unwrap()
     }
 }
 
@@ -582,19 +596,12 @@ impl EndpointBuilder {
     /// Note that the insertion order is relevant in how the SIP Stack may react to requests,
     /// as its the same order in that modules are called on incoming requests.
     ///
-    /// Returns a [`LayerKey`] which can later be used to access the added layer.
-    pub fn add_layer<L>(&mut self, layer: L) -> LayerKey<L>
+    /// Layers can be access layer using [`Endpoint::layer`]
+    pub fn add_layer<L>(&mut self, layer: L)
     where
         L: Layer,
     {
-        let index = self.layer.len();
-
         self.layer.push(Box::new(layer));
-
-        LayerKey {
-            index,
-            m: PhantomData::<fn() -> L>,
-        }
     }
 
     /// "Subscribe" to the creation of the endpoint.
@@ -630,33 +637,3 @@ impl EndpointBuilder {
         endpoint
     }
 }
-
-impl<L: Layer> Index<LayerKey<L>> for Endpoint {
-    type Output = L;
-
-    fn index(&self, index: LayerKey<L>) -> &Self::Output {
-        self.inner.layer[index.index]
-            .downcast_ref()
-            .expect("invalid layer key")
-    }
-}
-
-/// Key which can be used to access a layer which was added to an [`Endpoint`].
-pub struct LayerKey<L> {
-    index: usize,
-    m: PhantomData<fn() -> L>,
-}
-
-impl<L> fmt::Debug for LayerKey<L> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("LayerKey").finish()
-    }
-}
-
-impl<L> Clone for LayerKey<L> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<L> Copy for LayerKey<L> {}

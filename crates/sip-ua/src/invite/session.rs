@@ -6,7 +6,7 @@ use sip_core::transaction::{ServerInvTsx, ServerTsx, TsxResponse};
 use sip_core::transport::OutgoingResponse;
 use sip_core::{Endpoint, IncomingRequest, Result};
 use sip_types::header::typed::Refresher;
-use sip_types::{Code, CodeKind, Method};
+use sip_types::{CodeKind, Method, StatusCode};
 use std::sync::Arc;
 use tokio::select;
 use tokio::sync::mpsc::{self, Receiver};
@@ -19,7 +19,7 @@ pub enum Role {
 }
 
 #[derive(Debug)]
-pub struct Session {
+pub struct InviteSession {
     pub endpoint: Endpoint,
     inner: Arc<Inner>,
 
@@ -36,7 +36,7 @@ pub struct Session {
 }
 
 pub struct RefreshNeeded<'s> {
-    pub session: &'s mut Session,
+    pub session: &'s mut InviteSession,
 }
 
 impl RefreshNeeded<'_> {
@@ -82,7 +82,7 @@ impl RefreshNeeded<'_> {
 }
 
 pub struct ReInviteReceived<'s> {
-    pub session: &'s mut Session,
+    pub session: &'s mut InviteSession,
     pub invite: IncomingRequest,
     pub transaction: ServerInvTsx,
 }
@@ -104,7 +104,7 @@ impl ReInviteReceived<'_> {
 }
 
 pub struct ByeEvent<'s> {
-    pub session: &'s mut Session,
+    pub session: &'s mut InviteSession,
     pub bye: IncomingRequest,
     pub transaction: ServerTsx,
 }
@@ -115,21 +115,21 @@ impl ByeEvent<'_> {
         let response = self
             .session
             .dialog
-            .create_response(&self.bye, Code::OK, None)?;
+            .create_response(&self.bye, StatusCode::OK, None)?;
 
         self.transaction.respond(response).await
     }
 }
 
 #[allow(clippy::large_enum_variant)] // TODO address this
-pub enum Event<'s> {
+pub enum InviteSessionEvent<'s> {
     RefreshNeeded(RefreshNeeded<'s>),
     ReInviteReceived(ReInviteReceived<'s>),
     Bye(ByeEvent<'s>),
     Terminated,
 }
 
-impl Session {
+impl InviteSession {
     pub(super) fn new(
         endpoint: Endpoint,
         inner: Arc<Inner>,
@@ -150,7 +150,7 @@ impl Session {
         }
     }
 
-    pub async fn drive(&mut self) -> Result<Event<'_>> {
+    pub async fn drive(&mut self) -> Result<InviteSessionEvent<'_>> {
         select! {
             _ = self.session_timer.wait() => {
                self.handle_session_timer().await
@@ -179,20 +179,20 @@ impl Session {
         transaction.receive_final().await
     }
 
-    fn handle_usage_event(&mut self, evt: Option<UsageEvent>) -> Result<Event<'_>> {
+    fn handle_usage_event(&mut self, evt: Option<UsageEvent>) -> Result<InviteSessionEvent<'_>> {
         let evt = if let Some(evt) = evt {
             evt
         } else {
             // Usage events channel has been dropped,
             // because the state was set to Terminated.
-            return Ok(Event::Terminated);
+            return Ok(InviteSessionEvent::Terminated);
         };
 
         match evt {
             UsageEvent::Bye(mut request) => {
                 let transaction = self.endpoint.create_server_tsx(&mut request);
 
-                Ok(Event::Bye(ByeEvent {
+                Ok(InviteSessionEvent::Bye(ByeEvent {
                     session: self,
                     bye: request,
                     transaction,
@@ -203,7 +203,7 @@ impl Session {
 
                 let transaction = self.endpoint.create_server_inv_tsx(&mut invite);
 
-                Ok(Event::ReInviteReceived(ReInviteReceived {
+                Ok(InviteSessionEvent::ReInviteReceived(ReInviteReceived {
                     session: self,
                     invite,
                     transaction,
@@ -212,7 +212,7 @@ impl Session {
         }
     }
 
-    async fn handle_session_timer(&mut self) -> Result<Event<'_>> {
+    async fn handle_session_timer(&mut self) -> Result<InviteSessionEvent<'_>> {
         match (self.role, self.session_timer.refresher) {
             (_, Refresher::Unspecified) => unreachable!(),
             (Role::Uac, Refresher::Uac) | (Role::Uas, Refresher::Uas) => {
@@ -220,13 +220,15 @@ impl Session {
                 // Timer expired meaning we are responsible for refresh now
                 self.session_timer.reset();
 
-                Ok(Event::RefreshNeeded(RefreshNeeded { session: self }))
+                Ok(InviteSessionEvent::RefreshNeeded(RefreshNeeded {
+                    session: self,
+                }))
             }
             (Role::Uac, Refresher::Uas) | (Role::Uas, Refresher::Uac) => {
                 // Peer is responsible for refresh
                 // Timer expired meaning we didn't get a RE-INVITE
                 self.terminate().await?;
-                Ok(Event::Terminated)
+                Ok(InviteSessionEvent::Terminated)
             }
         }
     }

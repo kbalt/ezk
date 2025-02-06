@@ -2,19 +2,23 @@
 #![allow(clippy::large_enum_variant)]
 
 use super::prack::get_rseq;
-use super::session::{Role, Session};
+use super::session::{InviteSession, Role};
 use super::timer::InitiatorTimerConfig;
-use super::{Inner, InviteLayer, InviteSessionState, InviteUsage};
-use crate::dialog::{ClientDialogBuilder, Dialog, DialogLayer};
+use super::{Inner, InviteSessionState, InviteUsage};
+use crate::dialog::{ClientDialogBuilder, Dialog};
 use bytesstr::BytesStr;
 use parking_lot as pl;
 use sip_core::transaction::{ClientInvTsx, TsxResponse};
-use sip_core::{Endpoint, Error, LayerKey, Request};
+use sip_core::transport::OutgoingRequest;
+use sip_core::{Endpoint, Error, Request};
 use sip_types::header::typed::{Contact, RSeq, Refresher, Supported};
 use sip_types::header::HeaderError;
 use sip_types::uri::{NameAddr, Uri};
-use sip_types::{Method, Name};
+use sip_types::{Method, Name, StatusCode};
+use std::collections::HashMap;
+use std::future::poll_fn;
 use std::sync::Arc;
+use std::task::{ready, Context, Poll};
 use tokio::sync::{mpsc, Mutex};
 
 #[derive(Debug)]
@@ -22,12 +26,13 @@ pub enum Response {
     Provisional(TsxResponse),
     Failure(TsxResponse),
     Early(Early, TsxResponse, Option<RSeq>),
-    Session(Session, TsxResponse),
+    Session(InviteSession, TsxResponse),
+    EarlyEvent,
     Finished,
 }
 
 #[derive(Debug)]
-pub struct Initiator {
+pub struct InviteInitiator {
     dialog_builder: ClientDialogBuilder,
 
     transaction: Option<ClientInvTsx>,
@@ -40,30 +45,29 @@ pub struct Initiator {
     /// will be forwarded using the channel.
     early_list: Vec<(BytesStr, mpsc::Sender<EarlyEvent>)>,
 
+    /// Map of crated sessions and the ACK reques for retransmits if another 200 OK is received
+    created_sessions: HashMap<BytesStr, OutgoingRequest>,
+
     pub support_timer: bool,
     pub support_100rel: bool,
 
     pub timer_config: InitiatorTimerConfig,
-
-    invite_layer: LayerKey<InviteLayer>,
 }
 
-impl Initiator {
+impl InviteInitiator {
     pub fn new(
         endpoint: Endpoint,
-        dialog_layer: LayerKey<DialogLayer>,
-        invite_layer: LayerKey<InviteLayer>,
         local_addr: NameAddr,
         local_contact: Contact,
         target: Box<dyn Uri>,
     ) -> Self {
-        let dialog =
-            ClientDialogBuilder::new(endpoint, dialog_layer, local_addr, local_contact, target);
+        let dialog = ClientDialogBuilder::new(endpoint, local_addr, local_contact, target);
 
         Self {
             dialog_builder: dialog,
             transaction: None,
             early_list: vec![],
+            created_sessions: HashMap::new(),
             support_timer: true,
             support_100rel: true,
             timer_config: InitiatorTimerConfig {
@@ -71,7 +75,6 @@ impl Initiator {
                 refresher: Refresher::Unspecified,
                 expires_secs_min: 90,
             },
-            invite_layer,
         }
     }
 
@@ -105,8 +108,47 @@ impl Initiator {
         Ok(())
     }
 
+    pub async fn cancel(mut self) -> Result<(), sip_core::Error> {
+        let request = self.dialog_builder.create_request(Method::CANCEL);
+
+        self.dialog_builder
+            .endpoint
+            .send_request(request, &mut self.dialog_builder.target_tp_info)
+            .await?
+            .receive_final()
+            .await?;
+
+        loop {
+            match self.receive().await? {
+                Response::Provisional(_) => {}
+                Response::Failure(..) => return Ok(()),
+                Response::Early(early, ..) => {
+                    early.cancel().await?;
+                }
+                Response::Session(mut session, ..) => {
+                    session.terminate().await?;
+                }
+                Response::EarlyEvent => {}
+                Response::Finished => return Ok(()),
+            }
+        }
+    }
+
     pub fn transaction(&self) -> Option<&ClientInvTsx> {
         self.transaction.as_ref()
+    }
+
+    /// Set the ACK request for a session this initiator returned. This ACK will be retransmitted if a response is received again for the session
+    pub fn set_acknowledge(&mut self, session: &InviteSession, ack: OutgoingRequest) {
+        self.created_sessions.insert(
+            session
+                .dialog
+                .peer_fromto
+                .tag
+                .clone()
+                .expect("peer From/To header has to have a tag"),
+            ack,
+        );
     }
 
     pub async fn receive(&mut self) -> Result<Response, Error> {
@@ -146,14 +188,23 @@ impl Initiator {
                 continue;
             };
 
-            // Check if the response is part of any early dialog
-            if let Some((_, tx)) = self.early_list.iter().find(|(tag, _)| tag == to_tag) {
-                // Found a early dialog for the tag, forward
-                tx.send(EarlyEvent::Response(response))
-                    .await
-                    .expect("failed to forward response, early dropped");
-
+            // Retransmit ACK if we already created a session with that to-tag
+            if let Some(ack) = self.created_sessions.get_mut(to_tag) {
+                self.dialog_builder
+                    .endpoint
+                    .send_outgoing_request(ack)
+                    .await?;
                 continue;
+            }
+
+            // Check if the response is part of any early dialog
+            if let Some((_, early)) = self.early_list.iter().find(|(tag, _)| tag == to_tag) {
+                // Found a early dialog for the tag, forward
+                if early.send(EarlyEvent::Response(response)).await.is_err() {
+                    log::warn!("failed to response event, receiver of early dropped");
+                }
+
+                return Ok(Response::EarlyEvent);
             }
 
             match code {
@@ -181,7 +232,6 @@ impl Initiator {
 
     fn create_early_dialog(&mut self, response: &TsxResponse) -> Result<Early, HeaderError> {
         let dialog = self.dialog_builder.create_dialog_from_response(response)?;
-
         let to_tag = dialog.peer_fromto.tag.clone().unwrap();
 
         let (tx, response_rx) = mpsc::channel(4);
@@ -193,11 +243,10 @@ impl Initiator {
             dialog: Some(dialog),
             response_rx,
             timer_config: self.timer_config,
-            invite_layer: self.invite_layer,
         })
     }
 
-    fn create_session(&mut self, response: &TsxResponse) -> Result<Session, HeaderError> {
+    fn create_session(&mut self, response: &TsxResponse) -> Result<InviteSession, HeaderError> {
         let dialog = self.dialog_builder.create_dialog_from_response(response)?;
 
         let (evt_sink, usage_events) = mpsc::channel(4);
@@ -211,7 +260,6 @@ impl Initiator {
         let peer_supports_100rel = supported.iter().any(|ext| ext.0 == "100rel");
 
         let inner = Arc::new(Inner {
-            invite_layer: self.invite_layer,
             state: Mutex::new(InviteSessionState::Established { evt_sink }),
             peer_supports_timer,
             peer_supports_100rel,
@@ -225,7 +273,7 @@ impl Initiator {
 
         let session_timer = self.timer_config.create_timer_from_response(response)?;
 
-        Ok(Session::new(
+        Ok(InviteSession::new(
             self.dialog_builder.endpoint.clone(),
             inner,
             Role::Uac,
@@ -251,27 +299,25 @@ pub struct Early {
     response_rx: mpsc::Receiver<EarlyEvent>,
 
     timer_config: InitiatorTimerConfig,
-
-    invite_layer: LayerKey<InviteLayer>,
 }
 
 #[derive(Debug)]
 pub enum EarlyResponse {
     Provisional(TsxResponse, Option<RSeq>),
-    Success(Session, TsxResponse),
+    Success(InviteSession, TsxResponse),
     Terminated,
 }
 
 impl Early {
-    pub async fn receive(&mut self) -> Result<EarlyResponse, Error> {
+    pub fn poll_receive(&mut self, cx: &mut Context<'_>) -> Poll<Result<EarlyResponse, Error>> {
         let dialog = self.dialog.as_mut().unwrap();
 
-        match self.response_rx.recv().await.expect("dropped initiator") {
+        match ready!(self.response_rx.poll_recv(cx)).expect("dropped initiator") {
             EarlyEvent::Response(response) => match response.line.code.into_u16() {
                 101..=199 => {
                     let rseq = get_rseq(&response);
 
-                    Ok(EarlyResponse::Provisional(response, rseq))
+                    Poll::Ready(Ok(EarlyResponse::Provisional(response, rseq)))
                 }
                 200..=299 => {
                     let (evt_sink, usage_events) = mpsc::channel(4);
@@ -285,7 +331,6 @@ impl Early {
                     let peer_supports_100rel = supported.iter().any(|ext| ext.0 == "100rel");
 
                     let inner = Arc::new(Inner {
-                        invite_layer: self.invite_layer,
                         state: Mutex::new(InviteSessionState::Established { evt_sink }),
                         peer_supports_timer,
                         peer_supports_100rel,
@@ -299,7 +344,7 @@ impl Early {
 
                     let session_timer = self.timer_config.create_timer_from_response(&response)?;
 
-                    let session = Session::new(
+                    let session = InviteSession::new(
                         self.endpoint.clone(),
                         inner,
                         Role::Uac,
@@ -309,11 +354,44 @@ impl Early {
                         self.dialog.take().unwrap(),
                     );
 
-                    Ok(EarlyResponse::Success(session, response))
+                    Poll::Ready(Ok(EarlyResponse::Success(session, response)))
                 }
                 _ => unreachable!("initiator only forwards messages with 101..=299 status"),
             },
-            EarlyEvent::Terminate => Ok(EarlyResponse::Terminated),
+            EarlyEvent::Terminate => Poll::Ready(Ok(EarlyResponse::Terminated)),
+        }
+    }
+
+    pub async fn receive(&mut self) -> Result<EarlyResponse, Error> {
+        poll_fn(|cx| self.poll_receive(cx)).await
+    }
+
+    pub async fn cancel(mut self) -> Result<(), Error> {
+        let dialog = self.dialog.as_mut().unwrap();
+
+        let request = dialog.create_request(Method::CANCEL);
+
+        let mut target_tp_info = dialog.target_tp_info.lock().await;
+
+        let mut tsx = self
+            .endpoint
+            .send_request(request, &mut target_tp_info)
+            .await?;
+
+        drop(target_tp_info);
+
+        tsx.receive_final().await?;
+
+        loop {
+            match self.response_rx.recv().await {
+                Some(EarlyEvent::Response(response)) => {
+                    if response.line.code == StatusCode::REQUEST_TERMINATED {
+                        return Ok(());
+                    }
+                }
+                Some(EarlyEvent::Terminate) => return Ok(()),
+                None => return Ok(()),
+            }
         }
     }
 }

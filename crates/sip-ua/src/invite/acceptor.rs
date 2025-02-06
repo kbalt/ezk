@@ -1,4 +1,4 @@
-use super::session::Session;
+use super::session::InviteSession;
 use super::timer::{AcceptorTimerConfig, SessionTimer};
 use super::{AwaitedAck, AwaitedPrack, Inner, InviteLayer};
 use crate::dialog::{register_usage, Dialog, UsageGuard};
@@ -9,11 +9,11 @@ use bytesstr::BytesStr;
 use parking_lot as pl;
 use sip_core::transaction::consts::T1;
 use sip_core::transport::OutgoingResponse;
-use sip_core::{Endpoint, IncomingRequest, LayerKey, Result};
+use sip_core::{Endpoint, IncomingRequest, Result};
 use sip_types::header::typed::{RSeq, Require, Supported};
-use sip_types::{Code, Method};
+use sip_types::{Method, StatusCode};
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex, Notify};
 use tokio::time::timeout;
 
 #[derive(Debug, thiserror::Error)]
@@ -29,19 +29,22 @@ pub enum Error {
 #[error("invite got cancelled")]
 pub struct Cancelled;
 
-pub struct Acceptor {
+pub struct InviteAcceptor {
     endpoint: Endpoint,
     inner: Arc<Inner>,
     cancellable_key: CancellableKey,
+    cancelled_notify: Arc<Notify>,
+    cancelled: bool,
     usage_guard: Option<UsageGuard>,
 
     /// Configuration for `timer` extension
     timer_config: AcceptorTimerConfig,
 }
 
-impl Drop for Acceptor {
+impl Drop for InviteAcceptor {
     fn drop(&mut self) {
-        self.endpoint[self.inner.invite_layer]
+        self.endpoint
+            .layer::<InviteLayer>()
             .cancellables
             .lock()
             .remove(&self.cancellable_key);
@@ -54,12 +57,8 @@ pub(super) struct CancellableKey {
     pub branch: BytesStr,
 }
 
-impl Acceptor {
-    pub fn new(
-        dialog: Dialog,
-        invite_layer: LayerKey<InviteLayer>,
-        mut invite: IncomingRequest,
-    ) -> Result<Self> {
+impl InviteAcceptor {
+    pub fn new(dialog: Dialog, mut invite: IncomingRequest) -> Self {
         assert_eq!(
             invite.line.method,
             Method::INVITE,
@@ -84,17 +83,16 @@ impl Acceptor {
             cseq: invite.base_headers.cseq.cseq,
             branch: invite.tsx_key.branch().clone(),
         };
-
-        let dialog_layer = dialog.dialog_layer;
+        let cancelled_notify = Arc::new(Notify::new());
 
         // Create Inner shared state
         let tsx = endpoint.create_server_inv_tsx(&mut invite);
         let inner = Arc::new(Inner {
-            invite_layer,
             state: Mutex::new(InviteSessionState::UasProvisional {
                 dialog,
                 tsx,
                 invite,
+                cancelled_notify: cancelled_notify.clone(),
             }),
             peer_supports_timer,
             peer_supports_100rel,
@@ -105,7 +103,6 @@ impl Acceptor {
         // Register the usage to the dialog
         let usage_guard = register_usage(
             endpoint.clone(),
-            dialog_layer,
             dialog_key,
             InviteUsage {
                 inner: inner.clone(),
@@ -115,18 +112,31 @@ impl Acceptor {
         .unwrap();
 
         // ==== register Inner to the acceptor layer
-        endpoint[invite_layer]
+        endpoint
+            .layer::<InviteLayer>()
             .cancellables
             .lock()
             .insert(cancellable_key.clone(), inner.clone());
 
-        Ok(Self {
+        Self {
             endpoint,
             inner,
             usage_guard: Some(usage_guard),
             cancellable_key,
+            cancelled_notify,
+            cancelled: false,
             timer_config: AcceptorTimerConfig::default(),
-        })
+        }
+    }
+
+    /// Returns when the incoming INVITE has been cancelled using a CANCEL or BYE request.
+    pub async fn cancelled(&mut self) {
+        if self.cancelled {
+            return;
+        }
+
+        self.cancelled_notify.notified().await;
+        self.cancelled = true;
     }
 
     pub fn peer_supports_100rel(&self) -> bool {
@@ -139,7 +149,7 @@ impl Acceptor {
 
     pub async fn create_response(
         &self,
-        code: Code,
+        code: StatusCode,
         reason: Option<BytesStr>,
     ) -> Result<OutgoingResponse, Error> {
         let mut state = self.inner.state.lock().await;
@@ -229,7 +239,7 @@ impl Acceptor {
     pub async fn respond_success(
         mut self,
         mut response: OutgoingResponse,
-    ) -> Result<(Session, IncomingRequest), Error> {
+    ) -> Result<(InviteSession, IncomingRequest), Error> {
         // Lock the state over the duration of the responding process and
         // while waiting for the ACK. This avoids handling of other
         // requests that assume a completed session.
@@ -266,7 +276,7 @@ impl Acceptor {
             target_tp_info.transport = Some((ack.tp_info.transport.clone(), ack.tp_info.source));
             drop(target_tp_info);
 
-            let session = Session::new(
+            let session = InviteSession::new(
                 self.endpoint.clone(),
                 self.inner.clone(),
                 Role::Uas,

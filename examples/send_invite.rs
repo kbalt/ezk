@@ -1,5 +1,4 @@
-use sip_auth::digest::{DigestAuthenticator, DigestCredentials};
-use sip_auth::{CredentialStore, UacAuthSession};
+use sip_auth::{ClientAuthenticator, DigestAuthenticator, DigestCredentials, DigestUser};
 use sip_core::transport::udp::Udp;
 use sip_core::{Endpoint, Result};
 use sip_types::header::typed::Contact;
@@ -13,8 +12,8 @@ async fn main() -> Result<()> {
 
     let mut builder = Endpoint::builder();
 
-    let dialog_layer = builder.add_layer(DialogLayer::default());
-    let invite_layer = builder.add_layer(InviteLayer::default());
+    builder.add_layer(DialogLayer::default());
+    builder.add_layer(InviteLayer::default());
 
     Udp::spawn(&mut builder, "0.0.0.0:5070").await?;
 
@@ -24,24 +23,22 @@ async fn main() -> Result<()> {
     let local_uri = endpoint.parse_uri("sip:127.0.0.1").unwrap();
     let target = endpoint.parse_uri("sip:127.0.0.1").unwrap();
 
-    let mut initiator = sip_ua::invite::initiator::Initiator::new(
+    let mut initiator = sip_ua::invite::initiator::InviteInitiator::new(
         endpoint,
-        dialog_layer,
-        invite_layer,
         NameAddr::uri(local_uri.clone()),
         Contact::new(NameAddr::uri(local_uri)),
         target,
     );
 
-    let mut credentials = CredentialStore::new();
-    credentials.set_default(DigestCredentials::new("6001", "6001"));
+    let mut credentials = DigestCredentials::new();
+    credentials.set_default(DigestUser::new("6001", "6001"));
 
-    let mut auth_sess = UacAuthSession::new(DigestAuthenticator::default());
+    let mut authenticator = DigestAuthenticator::new(credentials);
 
     loop {
         let mut invite = initiator.create_invite();
 
-        auth_sess.authorize_request(&mut invite.headers);
+        authenticator.authorize_request(&mut invite.headers);
 
         initiator.send_invite(invite).await?;
 
@@ -56,14 +53,17 @@ async fn main() -> Result<()> {
                     let tsx = initiator.transaction().unwrap();
                     let inv = tsx.request();
 
-                    auth_sess
-                        .handle_authenticate(
-                            &response.headers,
-                            &credentials,
+                    authenticator
+                        .handle_rejection(
                             sip_auth::RequestParts {
                                 line: &inv.msg.line,
                                 headers: &inv.msg.headers,
                                 body: b"",
+                            },
+                            sip_auth::ResponseParts {
+                                line: &response.line,
+                                headers: &response.headers,
+                                body: &response.body,
                             },
                         )
                         .unwrap();
@@ -76,6 +76,7 @@ async fn main() -> Result<()> {
                 sip_ua::invite::initiator::Response::Session(mut x, _response) => {
                     x.terminate().await.unwrap();
                 }
+                sip_ua::invite::initiator::Response::EarlyEvent => {}
                 sip_ua::invite::initiator::Response::Finished => break,
             }
         }

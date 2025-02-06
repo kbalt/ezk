@@ -1,7 +1,7 @@
 use super::key::DialogKey;
 use parking_lot::Mutex;
-use sip_core::{Endpoint, EndpointBuilder, IncomingRequest, Layer, LayerKey, MayTake, Result};
-use sip_types::{Code, Method};
+use sip_core::{Endpoint, EndpointBuilder, IncomingRequest, Layer, MayTake, Result};
+use sip_types::{Method, StatusCode};
 use slotmap::{DefaultKey, SlotMap};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -158,7 +158,7 @@ impl DialogLayer {
             return Ok(());
         }
 
-        let response = endpoint.create_response(&request, Code::NOT_FOUND, None);
+        let response = endpoint.create_response(&request, StatusCode::NOT_FOUND, None);
 
         if request.line.method == Method::INVITE {
             let tsx = endpoint.create_server_inv_tsx(&mut request);
@@ -178,14 +178,13 @@ impl DialogLayer {
 #[derive(Debug, Clone)]
 pub struct UsageGuard {
     endpoint: Endpoint,
-    dialog_layer: LayerKey<DialogLayer>,
     dialog_key: DialogKey,
     usage_key: DefaultKey,
 }
 
 impl Drop for UsageGuard {
     fn drop(&mut self) {
-        let mut dialogs = self.endpoint[self.dialog_layer].dialogs.lock();
+        let mut dialogs = self.endpoint.layer::<DialogLayer>().dialogs.lock();
 
         if let Some(dialog_entry) = dialogs.get_mut(&self.dialog_key) {
             let usage = dialog_entry.usages.remove(self.usage_key);
@@ -202,16 +201,11 @@ impl Drop for UsageGuard {
 /// Register the given `usage` inside the dialog with the `dialog_key`
 ///
 /// Returns `Some` when the usage was successfully registered inside the dialog
-pub fn register_usage<U>(
-    endpoint: Endpoint,
-    dialog_layer: LayerKey<DialogLayer>,
-    dialog_key: DialogKey,
-    usage: U,
-) -> Option<UsageGuard>
+pub fn register_usage<U>(endpoint: Endpoint, dialog_key: DialogKey, usage: U) -> Option<UsageGuard>
 where
     U: Usage,
 {
-    let mut dialogs = endpoint[dialog_layer].dialogs.lock();
+    let mut dialogs = endpoint.layer::<DialogLayer>().dialogs.lock();
     let dialog_entry = dialogs.get_mut(&dialog_key)?;
 
     let usage_key = dialog_entry.usages.insert(Arc::new(usage));
@@ -220,7 +214,6 @@ where
 
     Some(UsageGuard {
         endpoint,
-        dialog_layer,
         dialog_key,
         usage_key,
     })

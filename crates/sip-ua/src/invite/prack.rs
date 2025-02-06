@@ -3,7 +3,7 @@ use crate::dialog::Dialog;
 use sip_core::transaction::TsxResponse;
 use sip_core::{Endpoint, IncomingRequest, MayTake, Request, Result};
 use sip_types::header::typed::{RAck, RSeq, Require};
-use sip_types::{Code, Method};
+use sip_types::{Method, StatusCode};
 use tokio::sync::oneshot;
 
 #[derive(Debug)]
@@ -42,7 +42,7 @@ impl InviteUsage {
 
         let prack_tsx = endpoint.create_server_tsx(&mut prack);
 
-        let response = endpoint.create_response(&prack, Code::OK, None);
+        let response = endpoint.create_response(&prack, StatusCode::OK, None);
 
         if awaited_prack.prack_sender.send(prack).is_err() {
             log::error!("prack receiver dropped prematurely");

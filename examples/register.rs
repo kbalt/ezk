@@ -2,6 +2,7 @@ use sip_core::transport::tcp::TcpConnector;
 use sip_core::transport::udp::Udp;
 use sip_core::transport::TargetTransportInfo;
 use sip_core::{Endpoint, Result};
+use sip_types::header::typed::Contact;
 use sip_types::uri::sip::SipUri;
 use sip_types::uri::NameAddr;
 use sip_types::CodeKind;
@@ -37,7 +38,7 @@ async fn main() -> Result<()> {
     let mut target = TargetTransportInfo::default();
     let mut registration = Registration::new(
         NameAddr::uri(id),
-        NameAddr::uri(contact),
+        Contact::new(NameAddr::uri(contact)),
         registrar.into(),
         Duration::from_secs(600),
     );

@@ -25,14 +25,14 @@ pub struct Registration {
 }
 
 impl Registration {
-    pub fn new(id: NameAddr, contact: NameAddr, registrar: Box<dyn Uri>, expiry: Duration) -> Self {
+    pub fn new(id: NameAddr, contact: Contact, registrar: Box<dyn Uri>, expiry: Duration) -> Self {
         Self {
             registrar,
             to: FromTo::new(id.clone(), None),
             from: FromTo::new(id, Some(random_string())),
             cseq: random_sequence_number(),
             call_id: CallID::new(random_string()),
-            contact: Contact::new(contact),
+            contact,
 
             expires: expiry,
             register_interval: create_reg_interval(expiry),

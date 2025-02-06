@@ -2,11 +2,12 @@ use self::layer::DialogEntry;
 use crate::util::{random_sequence_number, random_string};
 use bytesstr::BytesStr;
 use sip_core::transport::{OutgoingResponse, TargetTransportInfo};
-use sip_core::{Endpoint, Error, IncomingRequest, LayerKey, Request, Result};
+use sip_core::{Endpoint, IncomingRequest, Request, Result};
 use sip_types::header::typed::{CSeq, CallID, Contact, FromTo, MaxForwards, Routing};
 use sip_types::header::HeaderError;
-use sip_types::{Code, Method, Name};
+use sip_types::{Method, Name, StatusCode};
 use std::sync::atomic::{AtomicU32, Ordering};
+use tokio::sync::Mutex;
 
 mod client_builder;
 mod key;
@@ -15,13 +16,10 @@ mod layer;
 pub use client_builder::ClientDialogBuilder;
 pub use key::DialogKey;
 pub use layer::{register_usage, DialogLayer, Usage, UsageGuard};
-use tokio::sync::Mutex;
 
 #[derive(Debug)]
 pub struct Dialog {
     pub endpoint: Endpoint,
-
-    pub dialog_layer: LayerKey<DialogLayer>,
 
     /// Local CSeq number, increments with every request constructed using this dialog
     pub local_cseq: AtomicU32,
@@ -62,22 +60,20 @@ impl Dialog {
     /// Create a dialog from an incoming request (may be early)
     pub fn new_server(
         endpoint: Endpoint,
-        dialog_layer: LayerKey<DialogLayer>,
         request: &IncomingRequest,
         local_contact: Contact,
-    ) -> Result<Self> {
+    ) -> Result<Self, HeaderError> {
         if request.base_headers.from.tag.is_none() {
-            return Err(Error::Header(HeaderError::malformed_adhoc(
+            return Err(HeaderError::malformed_adhoc(
                 Name::FROM,
-                "Missing Tag",
-            )));
+                "missing tag parameter",
+            ));
         }
 
         let route_set: Vec<Routing> = request.headers.get(Name::RECORD_ROUTE).unwrap_or_default();
 
         let mut dialog = Self {
             endpoint,
-            dialog_layer,
             local_cseq: random_sequence_number().into(),
             local_fromto: request.base_headers.to.clone(),
             peer_fromto: request.base_headers.from.clone(),
@@ -93,7 +89,9 @@ impl Dialog {
         dialog.local_fromto.tag = Some(random_string());
 
         let entry = DialogEntry::new(Some(request.base_headers.cseq.cseq));
-        dialog.endpoint[dialog_layer]
+        dialog
+            .endpoint
+            .layer::<DialogLayer>()
             .dialogs
             .lock()
             .insert(dialog.key(), entry);
@@ -102,8 +100,7 @@ impl Dialog {
     }
 
     pub fn register_usage<U: Usage>(&self, usage: U) -> UsageGuard {
-        register_usage(self.endpoint.clone(), self.dialog_layer, self.key(), usage)
-            .expect("called by the dialog")
+        register_usage(self.endpoint.clone(), self.key(), usage).expect("called by the dialog")
     }
 
     /// Create a key that the dialog can be identified with
@@ -136,7 +133,7 @@ impl Dialog {
     pub fn create_response(
         &self,
         request: &IncomingRequest,
-        code: Code,
+        code: StatusCode,
         reason: Option<BytesStr>,
     ) -> Result<OutgoingResponse> {
         let mut response = self.endpoint.create_response(request, code, reason);
@@ -176,7 +173,8 @@ impl Dialog {
 
 impl Drop for Dialog {
     fn drop(&mut self) {
-        self.endpoint[self.dialog_layer]
+        self.endpoint
+            .layer::<DialogLayer>()
             .dialogs
             .lock()
             .remove(&self.key());

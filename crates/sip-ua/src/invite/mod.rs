@@ -6,16 +6,14 @@ use session::UsageEvent;
 use sip_core::transaction::consts::{T1, T2};
 use sip_core::transaction::{Accepted, ServerInvTsx, TsxKey};
 use sip_core::transport::OutgoingRequest;
-use sip_core::{
-    Endpoint, EndpointBuilder, Error, IncomingRequest, Layer, LayerKey, MayTake, Result,
-};
+use sip_core::{Endpoint, EndpointBuilder, Error, IncomingRequest, Layer, MayTake, Result};
 use sip_types::header::typed::CSeq;
-use sip_types::{Code, Method};
+use sip_types::{Method, StatusCode};
 use std::collections::HashMap;
 use std::mem::replace;
 use std::sync::Arc;
 use tokio::sync::mpsc::error::SendError;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex, Notify};
 use tokio::time::timeout;
 
 pub mod acceptor;
@@ -34,7 +32,6 @@ struct AwaitedAck {
 /// INVITE objects and usage.
 #[derive(Debug)]
 struct Inner {
-    invite_layer: LayerKey<InviteLayer>,
     state: Mutex<InviteSessionState>,
 
     peer_supports_timer: bool,
@@ -52,6 +49,7 @@ enum InviteSessionState {
         dialog: Dialog,
         tsx: ServerInvTsx,
         invite: IncomingRequest,
+        cancelled_notify: Arc<Notify>,
     },
 
     /// Cancelled: A CANCEL Request for the invite has been received
@@ -78,8 +76,10 @@ impl InviteSessionState {
                 dialog,
                 tsx,
                 invite,
+                cancelled_notify,
             } = replace(self, InviteSessionState::Cancelled)
             {
+                cancelled_notify.notify_one();
                 Some((dialog, tsx, invite))
             } else {
                 unreachable!()
@@ -100,6 +100,7 @@ impl InviteSessionState {
                 dialog,
                 tsx,
                 invite,
+                cancelled_notify: _,
             } = replace(self, InviteSessionState::Established { evt_sink })
             {
                 Some((dialog, tsx, invite))
@@ -179,9 +180,9 @@ impl InviteLayer {
 
             if let Some((dialog, invite_tsx, invite)) = inner.state.lock().await.set_cancelled() {
                 let invite_response =
-                    dialog.create_response(&invite, Code::REQUEST_TERMINATED, None)?;
+                    dialog.create_response(&invite, StatusCode::REQUEST_TERMINATED, None)?;
 
-                let cancel_response = dialog.create_response(&cancel, Code::OK, None)?;
+                let cancel_response = dialog.create_response(&cancel, StatusCode::OK, None)?;
 
                 let (r1, r2) = tokio::join!(
                     invite_tsx.respond_failure(invite_response),
@@ -192,7 +193,7 @@ impl InviteLayer {
                 r2
             } else {
                 // TODO this response is outside the dialog, is that ok?
-                let response = endpoint.create_response(&cancel, Code::OK, None);
+                let response = endpoint.create_response(&cancel, StatusCode::OK, None);
 
                 cancel_tsx.respond(response).await
             }
@@ -252,7 +253,9 @@ impl Usage for InviteUsage {
                         dialog,
                         tsx,
                         invite,
+                        cancelled_notify,
                     } => {
+                        cancelled_notify.notify_one();
                         if let Err(e) = self
                             .handle_bye_in_provisional_state(
                                 endpoint,
@@ -305,10 +308,11 @@ impl InviteUsage {
         invite: IncomingRequest,
         mut bye: IncomingRequest,
     ) -> Result<()> {
-        let bye_response = dialog.create_response(&invite, Code::OK, None)?;
+        let bye_response = dialog.create_response(&invite, StatusCode::OK, None)?;
         let bye_tsx = endpoint.create_server_tsx(&mut bye);
 
-        let invite_response = dialog.create_response(&invite, Code::REQUEST_TERMINATED, None)?;
+        let invite_response =
+            dialog.create_response(&invite, StatusCode::REQUEST_TERMINATED, None)?;
 
         let (r1, r2) = tokio::join!(
             invite_tsx.respond_failure(invite_response),
