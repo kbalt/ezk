@@ -6,7 +6,7 @@ publish = false
 
 [dev-dependencies]
 sip-types.workspace = true
-sip-core.workspace = true
+sip-core = { workspace = true, features = ["tls-native-tls"] }
 sip-ua.workspace = true
 sip-auth.workspace = true
 

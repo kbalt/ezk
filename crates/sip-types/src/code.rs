@@ -49,10 +49,10 @@ impl StatusCode {
     /// # Example
     ///
     /// ```
-    /// use ezk_sip_types::Code;
+    /// use ezk_sip_types::StatusCode;
     /// use ezk_sip_types::CodeKind;
     ///
-    /// let code = Code::from(200);
+    /// let code = StatusCode::from(200);
     ///
     /// assert_eq!(code.kind(), CodeKind::Success);
     /// ```
