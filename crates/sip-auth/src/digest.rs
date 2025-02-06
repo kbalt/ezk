@@ -1,18 +1,80 @@
-use crate::{Error, RequestParts, ResponseEntry, UacAuthenticator};
+use crate::{ClientAuthenticator, RequestParts, ResponseParts};
 use bytesstr::BytesStr;
 use sha2::Digest;
 use sip_types::header::typed::{
-    Algorithm, AlgorithmValue, AuthChallenge, AuthResponse, DigestChallenge, DigestResponse,
-    QopOption, QopResponse, Username,
+    Algorithm, AlgorithmValue, AuthChallenge, DigestChallenge, DigestResponse, QopOption,
+    QopResponse, Username,
 };
+use sip_types::header::HeaderError;
 use sip_types::print::{AppendCtx, PrintCtx, UriContext};
+use sip_types::{Headers, Name};
+use std::collections::HashMap;
 
+#[derive(Debug, thiserror::Error)]
+pub enum DigestError {
+    #[error("failed to authenticate realms: {0:?}")]
+    FailedToAuthenticate(Vec<BytesStr>),
+    #[error("encountered unsupported algorithm {0}")]
+    UnsupportedAlgorithm(BytesStr),
+    #[error("missing credentials for realm {0}")]
+    MissingCredentials(BytesStr),
+    #[error("unsupported qop")]
+    UnsupportedQop,
+    #[error(transparent)]
+    Header(HeaderError),
+}
+
+/// A HashMap wrapper that holds credentials mapped to their respective realm
+///
+/// Default credentials can be set to attempt authentication for unknown realms
+#[derive(Default, Clone)]
 pub struct DigestCredentials {
+    default: Option<DigestUser>,
+    map: HashMap<String, DigestUser>,
+}
+
+impl DigestCredentials {
+    pub fn new() -> Self {
+        Self {
+            default: None,
+            map: HashMap::new(),
+        }
+    }
+
+    /// Set default `credentials` to authenticate on unknown realms
+    pub fn set_default(&mut self, credentials: DigestUser) {
+        self.default = Some(credentials)
+    }
+
+    /// Add `credentials` that will be used when authenticating for `realm`
+    pub fn add_for_realm<R>(&mut self, realm: R, credentials: DigestUser)
+    where
+        R: Into<String>,
+    {
+        self.map.insert(realm.into(), credentials);
+    }
+
+    /// Get credentials for the specified `realm`
+    ///
+    /// Returns the default credentials when no credentials where set for the
+    /// requested `realm`
+    pub fn get_for_realm(&self, realm: &str) -> Option<&DigestUser> {
+        self.map.get(realm).or(self.default.as_ref())
+    }
+
+    /// Remove credentials for the specified `realm`
+    pub fn remove_for_realm(&mut self, realm: &str) {
+        self.map.remove(realm);
+    }
+}
+
+#[derive(Clone)]
+pub struct DigestUser {
     user: String,
     password: Vec<u8>,
 }
 
-impl DigestCredentials {
+impl DigestUser {
     pub fn new<U, P>(user: U, password: P) -> Self
     where
         U: Into<String>,
@@ -25,23 +87,17 @@ impl DigestCredentials {
     }
 }
 
-fn hash_md5(i: &[u8]) -> String {
-    format!("{:x}", md5::compute(i))
-}
+/// Used to solve Digest authenticate challenges in 401 / 407 SIP responses
+pub struct DigestAuthenticator {
+    pub credentials: DigestCredentials,
+    qop_responses: Vec<(BytesStr, QopEntry)>,
+    responses: Vec<ResponseEntry>,
 
-fn hash_sha256(i: &[u8]) -> String {
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(i);
-    format!("{:x}", hasher.finalize())
+    /// Respond with qop `Auth` when a challenge does not contain qop field (RFC8760 Section 2.6). Is false by default
+    pub enforce_qop: bool,
+    /// Reject challenges with MD5 algorithm. Is false by default
+    pub reject_md5: bool,
 }
-
-fn hash_sha512_trunc256(i: &[u8]) -> String {
-    let mut hasher = sha2::Sha512_256::new();
-    hasher.update(i);
-    format!("{:x}", hasher.finalize())
-}
-
-type HashFn = fn(&[u8]) -> String;
 
 struct QopEntry {
     ha1: String,
@@ -49,38 +105,202 @@ struct QopEntry {
     hash: HashFn,
 }
 
-/// Used to authorize 401 & 407 Digest responses
-#[derive(Default)]
-pub struct DigestAuthenticator {
-    qop_responses: Vec<(BytesStr, QopEntry)>,
-    /// Respond with qop `Auth` when a challenge does not contain qop field (RFC8760 Section 2.6). Is false by default
-    pub enforce_qop: bool,
-    /// Reject challenges with MD5 algorithm. Is false by default
-    pub reject_md5: bool,
+/// Contains a list of authentication challenges that want to authenticate the same realm.
+///
+/// As each realm may only be authenticated once per request, only the topmost supported challenge will
+/// be used for authentication. (See RFC8760 Section 2.4)
+struct ChallengedRealm {
+    realm: BytesStr,
+    challenges: Vec<(bool, AuthChallenge)>,
 }
 
-impl UacAuthenticator for DigestAuthenticator {
-    type Credentials = DigestCredentials;
+/// A cached authorization response that will be used/reused to authorize a request
+pub struct ResponseEntry {
+    pub realm: BytesStr,
+    pub header: DigestResponse,
 
-    fn get_realm<'s>(&mut self, auth: &'s AuthChallenge) -> Result<&'s BytesStr, Error> {
-        match auth {
-            AuthChallenge::Digest(digest) => Ok(&digest.realm),
-            AuthChallenge::Other(other) => Err(Error::UnknownScheme(other.scheme.clone())),
+    /// Number of times the response has been used in a request.
+    ///
+    /// Will be initialized at 0 and incremented each time after calling
+    /// `UacAuthenticator::on_authorize_request`.
+    pub use_count: u32,
+
+    is_proxy: bool,
+}
+
+impl ClientAuthenticator for DigestAuthenticator {
+    type Error = DigestError;
+
+    fn authorize_request(&mut self, request_headers: &mut Headers) {
+        for response in &mut self.responses {
+            let name = if response.is_proxy {
+                Name::PROXY_AUTHORIZATION
+            } else {
+                Name::AUTHORIZATION
+            };
+
+            // nc is already correct
+            if response.use_count > 0 {
+                let digest_realm = &response.header.realm;
+
+                // qop response needs its nonce-count incremented and response re-calculated
+                if let Some(qop_response) = &mut response.header.qop_response {
+                    qop_response.nc += 1;
+
+                    let (_, qop_entry) = self
+                        .qop_responses
+                        .iter_mut()
+                        .find(|(realm, _)| realm == digest_realm)
+                        .expect("qop_entry must be some");
+
+                    match qop_response.qop {
+                        QopOption::Auth | QopOption::AuthInt => {
+                            let hash = (qop_entry.hash)(
+                                format!(
+                                    "{}:{}:{:08X}:{}:auth:{}",
+                                    qop_entry.ha1,
+                                    response.header.nonce,
+                                    qop_response.nc,
+                                    qop_response.cnonce,
+                                    qop_entry.ha2
+                                )
+                                .as_bytes(),
+                            );
+
+                            response.header.response = hash.into();
+                        }
+                        QopOption::Other(_) => unreachable!(),
+                    };
+                }
+            }
+
+            response.use_count += 1;
+
+            request_headers.insert_type(name, &response.header);
         }
+    }
+
+    fn handle_rejection(
+        &mut self,
+        rejected_request: RequestParts<'_>,
+        reject_response: ResponseParts<'_>,
+    ) -> Result<(), DigestError> {
+        let mut challenged_realms = vec![];
+
+        self.read_challenges(false, reject_response.headers, &mut challenged_realms)?;
+        self.read_challenges(true, reject_response.headers, &mut challenged_realms)?;
+
+        let mut failed_realms = vec![];
+
+        'outer: for challenged_realm in challenged_realms {
+            for (is_proxy, challenge) in challenged_realm.challenges {
+                let AuthChallenge::Digest(challenge) = challenge else {
+                    continue;
+                };
+
+                let result = self.handle_challenge(rejected_request, challenge);
+
+                let response = match result {
+                    Ok(response) => response,
+                    Err(e) => {
+                        log::warn!("failed to handle challenge {}", e);
+                        continue;
+                    }
+                };
+
+                let realm = challenged_realm.realm;
+
+                // Remove old response for the realm
+                if let Some(i) = self
+                    .responses
+                    .iter()
+                    .position(|response| response.realm == realm)
+                {
+                    self.responses.remove(i);
+                }
+
+                let entry = ResponseEntry {
+                    realm,
+                    header: response,
+                    use_count: 0,
+                    is_proxy,
+                };
+
+                self.responses.push(entry);
+
+                continue 'outer;
+            }
+
+            failed_realms.push(challenged_realm.realm);
+        }
+
+        if !failed_realms.is_empty() {
+            return Err(DigestError::FailedToAuthenticate(failed_realms));
+        }
+
+        Ok(())
+    }
+}
+
+impl DigestAuthenticator {
+    pub fn new(credentials: DigestCredentials) -> Self {
+        Self {
+            credentials,
+            qop_responses: vec![],
+            responses: vec![],
+            enforce_qop: false,
+            reject_md5: false,
+        }
+    }
+
+    /// Read all authentication headers and group them by realm
+    fn read_challenges(
+        &mut self,
+        is_proxy: bool,
+        headers: &Headers,
+        dst: &mut Vec<ChallengedRealm>,
+    ) -> Result<(), DigestError> {
+        let challenge_name = if is_proxy {
+            Name::PROXY_AUTHENTICATE
+        } else {
+            Name::WWW_AUTHENTICATE
+        };
+
+        let challenges = headers
+            .try_get::<Vec<AuthChallenge>>(challenge_name)
+            .map(|val| val.map_err(DigestError::Header))
+            .transpose()?
+            .unwrap_or_default();
+
+        for challenge in challenges {
+            let realm = match &challenge {
+                AuthChallenge::Digest(digest_challenge) => &digest_challenge.realm,
+                AuthChallenge::Other(..) => {
+                    continue;
+                }
+            };
+
+            if let Some(challenged_realm) = dst
+                .iter_mut()
+                .find(|challenged_realm| &challenged_realm.realm == realm)
+            {
+                challenged_realm.challenges.push((is_proxy, challenge));
+            } else {
+                dst.push(ChallengedRealm {
+                    realm: realm.clone(),
+                    challenges: vec![(is_proxy, challenge)],
+                });
+            }
+        }
+
+        Ok(())
     }
 
     fn handle_challenge(
         &mut self,
-        responses: &[ResponseEntry],
         request_parts: RequestParts<'_>,
-        challenge: AuthChallenge,
-        credentials: &DigestCredentials,
-    ) -> Result<AuthResponse, Error> {
-        let challenge = match challenge {
-            AuthChallenge::Digest(challenge) => challenge,
-            AuthChallenge::Other(other) => return Err(Error::UnknownScheme(other.scheme)),
-        };
-
+        challenge: DigestChallenge,
+    ) -> Result<DigestResponse, DigestError> {
         // Following things can happen:
         // - We didn't respond to this challenge yet -> authenticate
         // - We did respond, but
@@ -89,80 +309,30 @@ impl UacAuthenticator for DigestAuthenticator {
         //       this is a observed behavior from other implementations and happens
         //       when using any qop. To solve this issue, stale is ignored and the
         //       the nonce is compared directly.
-        let previous_response = responses
+        let previous_response = self
+            .responses
             .iter()
             .find(|response| response.realm == challenge.realm);
 
         let authenticate = if let Some(previous_response) = previous_response {
-            match &previous_response.response {
-                AuthResponse::Digest(digest_response) => digest_response.nonce != challenge.nonce,
-                AuthResponse::Other(_) => true,
-            }
+            previous_response.header.nonce != challenge.nonce
         } else {
             true
         };
 
         if authenticate {
-            self.handle_digest_challenge(credentials, challenge, request_parts)
+            self.handle_digest_challenge(challenge, request_parts)
         } else {
-            Err(Error::FailedToAuthenticate(challenge.realm))
+            Err(DigestError::FailedToAuthenticate(vec![challenge.realm]))
         }
     }
 
-    fn on_authorize_request(&mut self, response: &mut ResponseEntry) {
-        let digest = match &mut response.response {
-            AuthResponse::Digest(response) => response,
-            AuthResponse::Other(_) => return,
-        };
-
-        // nc is already correct
-        if response.use_count == 0 {
-            return;
-        }
-
-        let digest_realm = &digest.realm;
-
-        // qop response needs its nonce-count incremented and response re-calculated
-        let qop_response = if let Some(qop_response) = &mut digest.qop_response {
-            qop_response.nc += 1;
-            qop_response
-        } else {
-            return;
-        };
-
-        let (_, qop_entry) = self
-            .qop_responses
-            .iter_mut()
-            .find(|(realm, _)| realm == digest_realm)
-            .expect("qop_entry must be some");
-
-        let response = match qop_response.qop {
-            QopOption::Auth | QopOption::AuthInt => (qop_entry.hash)(
-                format!(
-                    "{}:{}:{:08X}:{}:auth:{}",
-                    qop_entry.ha1,
-                    digest.nonce,
-                    qop_response.nc,
-                    qop_response.cnonce,
-                    qop_entry.ha2
-                )
-                .as_bytes(),
-            ),
-            QopOption::Other(_) => unreachable!(),
-        };
-
-        digest.response = response.into();
-    }
-}
-
-impl DigestAuthenticator {
     fn handle_digest_challenge(
         &mut self,
-        credentials: &DigestCredentials,
-        digest: DigestChallenge,
+        digest_challenge: DigestChallenge,
         request_parts: RequestParts<'_>,
-    ) -> Result<AuthResponse, Error> {
-        let algorithm_value = match digest.algorithm.clone() {
+    ) -> Result<DigestResponse, DigestError> {
+        let algorithm_value = match digest_challenge.algorithm.clone() {
             Algorithm::AkaNamespace((_, av)) => av,
             Algorithm::AlgorithmValue(av) => av,
         };
@@ -170,14 +340,18 @@ impl DigestAuthenticator {
         let (hash, is_session): (HashFn, bool) = match algorithm_value {
             AlgorithmValue::MD5 => {
                 if self.reject_md5 {
-                    return Err(Error::UnsupportedAlgorithm(BytesStr::from_static("MD5")));
+                    return Err(DigestError::UnsupportedAlgorithm(BytesStr::from_static(
+                        "MD5",
+                    )));
                 } else {
                     (hash_md5, false)
                 }
             }
             AlgorithmValue::MD5Sess => {
                 if self.reject_md5 {
-                    return Err(Error::UnsupportedAlgorithm(BytesStr::from_static("MD5")));
+                    return Err(DigestError::UnsupportedAlgorithm(BytesStr::from_static(
+                        "MD5",
+                    )));
                 } else {
                     (hash_md5, true)
                 }
@@ -186,28 +360,33 @@ impl DigestAuthenticator {
             AlgorithmValue::SHA256Sess => (hash_sha256, true),
             AlgorithmValue::SHA512256 => (hash_sha512_trunc256, false),
             AlgorithmValue::SHA512256Sess => (hash_sha512_trunc256, true),
-            AlgorithmValue::Other(other) => return Err(Error::UnsupportedAlgorithm(other)),
+            AlgorithmValue::Other(other) => return Err(DigestError::UnsupportedAlgorithm(other)),
         };
 
-        let response = self.digest_respond(digest, request_parts, credentials, is_session, hash)?;
+        let response = self.digest_respond(digest_challenge, request_parts, is_session, hash)?;
 
-        Ok(AuthResponse::Digest(response))
+        Ok(response)
     }
 
     fn digest_respond(
         &mut self,
         mut challenge: DigestChallenge,
         request_parts: RequestParts<'_>,
-        credentials: &DigestCredentials,
         is_session: bool,
         hash: HashFn,
-    ) -> Result<DigestResponse, Error> {
+    ) -> Result<DigestResponse, DigestError> {
+        let digest_user = self
+            .credentials
+            .get_for_realm(&challenge.realm)
+            .ok_or_else(|| DigestError::MissingCredentials(challenge.realm.clone()))?
+            .clone();
+
         let cnonce = BytesStr::from(uuid::Uuid::new_v4().simple().to_string());
 
         let mut ha1 = hash(
             [
-                format!("{}:{}:", credentials.user, challenge.realm).as_bytes(),
-                &credentials.password,
+                format!("{}:{}:", digest_user.user, challenge.realm).as_bytes(),
+                &digest_user.password,
             ]
             .concat()
             .as_slice(),
@@ -251,7 +430,7 @@ impl DigestAuthenticator {
                     .as_bytes(),
                 );
 
-                self.save_qop_response(&challenge.realm, ha1, ha2, hash);
+                self.save_qop_response(challenge.realm.clone(), ha1, ha2, hash);
 
                 let qop_response = QopResponse {
                     qop: QopOption::AuthInt,
@@ -274,7 +453,7 @@ impl DigestAuthenticator {
                     .as_bytes(),
                 );
 
-                self.save_qop_response(&challenge.realm, ha1, ha2, hash);
+                self.save_qop_response(challenge.realm.clone(), ha1, ha2, hash);
 
                 let qop_response = QopResponse {
                     qop: QopOption::Auth,
@@ -284,7 +463,7 @@ impl DigestAuthenticator {
 
                 (response, Some(qop_response))
             } else {
-                return Err(Error::UnsupportedQop);
+                return Err(DigestError::UnsupportedQop);
             }
         } else {
             let a2 = format!("{}:{}", &request_parts.line.method, uri);
@@ -298,13 +477,13 @@ impl DigestAuthenticator {
         let username = if challenge.userhash {
             // Hash the username when the challenge sets `userhash` (RFC7616 Section 3.4.4)
             let username_hash =
-                hash(format!("{}:{}", credentials.user, challenge.realm).as_bytes())
+                hash(format!("{}:{}", digest_user.user, challenge.realm).as_bytes())
                     .as_str()
                     .into();
 
             Username::Username(username_hash)
         } else {
-            Username::new(credentials.user.as_str().into())
+            Username::new(digest_user.user.as_str().into())
         };
 
         Ok(DigestResponse {
@@ -323,7 +502,7 @@ impl DigestAuthenticator {
 
     fn save_qop_response(
         &mut self,
-        challenge_realm: &BytesStr,
+        challenge_realm: BytesStr,
         ha1: String,
         ha2: String,
         hash: HashFn,
@@ -333,7 +512,7 @@ impl DigestAuthenticator {
         if let Some((_, old_qop_entry)) = self
             .qop_responses
             .iter_mut()
-            .find(|(realm, _)| realm == challenge_realm)
+            .find(|(realm, _)| *realm == challenge_realm)
         {
             *old_qop_entry = qop_entry;
         } else {
@@ -343,31 +522,45 @@ impl DigestAuthenticator {
     }
 }
 
+fn hash_md5(i: &[u8]) -> String {
+    format!("{:x}", md5::compute(i))
+}
+
+fn hash_sha256(i: &[u8]) -> String {
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(i);
+    format!("{:x}", hasher.finalize())
+}
+
+fn hash_sha512_trunc256(i: &[u8]) -> String {
+    let mut hasher = sha2::Sha512_256::new();
+    hasher.update(i);
+    format!("{:x}", hasher.finalize())
+}
+
+type HashFn = fn(&[u8]) -> String;
+
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::CredentialStore;
-    use crate::UacAuthSession;
-    use sip_types::msg::RequestLine;
-    use sip_types::uri::sip::SipUri;
-    use sip_types::Headers;
-    use sip_types::Method;
-    use sip_types::Name;
+    use sip_types::{
+        header::typed::AuthResponse,
+        msg::{RequestLine, StatusLine},
+        uri::sip::SipUri,
+        Headers, Method, Name, StatusCode,
+    };
 
-    fn test_credentials() -> CredentialStore {
-        let mut store = CredentialStore::new();
+    fn test_authenticator() -> DigestAuthenticator {
+        let mut credentials = DigestCredentials::new();
 
-        store.add_for_realm(
-            "example.org",
-            DigestCredentials::new("user123", "password123"),
-        );
+        credentials.add_for_realm("example.org", DigestUser::new("user123", "password123"));
 
-        store
+        DigestAuthenticator::new(credentials)
     }
 
     #[test]
     fn digest_challenge() {
-        let credentials = test_credentials();
+        let mut authenticator = test_authenticator();
 
         let mut headers = Headers::new();
 
@@ -386,29 +579,31 @@ mod test {
             }),
         );
 
-        let uri: SipUri = "sip:example.org".parse().unwrap();
-
         let line = RequestLine {
             method: Method::REGISTER,
-            uri: Box::new(uri),
+            uri: Box::new("sip:example.org".parse::<SipUri>().unwrap()),
         };
 
-        let mut session = UacAuthSession::<DigestAuthenticator>::default();
-
-        session
-            .handle_authenticate(
-                &headers,
-                &credentials,
+        authenticator
+            .handle_rejection(
                 RequestParts {
                     line: &line,
                     headers: &Headers::new(),
+                    body: &[],
+                },
+                ResponseParts {
+                    line: &StatusLine {
+                        code: StatusCode::UNAUTHORIZED,
+                        reason: None,
+                    },
+                    headers: &headers,
                     body: &[],
                 },
             )
             .unwrap();
 
         let mut response_headers = Headers::new();
-        session.authorize_request(&mut response_headers);
+        authenticator.authorize_request(&mut response_headers);
 
         let authorization = response_headers
             .get::<AuthResponse>(Name::AUTHORIZATION)
@@ -444,7 +639,7 @@ mod test {
 
     #[test]
     fn digest_challenge_and_response() {
-        let credentials = test_credentials();
+        let mut authenticator = test_authenticator();
 
         let mut headers = Headers::new();
 
@@ -470,22 +665,26 @@ mod test {
             uri: Box::new(uri),
         };
 
-        let mut session = UacAuthSession::<DigestAuthenticator>::default();
-
-        session
-            .handle_authenticate(
-                &headers,
-                &credentials,
+        authenticator
+            .handle_rejection(
                 RequestParts {
                     line: &line,
                     headers: &Headers::new(),
+                    body: &[],
+                },
+                ResponseParts {
+                    line: &StatusLine {
+                        code: StatusCode::UNAUTHORIZED,
+                        reason: None,
+                    },
+                    headers: &headers,
                     body: &[],
                 },
             )
             .unwrap();
 
         let mut response_headers = Headers::new();
-        session.authorize_request(&mut response_headers);
+        authenticator.authorize_request(&mut response_headers);
 
         let response = response_headers
             .get::<AuthResponse>(Name::AUTHORIZATION)
@@ -521,7 +720,7 @@ mod test {
         };
 
         let mut response_headers = Headers::new();
-        session.authorize_request(&mut response_headers);
+        authenticator.authorize_request(&mut response_headers);
 
         let response = response_headers
             .get::<AuthResponse>(Name::AUTHORIZATION)
