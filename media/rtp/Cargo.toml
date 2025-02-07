@@ -9,7 +9,6 @@ license.workspace = true
 
 [dependencies]
 bytes = "1"
-rand = "0.9"
-time = "0.3"
-rtp-types = "0.1"
 rtcp-types = "0.1"
+rtp-types = "0.1"
+time = "0.3"
