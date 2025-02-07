@@ -1,0 +1,15 @@
+[package]
+name = "ezk-rtp"
+version = "0.3.0"
+description = "RTP session implementation & utilities"
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+bytes = "1"
+rand = "0.9"
+time = "0.3"
+rtp-types = "0.1"
+rtcp-types = "0.1"
