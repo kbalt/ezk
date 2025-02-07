@@ -10,15 +10,18 @@ use std::{
     fmt::Debug,
     future::Future,
     ops::{Deref, DerefMut},
+    pin::{pin, Pin},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
+    task::{ready, Context, Poll},
 };
 use tokio::sync::{
     mpsc::{self},
     watch,
 };
+use tokio_util::sync::PollSender;
 
 /// SDP based media backend used by calls
 pub trait MediaBackend {
@@ -268,7 +271,7 @@ fn add_sender(
             media_id,
             state: transport_state.subscribe(),
             valid,
-            tx: this_tx.clone(),
+            tx: PollSender::new(this_tx.clone()),
         },
         codec: Codec {
             pt: media_state.codec.send_pt,
@@ -316,7 +319,7 @@ pub struct RtpSender {
     media_id: MediaId,
     state: watch::Receiver<TransportConnectionState>,
     valid: Arc<AtomicBool>,
-    tx: mpsc::Sender<(MediaId, RtpPacket)>,
+    tx: PollSender<(MediaId, RtpPacket)>,
 }
 
 /// Error returned by [`RtpSender::send`]
@@ -347,11 +350,59 @@ impl RtpSender {
             return Err(RtpSendError);
         }
 
-        if self.tx.send((self.media_id, packet)).await.is_err() {
+        if self
+            .tx
+            .get_ref()
+            .ok_or(RtpSendError)?
+            .send((self.media_id, packet))
+            .await
+            .is_err()
+        {
             Err(RtpSendError)
         } else {
             Ok(())
         }
+    }
+}
+
+impl futures_sink::Sink<RtpPacket> for RtpSender {
+    type Error = RtpSendError;
+
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        if !self.valid.load(Ordering::Relaxed) {
+            return Poll::Ready(Err(RtpSendError));
+        }
+
+        ready!(self.tx.poll_reserve(cx)).map_err(|_| RtpSendError)?;
+
+        loop {
+            if *self.as_mut().state.borrow_and_update() == TransportConnectionState::Connected {
+                return Poll::Ready(Ok(()));
+            }
+
+            if ready!(pin!(self.state.changed()).poll(cx)).is_err() {
+                return Poll::Ready(Err(RtpSendError));
+            }
+        }
+    }
+
+    fn start_send(mut self: Pin<&mut Self>, item: RtpPacket) -> Result<(), Self::Error> {
+        let id = self.media_id;
+        Pin::new(&mut self.tx)
+            .start_send((id, item))
+            .map_err(|_| RtpSendError)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.tx)
+            .poll_flush(cx)
+            .map_err(|_| RtpSendError)
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.tx)
+            .poll_close(cx)
+            .map_err(|_| RtpSendError)
     }
 }
 

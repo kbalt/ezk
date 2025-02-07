@@ -203,25 +203,19 @@ mod tests {
         #[allow(clippy::while_let_loop)]
         loop {
             match call.run().await.unwrap() {
-                CallEvent::Media(event) => {
-                    match event {
-                        crate::MediaEvent::SenderAdded { sender, codec } => {
-                            rtp::H264
-                            openh264::Encoder/Decoder
-                            
-                        }
-                        crate::MediaEvent::ReceiverAdded {
-                            mut receiver,
-                            codec,
-                        } => {
-                            tokio::spawn(async move {
-                                while let Some(packet) = receiver.recv().await {
-                                    println!("Got rtp");
-                                }
-                            });
-                        }
+                CallEvent::Media(event) => match event {
+                    crate::MediaEvent::SenderAdded { sender, codec } => {}
+                    crate::MediaEvent::ReceiverAdded {
+                        mut receiver,
+                        codec,
+                    } => {
+                        tokio::spawn(async move {
+                            while let Some(packet) = receiver.recv().await {
+                                println!("Got rtp");
+                            }
+                        });
                     }
-                }
+                },
                 CallEvent::Terminated => break,
             }
         }
