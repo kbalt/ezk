@@ -10,6 +10,9 @@ pub mod profile_iop_consts {
     pub const CONSTRAINT_SET5_FLAG: u8 = 1 << 2;
 }
 
+/// H.264 specific parameter which specifies the H.264 encoding profile and level
+///
+/// Represented in fmtp as 3 hex bytes e.g. (42E020)
 #[derive(Debug, Clone, Copy)]
 pub struct ProfileLevelId {
     pub profile: Profile,

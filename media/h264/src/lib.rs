@@ -1,8 +1,9 @@
 #![warn(unreachable_pub)]
 
 use profile_level_id::{ParseProfileLevelIdError, ProfileLevelId};
-use std::{fmt, num::ParseIntError, str::FromStr};
+use std::{cmp::min, fmt, num::ParseIntError, str::FromStr};
 
+pub mod openh264;
 mod payload;
 pub mod profile_level_id;
 
@@ -57,6 +58,86 @@ pub struct FmtpOptions {
     pub redundant_pic_cap: bool,
 }
 
+impl FmtpOptions {
+    pub fn max_resolution(&self, num: u32, denom: u32) -> (u32, u32) {
+        let max_fs = self
+            .max_fs
+            .unwrap_or_else(|| self.profile_level_id.level.max_fs())
+            // Limit max FS to avoid integer overflows
+            .min(8_388_607);
+
+        resolution_from_max_fs(num, denom, max_fs)
+    }
+
+    pub fn max_resolution_for_fps(&self, num: u32, denom: u32, fps: u32) -> (u32, u32) {
+        let max_mbps = self
+            .max_mbps
+            .unwrap_or_else(|| self.profile_level_id.level.max_mbps());
+
+        let max_fs = max_mbps / fps;
+
+        resolution_from_max_fs(num, denom, max_fs)
+    }
+
+    pub fn max_fps_for_max_resolution(&self) -> u32 {
+        let max_fs = self
+            .max_fs
+            .unwrap_or_else(|| self.profile_level_id.level.max_fs());
+
+        let max_mbps = self
+            .max_mbps
+            .unwrap_or_else(|| self.profile_level_id.level.max_mbps());
+
+        max_mbps / max_fs
+    }
+
+    pub fn max_fps_for_resolution(&self, width: u32, height: u32) -> u32 {
+        let max_mbps = self
+            .max_mbps
+            .unwrap_or_else(|| self.profile_level_id.level.max_mbps());
+
+        let frame_size = (width * height) / 256;
+
+        max_mbps / frame_size
+    }
+
+    pub fn max_bitrate(&self) -> u32 {
+        self.max_br
+            .unwrap_or_else(|| self.profile_level_id.level.max_br())
+    }
+}
+
+fn resolution_from_max_fs(num: u32, denom: u32, max_fs: u32) -> (u32, u32) {
+    fn greatest_common_divisor(mut a: u32, mut b: u32) -> u32 {
+        while b != 0 {
+            let tmp = b;
+            b = a % b;
+            a = tmp;
+        }
+
+        a
+    }
+
+    let max_pixels = max_fs.saturating_mul(256);
+    let divisor = greatest_common_divisor(num, denom);
+    let num = num / divisor;
+    let denom = denom / divisor;
+
+    // Search for the best resolution by testing them all
+    for i in 1.. {
+        let width = num * i;
+        let height = denom * i;
+
+        if width * height > max_pixels {
+            let width = num * (i - 1);
+            let height = denom * (i - 1);
+            return (width, height);
+        }
+    }
+
+    unreachable!()
+}
+
 /// Failed to parse H.264 fmtp line
 #[derive(Debug, thiserror::Error)]
 pub enum ParseFmtpOptionsError {
@@ -72,6 +153,10 @@ impl FromStr for FmtpOptions {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut options = Self::default();
 
+        fn parse_u32(i: &str) -> Result<u32, ParseFmtpOptionsError> {
+            Ok(i.parse::<u32>()?.clamp(1, 8_388_607))
+        }
+
         for (key, value) in s.split(';').filter_map(|e| e.split_once('=')) {
             let value = value.trim();
             match key {
@@ -85,11 +170,11 @@ impl FromStr for FmtpOptions {
                         _ => continue,
                     };
                 }
-                "max-mbps" => options.max_mbps = Some(value.parse()?),
-                "max-fs" => options.max_fs = Some(value.parse()?),
-                "max-cbp" => options.max_cbp = Some(value.parse()?),
-                "max-dpb" => options.max_dpb = Some(value.parse()?),
-                "max-br" => options.max_br = Some(value.parse()?),
+                "max-mbps" => options.max_mbps = Some(parse_u32(value)?),
+                "max-fs" => options.max_fs = Some(parse_u32(value)?),
+                "max-cbp" => options.max_cbp = Some(parse_u32(value)?),
+                "max-dpb" => options.max_dpb = Some(parse_u32(value)?),
+                "max-br" => options.max_br = Some(parse_u32(value)?),
                 "redundant-pic-cap" => options.redundant_pic_cap = value == "1",
                 _ => continue,
             }
@@ -191,30 +276,35 @@ pub enum Level {
     Level_1_2,
     /// Level 1.3: Reserved in standard, similar to Level 2.0.
     Level_1_3,
+
     /// Level 2.0: Max resolution 352x288 (CIF), 30 fps, 2 Mbps (Main), 2.5 Mbps (High)
     Level_2_0,
     /// Level 2.1: Max resolution 352x288 (CIF), 30 fps, 4 Mbps (Main), 5 Mbps (High)
     Level_2_1,
     /// Level 2.2: Max resolution 352x288 (CIF), 30 fps, 10 Mbps (Main), 12.5 Mbps (High)
     Level_2_2,
+
     /// Level 3.0: Max resolution 720x576 (SD), 30 fps, 10 Mbps (Main), 12.5 Mbps (High)
     Level_3_0,
     /// Level 3.1: Max resolution 1280x720 (HD), 30 fps, 14 Mbps (Main), 17.5 Mbps (High)
     Level_3_1,
     /// Level 3.2: Max resolution 1280x720 (HD), 60 fps, 20 Mbps (Main), 25 Mbps (High)
     Level_3_2,
+
     /// Level 4.0: Max resolution 1920x1080 (Full HD), 30 fps, 20 Mbps (Main), 25 Mbps (High)
     Level_4_0,
     /// Level 4.1: Max resolution 1920x1080 (Full HD), 60 fps, 50 Mbps (Main), 62.5 Mbps (High)
     Level_4_1,
     /// Level 4.2: Max resolution 1920x1080 (Full HD), 120 fps, 100 Mbps (Main), 125 Mbps (High)
     Level_4_2,
+
     /// Level 5.0: Max resolution 3840x2160 (4K), 30 fps, 135 Mbps (Main), 168.75 Mbps (High)
     Level_5_0,
     /// Level 5.1: Max resolution 3840x2160 (4K), 60 fps, 240 Mbps (Main), 300 Mbps (High)
     Level_5_1,
     /// Level 5.2: Max resolution 4096x2160 (4K Cinema), 60 fps, 480 Mbps (Main), 600 Mbps (High)
     Level_5_2,
+
     /// Level 6.0: Max resolution 8192x4320 (8K UHD), 30 fps, 240 Mbps (Main), 240 Mbps (High)
     Level_6_0,
     /// Level 6.1: Max resolution 8192x4320 (8K UHD), 60 fps, 480 Mbps (Main), 480 Mbps (High)
@@ -249,6 +339,53 @@ impl Level {
             Level::Level_6_0 => 60,
             Level::Level_6_1 => 61,
             Level::Level_6_2 => 62,
+        }
+    }
+
+    fn max_mbps(self) -> u32 {
+        self.limits().0
+    }
+
+    fn max_fs(self) -> u32 {
+        self.limits().1
+    }
+
+    fn max_br(self) -> u32 {
+        self.limits().3
+    }
+
+    /// ITU-T H.264 Table A-1 Level Limits
+    ///
+    /// 0 - Max macroblock processing rate MaxMBPS (MB/s)
+    /// 1 - Max frame size MaxFS (MBs)
+    /// 2 - Max decoded picture buffer size MaxDpbMbs (MBs)
+    /// 3 - Max video bit rate MaxBR (1000 bits/s, 1200 bits/s, cpbBrVclFactor bits/s, or cpbBrNalFactor bits/s)
+    /// 4 - Max CPB size MaxCPB (1000 bits, 1200 bits, cpbBrVclFactor bits, or cpbBrNalFactor bits)
+    /// 5 - Vertical MV component limit MaxVmvR (luma frame samples)
+    /// 6 - Min compression ratio MinCR
+    /// 7 - Max number of motion vectors per two consecutive MBs MaxMvsPer2Mb
+    fn limits(self) -> (u32, u32, u32, u32, u32, u32, u32, Option<u32>) {
+        match self {
+            Level::Level_1_0 => (1485, 99, 396, 64, 175, 64, 2, None),
+            Level::Level_1_B => (1485, 99, 396, 128, 350, 64, 2, None),
+            Level::Level_1_1 => (3000, 396, 900, 192, 500, 128, 2, None),
+            Level::Level_1_2 => (6000, 396, 2376, 384, 1000, 128, 2, None),
+            Level::Level_1_3 => (11880, 396, 2376, 768, 2000, 128, 2, None),
+            Level::Level_2_0 => (11880, 396, 2376, 2000, 2000, 128, 2, None),
+            Level::Level_2_1 => (19800, 792, 4752, 4000, 4000, 256, 2, None),
+            Level::Level_2_2 => (20250, 1620, 8100, 4000, 4000, 256, 2, None),
+            Level::Level_3_0 => (40500, 1620, 8100, 10000, 10000, 256, 2, Some(32)),
+            Level::Level_3_1 => (108000, 3600, 18000, 14000, 14000, 512, 4, Some(16)),
+            Level::Level_3_2 => (216000, 5120, 20480, 20000, 20000, 512, 4, Some(16)),
+            Level::Level_4_0 => (245760, 8192, 32768, 20000, 25000, 512, 4, Some(16)),
+            Level::Level_4_1 => (245760, 8192, 32768, 50000, 62500, 512, 2, Some(16)),
+            Level::Level_4_2 => (522240, 8704, 34816, 50000, 62500, 512, 2, Some(16)),
+            Level::Level_5_0 => (589824, 22080, 110400, 135000, 135000, 512, 2, Some(16)),
+            Level::Level_5_1 => (983040, 36864, 184320, 240000, 240000, 512, 2, Some(16)),
+            Level::Level_5_2 => (2073600, 36864, 184320, 240000, 240000, 512, 2, Some(16)),
+            Level::Level_6_0 => (4177920, 139264, 696320, 240000, 240000, 8192, 2, Some(16)),
+            Level::Level_6_1 => (8355840, 139264, 696320, 480000, 480000, 8192, 2, Some(16)),
+            Level::Level_6_2 => (16711680, 139264, 696320, 800000, 800000, 8192, 2, Some(16)),
         }
     }
 }
