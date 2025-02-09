@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 bytes = "1.10.0"
+ffmpeg = { package = "ffmpeg-next", version = "7.1.0" }
 openh264 = "0.7.1"
 openh264-sys2 = "0.7"
 thiserror = "2.0.11"

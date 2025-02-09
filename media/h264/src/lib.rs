@@ -3,6 +3,7 @@
 use profile_level_id::{ParseProfileLevelIdError, ProfileLevelId};
 use std::{cmp::min, fmt, num::ParseIntError, str::FromStr};
 
+pub mod ffmpeg;
 pub mod openh264;
 mod payload;
 pub mod profile_level_id;
