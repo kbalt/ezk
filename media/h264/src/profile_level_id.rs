@@ -25,7 +25,7 @@ impl Default for ProfileLevelId {
         Self {
             profile: Profile::Baseline,
             profile_iop: 0,
-            level: Level::Level_1_0,
+            level: Level::Level_3_1,
         }
     }
 }

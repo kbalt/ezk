@@ -1,77 +1,185 @@
-use std::ptr;
+use crate::{FmtpOptions, Level, PacketizationMode, Profile};
+use ffmpeg::{codec::Context, ffi::AV_OPT_SEARCH_CHILDREN, format::Pixel, Rational};
+use std::ffi::CStr;
 
-use ffmpeg::{
-    codec::{traits::Encoder, Context, Id},
-    format::Pixel,
-    Dictionary, Rational,
-};
+/// ffmpeg nvenc codec
+struct NvEnc {
+    codec: ffmpeg::Codec,
 
-#[test]
-fn test() {
-    let mtu = 1500;
+    /// H.264 level 6+ is available
+    has_lvl6: bool,
+    /// YUV422 support is available
+    has_422: bool,
+    /// 10bit encoding is available
+    has_high10: bool,
+}
 
-    ffmpeg::init().unwrap();
+impl NvEnc {
+    fn detect() -> Option<NvEnc> {
+        let codec = ffmpeg::encoder::find_by_name("h264_nvenc")?;
 
-    unsafe {
-        let mut device_ctx = ptr::null_mut();
+        let mut caps = NvEnc {
+            codec,
+            has_lvl6: false,
+            has_422: false,
+            has_high10: false,
+        };
 
-        let mut buf = vec![0u8; 1024];
-        println!(
-            "{}",
-            ffmpeg::sys::av_strerror(-542398533, buf.as_mut_ptr().cast(), 1024)
-        );
-        println!("{:?}", String::from_utf8_lossy(&buf));
+        unsafe {
+            let class = ((*codec.as_ptr()).priv_class).read_unaligned();
+            let mut option_ptr = class.option;
 
-        assert_eq!(
-            ffmpeg::sys::av_hwdevice_ctx_create(
-                &mut device_ctx,
-                ffmpeg::ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_VAAPI,
-                ptr::null(),
-                ptr::null_mut(),
-                0,
-            ),
-            0
-        );
+            loop {
+                let option = option_ptr.read_unaligned();
+                option_ptr = option_ptr.add(1);
 
-        let codec = ffmpeg::codec::encoder::find_by_name("h264_vaapi").unwrap();
-        let mut ctx = Context::new_with_codec(codec).encoder().video().unwrap();
-        ctx.set_format(Pixel::VAAPI);
-        ctx.set_width(1920);
-        ctx.set_height(1080);
-        let hwframe = ffmpeg::sys::av_hwframe_ctx_alloc(device_ctx);
-        let hwframe_data = (*hwframe).data.cast::<ffmpeg::sys::AVHWFramesContext>();
+                if option.name.is_null() {
+                    break;
+                }
 
-        (*hwframe_data).format = ffmpeg::sys::AVPixelFormat::AV_PIX_FMT_VAAPI;
-        (*hwframe_data).sw_format = ffmpeg::sys::AVPixelFormat::AV_PIX_FMT_NV12;
-        (*hwframe_data).width = 1920;
-        (*hwframe_data).height = 1920;
-        (*hwframe_data).initial_pool_size = 1920;
-        assert_eq!(ffmpeg::sys::av_hwframe_ctx_init(hwframe), 0);
+                let name = CStr::from_ptr(option.name);
+                caps.has_lvl6 |= name == c"6.0";
+                caps.has_high10 |= name == c"high10";
+                caps.has_422 |= name == c"high422";
+            }
+        }
+
+        Some(caps)
     }
-    // for device in ffmpeg::device::input::video() {
-    //     println!("Device: {} - {:?}", device.name(), device.description());
-    //     println!("\tExtensions: {:?}", device.extensions());
-    //     println!("\tMime Types: {:?}", device.mime_types());
-    //     // https://ffmpeg.org/doxygen/5.1/vaapi_encode_8c-example.html
-    // }
 
-    // let vaapi_frame = ffmpeg::frame::Video::new(Pixel::YUV420P, 1920, 1080);
-    // let c = vaapi_frame.converter(Pixel::VAAPI).unwrap();
-    // // https://github.com/FFmpeg/FFmpeg/blob/43be8d07281caca2e88bfd8ee2333633e1fb1a13/libavcodec/libopenh264enc.c#L70
-    // // https://github.com/FFmpeg/FFmpeg/blob/43be8d07281caca2e88bfd8ee2333633e1fb1a13/libavcodec/libx264.c#L1552
+    fn map_profile(&self, profile: Profile) -> Option<&'static CStr> {
+        match profile {
+            Profile::Baseline => Some(c"baseline"),
+            Profile::Main => Some(c"main"),
+            Profile::Extended => Some(c"baseline"),
+            Profile::High => Some(c"high"),
+            Profile::High10 => {
+                if self.has_high10 {
+                    Some(c"high10")
+                } else {
+                    None
+                }
+            }
+            Profile::High422 => {
+                if self.has_422 {
+                    Some(c"high422")
+                } else {
+                    None
+                }
+            }
+            Profile::High444Predictive => Some(c"high444p"),
+            Profile::CAVLC444 => None,
+        }
+    }
 
-    // let mut encoder = Context::new_with_codec(x).encoder().video().unwrap();
+    fn map_level(&self, level: Level) -> &'static CStr {
+        match level {
+            Level::Level_1_0 => c"1.0",
+            Level::Level_1_B => c"1.0b",
+            Level::Level_1_1 => c"1.1",
+            Level::Level_1_2 => c"1.2",
+            Level::Level_1_3 => c"1.3",
+            Level::Level_2_0 => c"2.0",
+            Level::Level_2_1 => c"2.1",
+            Level::Level_2_2 => c"2.2",
+            Level::Level_3_0 => c"3.0",
+            Level::Level_3_1 => c"3.1",
+            Level::Level_3_2 => c"3.2",
+            Level::Level_4_0 => c"4.0",
+            Level::Level_4_1 => c"4.1",
+            Level::Level_4_2 => c"4.2",
+            Level::Level_5_0 => c"5.0",
+            Level::Level_5_1 => c"5.1",
+            Level::Level_5_2 => c"5.2",
+            Level::Level_6_0 if self.has_lvl6 => c"6.0",
+            Level::Level_6_1 if self.has_lvl6 => c"6.1",
+            Level::Level_6_2 if self.has_lvl6 => c"6.2",
+            Level::Level_6_0 | Level::Level_6_1 | Level::Level_6_2 => c"5.2",
+        }
+    }
 
-    // encoder.set_time_base(Rational::new(1, 1000));
-    // encoder.set_format(Pixel::VAAPI);
-    // encoder.set_width(1920);
-    // encoder.set_height(1080);
-    // encoder
-    //     .open_with(Dictionary::from_iter([
-    //         ("allow_skip_frames", "true"),
-    //         ("device", "/dev/dri/renderD128"), // ("max_nal_size", mtu.to_string().as_str()),
-    //     ]))
-    //     .unwrap();
+    fn open(&self, options: &FmtpOptions) -> ffmpeg::encoder::Video {
+        let mut codec = Context::new_with_codec(self.codec)
+            .encoder()
+            .video()
+            .expect("h264 is a video codec");
 
-    // encoder.set_dia_size(value);
+        codec.set_time_base(Rational::new(1, 1000));
+        codec.set_format(Pixel::YUV420P);
+        codec.set_width(dbg!(options.max_resolution(1920, 1080).0));
+        codec.set_height(dbg!(options.max_resolution(1920, 1080).1));
+        codec.set_frame_rate(Some(1.0));
+
+        let bitrate_bps = (options
+            .max_br
+            .unwrap_or_else(|| options.profile_level_id.level.max_br())
+            as usize)
+            * 1000;
+
+        codec.set_bit_rate(bitrate_bps);
+        codec.set_max_bit_rate(bitrate_bps);
+
+        unsafe {
+            assert_eq!(
+                ffmpeg::sys::av_opt_set(
+                    codec.as_mut_ptr().cast(),
+                    c"profile".as_ptr(),
+                    self.map_profile(options.profile_level_id.profile)
+                        .unwrap()
+                        .as_ptr(),
+                    AV_OPT_SEARCH_CHILDREN,
+                ),
+                0
+            );
+
+            assert_eq!(
+                ffmpeg::sys::av_opt_set(
+                    codec.as_mut_ptr().cast(),
+                    c"level".as_ptr(),
+                    self.map_level(options.profile_level_id.level).as_ptr(),
+                    AV_OPT_SEARCH_CHILDREN,
+                ),
+                0
+            );
+        }
+
+        match options.packetization_mode {
+            PacketizationMode::SingleNAL => {
+                // TODO: do not hardcode the mtu
+                // dict.set("single-slice-intra-refresh", "false");
+                // dict.set("max_slice_size", "1500");
+            }
+            PacketizationMode::NonInterleavedMode => todo!(),
+            PacketizationMode::InterleavedMode => todo!(),
+        }
+
+        codec.open().unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn run_nvenc() {
+        ffmpeg::init().unwrap();
+        ffmpeg::log::set_level(ffmpeg::log::Level::Trace);
+
+        let mut f = ffmpeg::frame::Video::new(Pixel::YUV420P, 1920, 1080);
+        rand::fill(f.data_mut(0));
+
+        let mut open = NvEnc::detect().unwrap().open(&FmtpOptions::default());
+
+        loop {
+            open.send_frame(&f).unwrap();
+            rand::fill(f.data_mut(0));
+            std::thread::sleep(Duration::from_millis(16));
+            let mut packet = ffmpeg::Packet::empty();
+            while open.receive_packet(&mut packet).is_ok() {
+                println!("{}", packet.size());
+            }
+        }
+    }
 }

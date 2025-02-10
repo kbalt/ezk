@@ -1,6 +1,7 @@
 //! Utility functions for openh264
+
 use crate::{profile_level_id::ProfileLevelId, FmtpOptions, Level, PacketizationMode, Profile};
-use openh264_sys2::API;
+use openh264_sys2::API as _;
 use std::mem::MaybeUninit;
 
 fn map_profile(profile: Profile) -> openh264::encoder::Profile {

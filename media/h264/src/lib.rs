@@ -1,9 +1,11 @@
 #![warn(unreachable_pub)]
 
 use profile_level_id::{ParseProfileLevelIdError, ProfileLevelId};
-use std::{cmp::min, fmt, num::ParseIntError, str::FromStr};
+use std::{fmt, num::ParseIntError, str::FromStr};
 
+#[cfg(feature = "ffmpeg")]
 pub mod ffmpeg;
+#[cfg(feature = "openh264")]
 pub mod openh264;
 mod payload;
 pub mod profile_level_id;
@@ -63,9 +65,7 @@ impl FmtpOptions {
     pub fn max_resolution(&self, num: u32, denom: u32) -> (u32, u32) {
         let max_fs = self
             .max_fs
-            .unwrap_or_else(|| self.profile_level_id.level.max_fs())
-            // Limit max FS to avoid integer overflows
-            .min(8_388_607);
+            .unwrap_or_else(|| self.profile_level_id.level.max_fs());
 
         resolution_from_max_fs(num, denom, max_fs)
     }
@@ -119,6 +119,8 @@ fn resolution_from_max_fs(num: u32, denom: u32, max_fs: u32) -> (u32, u32) {
         a
     }
 
+    // Limit max FS to avoid integer overflows
+    let max_fs = max_fs.min(8_388_607);
     let max_pixels = max_fs.saturating_mul(256);
     let divisor = greatest_common_divisor(num, denom);
     let num = num / divisor;

@@ -227,6 +227,7 @@ impl H264DePayloader {
         &mut self,
         packet: &[u8],
         mut out: impl BufMut,
+        mut is_keyframe: Option<&mut bool>,
     ) -> Result<(), H264DePayloadError> {
         if packet.is_empty() {
             return Err(H264DePayloadError::EmptyPacket);
@@ -237,7 +238,10 @@ impl H264DePayloader {
 
         match nal_unit_type {
             1..=23 => {
-                let is_keyframe = nal_unit_type == NAL_UNIT_IDR;
+                if let Some(is_keyframe) = is_keyframe {
+                    *is_keyframe |= nal_unit_type == NAL_UNIT_IDR
+                };
+
                 self.format.write_prefix(packet.len(), &mut out);
                 out.put_slice(packet);
                 Ok(())
@@ -255,8 +259,10 @@ impl H264DePayloader {
                     stap_a_payload = remaining;
 
                     let b0 = packet[0];
-                    let nal_unit_type = b0 & NAL_UNIT_HEADER_TYPE_MASK;
-                    let is_keyframe = nal_unit_type == NAL_UNIT_IDR;
+                    if let Some(is_keyframe) = is_keyframe.take() {
+                        let nal_unit_type = b0 & NAL_UNIT_HEADER_TYPE_MASK;
+                        *is_keyframe |= nal_unit_type == NAL_UNIT_IDR
+                    };
                     self.format.write_prefix(packet.len(), &mut out);
                     out.put_slice(packet);
                 }
@@ -282,7 +288,9 @@ impl H264DePayloader {
                 let nal_unit_ref_idc = b0 & NAL_UNIT_HEADER_NRI_MASK;
                 let fragmented_nal_unit_type = b1 & NAL_UNIT_HEADER_TYPE_MASK;
 
-                let is_keyframe = fragmented_nal_unit_type == NAL_UNIT_IDR;
+                if let Some(is_keyframe) = is_keyframe {
+                    *is_keyframe |= fragmented_nal_unit_type == NAL_UNIT_IDR
+                };
 
                 let fua = self.fua.take().expect("just set the FU-A buffer");
                 self.format.write_prefix(fua.len() + 1, &mut out);
@@ -365,7 +373,7 @@ mod test {
         let mut pkt = H264DePayloader::new(H264DePayloaderOutputFormat::AnnexB);
         let mut out: Vec<u8> = Vec::new();
         let single_payload = &[0x90, 0x90, 0x90];
-        pkt.depayload(single_payload, &mut out).unwrap();
+        pkt.depayload(single_payload, &mut out, None).unwrap();
         let single_payload_unmarshaled = &[0x00, 0x00, 0x00, 0x01, 0x90, 0x90, 0x90];
         assert_eq!(
             out, single_payload_unmarshaled,
@@ -378,7 +386,7 @@ mod test {
         let mut pkt = H264DePayloader::new(H264DePayloaderOutputFormat::Avc);
         let mut out: Vec<u8> = Vec::new();
         let single_payload = &[0x90, 0x90, 0x90];
-        pkt.depayload(single_payload, &mut out).unwrap();
+        pkt.depayload(single_payload, &mut out, None).unwrap();
         let single_payload_unmarshaled_avc = &[0x00, 0x00, 0x00, 0x03, 0x90, 0x90, 0x90];
         assert_eq!(
             out, single_payload_unmarshaled_avc,
@@ -405,7 +413,7 @@ mod test {
 
         let mut large_out = Vec::new();
         for p in &large_payload_packetized {
-            pkt.depayload(*p, &mut large_out).unwrap();
+            pkt.depayload(*p, &mut large_out, None).unwrap();
         }
         assert_eq!(
             large_out, large_payload,
@@ -432,7 +440,7 @@ mod test {
 
         let mut large_out_avc = Vec::new();
         for p in &large_payload_packetized {
-            avc_pkt.depayload(*p, &mut large_out_avc).unwrap();
+            avc_pkt.depayload(*p, &mut large_out_avc, None).unwrap();
         }
         assert_eq!(
             large_out_avc, large_payload_avc,
@@ -454,7 +462,8 @@ mod test {
         let mut pkt = H264DePayloader::new(H264DePayloaderOutputFormat::AnnexB);
 
         let mut out = Vec::new();
-        pkt.depayload(single_payload_multi_nalu, &mut out).unwrap();
+        pkt.depayload(single_payload_multi_nalu, &mut out, None)
+            .unwrap();
         assert_eq!(
             out, single_payload_multi_nalu_unmarshaled,
             "Failed to unmarshal a single packet with multiple NALUs"
@@ -475,7 +484,8 @@ mod test {
         let mut pkt = H264DePayloader::new(H264DePayloaderOutputFormat::Avc);
 
         let mut out = Vec::new();
-        pkt.depayload(single_payload_multi_nalu, &mut out).unwrap();
+        pkt.depayload(single_payload_multi_nalu, &mut out, None)
+            .unwrap();
         assert_eq!(
             out, single_payload_multi_nalu_unmarshaled_avc,
             "Failed to unmarshal a single packet with multiple NALUs into avc stream"
@@ -529,6 +539,6 @@ mod test {
 
         let mut pck = H264DePayloader::new(H264DePayloaderOutputFormat::AnnexB);
         let mut out = vec![];
-        pck.depayload(PACKET, &mut out).unwrap();
+        pck.depayload(PACKET, &mut out, None).unwrap();
     }
 }
