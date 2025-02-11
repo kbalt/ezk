@@ -1,6 +1,10 @@
 //! Utility functions for openh264
 
-use crate::{profile_level_id::ProfileLevelId, FmtpOptions, Level, PacketizationMode, Profile};
+use crate::{
+    profile_level_id::ProfileLevelId, FmtpOptions, H264EncoderConfig, Level, PacketizationMode,
+    Profile,
+};
+use openh264::encoder::{BitRate, IntraFramePeriod, QpRange};
 use openh264_sys2::API as _;
 use std::mem::MaybeUninit;
 
@@ -44,15 +48,28 @@ fn map_level(level: Level) -> openh264::encoder::Level {
 }
 
 /// Create a openh264 encoder config from the parsed [`FmtpOptions`]
-pub fn openh264_encoder_config(fmtp: &FmtpOptions, mtu: u32) -> openh264::encoder::EncoderConfig {
+pub fn openh264_encoder_config(c: H264EncoderConfig) -> openh264::encoder::EncoderConfig {
     let mut config = openh264::encoder::EncoderConfig::new()
-        .bitrate(openh264::encoder::BitRate::from_bps(fmtp.max_bitrate()))
-        .profile(map_profile(fmtp.profile_level_id.profile))
-        .level(map_level(fmtp.profile_level_id.level));
+        .profile(map_profile(c.profile))
+        .level(map_level(c.level));
 
-    match fmtp.packetization_mode {
-        PacketizationMode::SingleNAL => config = config.max_slice_len(mtu),
-        PacketizationMode::NonInterleavedMode | PacketizationMode::InterleavedMode => {}
+    if let Some((qmin, qmax)) = c.qp {
+        config = config.qp(QpRange::new(
+            qmin.try_into().expect("qmin must be 0..=51"),
+            qmax.try_into().expect("qmax must be 0..=51"),
+        ));
+    }
+
+    if let Some(gop) = c.gop {
+        config = config.intra_frame_period(IntraFramePeriod::from_num_frames(gop));
+    }
+
+    if let Some(bitrate) = c.bitrate {
+        config = config.bitrate(BitRate::from_bps(bitrate))
+    }
+
+    if let Some(max_slice_len) = c.max_slice_len {
+        config = config.max_slice_len(max_slice_len as u32);
     }
 
     config

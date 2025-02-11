@@ -14,6 +14,65 @@ pub use payload::{
     H264DePayloadError, H264DePayloader, H264DePayloaderOutputFormat, H264Payloader,
 };
 
+/// Generic H.264 encoder config
+pub struct H264EncoderConfig {
+    /// H.264 encoding profile to use. Defines the feature-set the encoder may use.
+    pub profile: Profile,
+
+    /// H264 encoding level. Defines default constraints like frame size, fps and more.
+    pub level: Level,
+
+    /// width & height of the image to be encoded.
+    ///
+    /// This value is only used for the initialization and should represent to largest allowed resolution.
+    /// Some encoders will not be able to handle larger resolutions later without being reinitialized.
+    pub resolution: (u32, u32),
+
+    /// Define the range of QP values the encoder is allowed use.
+    ///
+    /// Allowed values range from 0 to 51, where 0 is the best quality and 51 the worst with the most compression.
+    ///
+    /// Default is (17..=28) but manual tuning is recommended!
+    pub qp: Option<(u32, u32)>,
+
+    /// Keyframe interval in frames.
+    pub gop: Option<u32>,
+
+    /// Target bitrate in bits/s
+    pub bitrate: Option<u32>,
+
+    /// Override the level's maximum bitrate in bits/s
+    pub max_bitrate: Option<u32>,
+
+    /// Limit the output slice size.
+    ///
+    /// Required if the packetization mode is SingleNAL which doesn't support fragmentation units.
+    pub max_slice_len: Option<usize>,
+}
+
+impl H264EncoderConfig {
+    pub fn from_fmtp(fmtp: FmtpOptions) -> Self {
+        Self {
+            profile: fmtp.profile_level_id.profile,
+            level: fmtp.profile_level_id.level,
+            resolution: fmtp.max_resolution(1, 1),
+            qp: None,
+            gop: None,
+            bitrate: None,
+            max_bitrate: Some(fmtp.max_bitrate()),
+            max_slice_len: {
+                match fmtp.packetization_mode {
+                    // TODO: pass MTU as parameter?
+                    PacketizationMode::SingleNAL => Some(1300),
+                    PacketizationMode::NonInterleavedMode | PacketizationMode::InterleavedMode => {
+                        None
+                    }
+                }
+            },
+        }
+    }
+}
+
 /// Specifies the RTP packetization mode
 #[derive(Default, Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum PacketizationMode {
@@ -102,9 +161,11 @@ impl FmtpOptions {
         max_mbps / frame_size
     }
 
+    /// Returns the maximum bitrate in bit/s
     pub fn max_bitrate(&self) -> u32 {
         self.max_br
             .unwrap_or_else(|| self.profile_level_id.level.max_br())
+            * 1000
     }
 }
 
@@ -120,7 +181,6 @@ fn resolution_from_max_fs(num: u32, denom: u32, max_fs: u32) -> (u32, u32) {
     }
 
     // Limit max FS to avoid integer overflows
-    let max_fs = max_fs.min(8_388_607);
     let max_pixels = max_fs.saturating_mul(256);
     let divisor = greatest_common_divisor(num, denom);
     let num = num / divisor;

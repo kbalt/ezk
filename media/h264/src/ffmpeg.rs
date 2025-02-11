@@ -1,9 +1,12 @@
-use crate::{FmtpOptions, Level, PacketizationMode, Profile};
+use crate::{H264EncoderConfig, Level, Profile};
 use ffmpeg::{codec::Context, ffi::AV_OPT_SEARCH_CHILDREN, format::Pixel, Rational};
-use std::ffi::CStr;
+use std::{
+    ffi::CStr,
+    ptr::{self, addr_of},
+};
 
 /// ffmpeg nvenc codec
-struct NvEnc {
+pub struct NvEnc {
     codec: ffmpeg::Codec,
 
     /// H.264 level 6+ is available
@@ -14,11 +17,21 @@ struct NvEnc {
     has_high10: bool,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum NvEncOpenError {
+    #[error("packetization mode SingleNAL is not supported")]
+    PacketizationModeSingleNalNotSupported,
+    #[error("profile {0:?} not supported")]
+    ProfileNotSupported(Profile),
+    #[error("FFmpeg return an error{0}")]
+    FFmpeg(#[from] ffmpeg::Error),
+}
+
 impl NvEnc {
-    fn detect() -> Option<NvEnc> {
+    pub fn detect() -> Option<NvEnc> {
         let codec = ffmpeg::encoder::find_by_name("h264_nvenc")?;
 
-        let mut caps = NvEnc {
+        let mut this = NvEnc {
             codec,
             has_lvl6: false,
             has_422: false,
@@ -26,25 +39,23 @@ impl NvEnc {
         };
 
         unsafe {
-            let class = ((*codec.as_ptr()).priv_class).read_unaligned();
-            let mut option_ptr = class.option;
-
+            // av_opt_next takes a double pointer of AVClass (*const *const AVClass)
+            let priv_class = addr_of!((*codec.as_ptr()).priv_class);
+            let mut prev = ptr::null();
             loop {
-                let option = option_ptr.read_unaligned();
-                option_ptr = option_ptr.add(1);
-
-                if option.name.is_null() {
+                prev = ffmpeg::sys::av_opt_next(priv_class.cast(), prev);
+                if prev.is_null() {
                     break;
                 }
 
-                let name = CStr::from_ptr(option.name);
-                caps.has_lvl6 |= name == c"6.0";
-                caps.has_high10 |= name == c"high10";
-                caps.has_422 |= name == c"high422";
+                let name = CStr::from_ptr((*prev).name);
+                this.has_lvl6 |= name == c"6.0";
+                this.has_high10 |= name == c"high10";
+                this.has_422 |= name == c"high422";
             }
         }
 
-        Some(caps)
+        Some(this)
     }
 
     fn map_profile(&self, profile: Profile) -> Option<&'static CStr> {
@@ -98,67 +109,87 @@ impl NvEnc {
         }
     }
 
-    fn open(&self, options: &FmtpOptions) -> ffmpeg::encoder::Video {
+    pub fn open(
+        &self,
+        config: H264EncoderConfig,
+    ) -> Result<ffmpeg::encoder::Video, NvEncOpenError> {
+        if config.max_slice_len.is_some() {
+            return Err(NvEncOpenError::PacketizationModeSingleNalNotSupported);
+        }
+
         let mut codec = Context::new_with_codec(self.codec)
             .encoder()
             .video()
             .expect("h264 is a video codec");
 
-        codec.set_time_base(Rational::new(1, 1000));
+        // Set the time base to nanoseconds or else nvenc will throw a fit complaining about the level being invalid?
+        codec.set_time_base(Rational::new(1, 1_000_000_000));
         codec.set_format(Pixel::YUV420P);
-        codec.set_width(dbg!(options.max_resolution(1920, 1080).0));
-        codec.set_height(dbg!(options.max_resolution(1920, 1080).1));
-        codec.set_frame_rate(Some(1.0));
+        codec.set_width(config.resolution.0);
+        codec.set_height(config.resolution.1);
 
-        let bitrate_bps = (options
-            .max_br
-            .unwrap_or_else(|| options.profile_level_id.level.max_br())
-            as usize)
-            * 1000;
-
-        codec.set_bit_rate(bitrate_bps);
-        codec.set_max_bit_rate(bitrate_bps);
-
+        // Not using the set_ function to avoid casting to usize
         unsafe {
-            assert_eq!(
-                ffmpeg::sys::av_opt_set(
-                    codec.as_mut_ptr().cast(),
-                    c"profile".as_ptr(),
-                    self.map_profile(options.profile_level_id.profile)
-                        .unwrap()
-                        .as_ptr(),
-                    AV_OPT_SEARCH_CHILDREN,
-                ),
-                0
-            );
-
-            assert_eq!(
-                ffmpeg::sys::av_opt_set(
-                    codec.as_mut_ptr().cast(),
-                    c"level".as_ptr(),
-                    self.map_level(options.profile_level_id.level).as_ptr(),
-                    AV_OPT_SEARCH_CHILDREN,
-                ),
-                0
-            );
-        }
-
-        match options.packetization_mode {
-            PacketizationMode::SingleNAL => {
-                // TODO: do not hardcode the mtu
-                // dict.set("single-slice-intra-refresh", "false");
-                // dict.set("max_slice_size", "1500");
+            if let Some(bitrate) = config.bitrate {
+                (*codec.as_mut_ptr()).bit_rate = i64::from(bitrate);
             }
-            PacketizationMode::NonInterleavedMode => todo!(),
-            PacketizationMode::InterleavedMode => todo!(),
+
+            if let Some(max_bitrate) = config.max_bitrate {
+                (*codec.as_mut_ptr()).rc_max_rate = i64::from(max_bitrate);
+            }
         }
 
-        codec.open().unwrap()
+        if let Some((qmin, qmax)) = config.qp {
+            codec.set_qmin(qmin.try_into().expect("qmin must be 0..=51"));
+            codec.set_qmax(qmax.try_into().expect("qmax must be 0..=51"));
+        }
+
+        if let Some(gop) = config.gop {
+            codec.set_gop(gop);
+        }
+
+        set_opt(&mut codec, c"tune", c"ll")?;
+
+        set_opt(
+            &mut codec,
+            c"profile",
+            self.map_profile(config.profile)
+                .ok_or(NvEncOpenError::ProfileNotSupported(config.profile))?,
+        )?;
+
+        set_opt(&mut codec, c"level", self.map_level(config.level))?;
+
+        codec.open().map_err(NvEncOpenError::FFmpeg)
+    }
+}
+
+fn set_opt(
+    codec: &mut ffmpeg::encoder::video::Video,
+    key: &CStr,
+    value: &CStr,
+) -> Result<(), ffmpeg::Error> {
+    unsafe {
+        err(ffmpeg::sys::av_opt_set(
+            codec.as_mut_ptr().cast(),
+            key.as_ptr(),
+            value.as_ptr(),
+            AV_OPT_SEARCH_CHILDREN,
+        ))
+    }
+}
+
+fn err(i: i32) -> Result<(), ffmpeg::Error> {
+    if i < 0 {
+        Err(ffmpeg::Error::from(i))
+    } else {
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::FmtpOptions;
+
     use super::*;
     use std::time::Duration;
 
@@ -167,14 +198,22 @@ mod tests {
         ffmpeg::init().unwrap();
         ffmpeg::log::set_level(ffmpeg::log::Level::Trace);
 
-        let mut f = ffmpeg::frame::Video::new(Pixel::YUV420P, 1920, 1080);
+        let mut f = ffmpeg::frame::Video::new(Pixel::YUV420P, 1280, 720 - 16);
         rand::fill(f.data_mut(0));
 
-        let mut open = NvEnc::detect().unwrap().open(&FmtpOptions::default());
+        let mut config = H264EncoderConfig::from_fmtp(FmtpOptions::default());
+        config.max_slice_len = None;
+        println!("resolution: {:?}", config.resolution);
+        config.resolution = (1280, 720);
+
+        let mut open = NvEnc::detect().unwrap().open(config).unwrap();
+
+        open.set_width(1280);
+        open.set_height(720 - 16);
 
         loop {
             open.send_frame(&f).unwrap();
-            rand::fill(f.data_mut(0));
+            // rand::fill(f.data_mut(0));
             std::thread::sleep(Duration::from_millis(16));
             let mut packet = ffmpeg::Packet::empty();
             while open.receive_packet(&mut packet).is_ok() {
