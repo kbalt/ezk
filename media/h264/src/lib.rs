@@ -3,8 +3,6 @@
 use profile_level_id::{ParseProfileLevelIdError, ProfileLevelId};
 use std::{fmt, num::ParseIntError, str::FromStr};
 
-#[cfg(feature = "ffmpeg")]
-pub mod ffmpeg;
 #[cfg(feature = "openh264")]
 pub mod openh264;
 mod payload;
