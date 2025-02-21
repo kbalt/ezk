@@ -1,7 +1,7 @@
 use crate::{MediaBackend, CONTENT_TYPE_SDP};
 use bytes::Bytes;
 use bytesstr::BytesStr;
-use session::SessionDescription;
+use rtc_proto::SessionDescription;
 use sip_types::{header::typed::ContentType, StatusCode};
 use sip_ua::invite::session::{InviteSession, InviteSessionEvent, ReInviteReceived};
 use std::fmt::Debug;

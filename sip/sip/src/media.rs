@@ -1,8 +1,8 @@
-use rtp::RtpPacket;
-use session::{
+use rtc_proto::{
     AsyncEvent, AsyncSdpSession, Direction, MediaId, NegotiatedCodec, SessionDescription,
     TransportConnectionState, TransportId,
 };
+use rtp::RtpPacket;
 use std::{
     borrow::Cow,
     collections::{HashMap, VecDeque},
@@ -49,8 +49,8 @@ pub trait MediaBackend {
 }
 
 impl MediaBackend for AsyncSdpSession {
-    type Error = session::Error;
-    type Event = session::AsyncEvent;
+    type Error = rtc_proto::Error;
+    type Event = rtc_proto::AsyncEvent;
 
     fn has_media(&self) -> bool {
         self.has_media()

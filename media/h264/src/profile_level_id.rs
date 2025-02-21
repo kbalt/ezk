@@ -16,7 +16,6 @@ pub mod profile_iop_consts {
 #[derive(Debug, Clone, Copy)]
 pub struct ProfileLevelId {
     pub profile: Profile,
-    pub profile_iop: u8,
     pub level: Level,
 }
 
@@ -24,7 +23,6 @@ impl Default for ProfileLevelId {
     fn default() -> Self {
         Self {
             profile: Profile::Baseline,
-            profile_iop: 0,
             level: Level::Level_3_1,
         }
     }
@@ -44,17 +42,54 @@ impl ProfileLevelId {
         profile_iop: u8,
         level_idc: u8,
     ) -> Result<Self, ProfileLevelIdFromBytesError> {
-        let profile = match profile_idc {
-            66 => Profile::Baseline,
-            77 => Profile::Main,
-            88 => Profile::Extended,
-            100 => Profile::High,
-            110 => Profile::High10,
-            122 => Profile::High422,
-            244 => Profile::High444Predictive,
-            44 => Profile::CAVLC444,
-            _ => return Err(ProfileLevelIdFromBytesError::UnknownProfileIdc(profile_iop)),
-        };
+        const fn bitpattern(ignore: u8, pattern: u8) -> impl Fn(u8) -> bool {
+            move |input| {
+                let input = input & !ignore;
+                pattern == input
+            }
+        }
+
+        #[rustfmt::skip]
+        let table = [
+            // Constrained baseline
+            (0x42, bitpattern(0b1011_0000, 0b0100_0000), Profile::ConstrainedBaseline),
+            (0x4D, bitpattern(0b0111_0000, 0b1000_0000), Profile::ConstrainedBaseline),
+            (0x58, bitpattern(0b0011_0000, 0b1100_0000), Profile::ConstrainedBaseline),
+            // Baseline
+            (0x42, bitpattern(0b1011_0000, 0b0000_0000), Profile::Baseline),
+            (0x58, bitpattern(0b0011_0000, 0b1000_0000), Profile::Baseline),
+            // Main
+            (0x4D, bitpattern(0b0101_0000, 0b0000_0000), Profile::Main),
+            // Extended
+            (0x58, bitpattern(0b0011_0000, 0b0000_0000), Profile::Extended),
+            // High
+            (0x64, bitpattern(0, 0), Profile::High),
+            // High10
+            (0x6E, bitpattern(0, 0), Profile::High10),
+            // High422
+            (0x7A, bitpattern(0, 0), Profile::High422),
+            // High444Predictive
+            (0xF4, bitpattern(0, 0), Profile::High444Predictive),
+            // High10 Intra
+            (0x6E, bitpattern(0, 0b001_0000), Profile::High10Intra),
+            // High422 Intra
+            (0x7A, bitpattern(0, 0b001_0000), Profile::High422Intra),
+            // High444 Intra
+            (0xF4, bitpattern(0, 0b001_0000), Profile::High444Intra),
+            // CAVLC444 Intra
+            (0x2C, bitpattern(0, 0b001_0000), Profile::CAVLC444Intra),
+        ];
+
+        let profile = table
+            .iter()
+            .find_map(|(p, pattern, profile)| {
+                if profile_idc != *p && pattern(profile_iop) {
+                    Some(*profile)
+                } else {
+                    None
+                }
+            })
+            .ok_or(ProfileLevelIdFromBytesError::UnknownProfileIdc(profile_idc))?;
 
         let level = match level_idc {
             10 => Level::Level_1_0,
@@ -85,11 +120,7 @@ impl ProfileLevelId {
             _ => return Err(ProfileLevelIdFromBytesError::UnknownLevelIdc(level_idc)),
         };
 
-        Ok(Self {
-            profile,
-            profile_iop,
-            level,
-        })
+        Ok(Self { profile, level })
     }
 }
 
@@ -122,7 +153,7 @@ impl FromStr for ProfileLevelId {
 
 impl fmt::Display for ProfileLevelId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut profile_iop = self.profile_iop;
+        let mut profile_iop = self.profile.profile_iop();
 
         if matches!(self.level, Level::Level_1_B) {
             profile_iop |= profile_iop_consts::CONSTRAINT_SET3_FLAG;

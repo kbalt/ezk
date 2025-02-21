@@ -21,7 +21,7 @@ rtp = { package = "ezk-rtp", version = "0.3.0", path = "media/rtp" }
 sdp-types = { package = "ezk-sdp-types", version = "0.5.0", path = "media/sdp-types" }
 stun = { package = "ezk-stun", version = "0.4.0", path = "media/stun" }
 stun-types = { package = "ezk-stun-types", version = "0.3.0", path = "media/stun-types" }
-session = { package = "ezk-session", version = "0.1.0", path = "media/session" }
+rtc-proto = { package = "ezk-rtc-proto", version = "0.1.0", path = "media/rtc-proto" }
 
 rustls-pki-types = { version = "1", features = ["std"] }
 tokio-native-tls = { version = "0.3" }

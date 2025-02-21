@@ -15,5 +15,5 @@ openh264 = { version = "0.7.1", optional = true }
 openh264-sys2 = { version = "0.7.1", optional = true }
 
 [features]
-default = []
+default = ["openh264"]
 openh264 = ["dep:openh264", "dep:openh264-sys2"]

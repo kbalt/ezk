@@ -9,15 +9,17 @@ use openh264_sys2::API as _;
 use std::mem::MaybeUninit;
 
 fn map_profile(profile: Profile) -> openh264::encoder::Profile {
+    use Profile::*;
+
     match profile {
-        Profile::Baseline => openh264::encoder::Profile::Baseline,
-        Profile::Main => openh264::encoder::Profile::Main,
-        Profile::Extended => openh264::encoder::Profile::Extended,
-        Profile::High => openh264::encoder::Profile::High,
-        Profile::High10 => openh264::encoder::Profile::High10,
-        Profile::High422 => openh264::encoder::Profile::High422,
-        Profile::High444Predictive => openh264::encoder::Profile::High444,
-        Profile::CAVLC444 => openh264::encoder::Profile::CAVLC444,
+        ConstrainedBaseline | Baseline => openh264::encoder::Profile::Baseline,
+        Main => openh264::encoder::Profile::Main,
+        Extended => openh264::encoder::Profile::Extended,
+        High => openh264::encoder::Profile::High,
+        High10 | High10Intra => openh264::encoder::Profile::High10,
+        High422 | High422Intra => openh264::encoder::Profile::High422,
+        High444Predictive | High444Intra => openh264::encoder::Profile::High444,
+        CAVLC444Intra => openh264::encoder::Profile::CAVLC444,
     }
 }
 

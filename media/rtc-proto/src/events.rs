@@ -129,28 +129,28 @@ pub enum TransportChange {
     RemoveRtcpSocket(TransportId),
 }
 
-// TODO; can this be removed because it too complex for something so simple
-pub(crate) struct TransportRequiredChanges<'a> {
-    pub(crate) id: TransportId,
-    pub(crate) changes: &'a mut Vec<TransportChange>,
-}
+// // TODO; can this be removed because it too complex for something so simple
+// pub(crate) struct TransportRequiredChanges<'a> {
+//     pub(crate) id: TransportId,
+//     pub(crate) changes: &'a mut Vec<TransportChange>,
+// }
 
-impl<'a> TransportRequiredChanges<'a> {
-    pub(crate) fn new(id: TransportId, changes: &'a mut Vec<TransportChange>) -> Self {
-        Self { id, changes }
-    }
+// impl<'a> TransportRequiredChanges<'a> {
+//     pub(crate) fn new(id: TransportId, changes: &'a mut Vec<TransportChange>) -> Self {
+//         Self { id, changes }
+//     }
 
-    pub(crate) fn require_socket(&mut self) {
-        self.changes.push(TransportChange::CreateSocket(self.id))
-    }
+//     pub(crate) fn require_socket(&mut self) {
+//         self.changes.push(TransportChange::CreateSocket(self.id))
+//     }
 
-    pub(crate) fn require_socket_pair(&mut self) {
-        self.changes
-            .push(TransportChange::CreateSocketPair(self.id))
-    }
+//     pub(crate) fn require_socket_pair(&mut self) {
+//         self.changes
+//             .push(TransportChange::CreateSocketPair(self.id))
+//     }
 
-    pub(crate) fn remove_rtcp_socket(&mut self) {
-        self.changes
-            .push(TransportChange::RemoveRtcpSocket(self.id));
-    }
-}
+//     pub(crate) fn remove_rtcp_socket(&mut self) {
+//         self.changes
+//             .push(TransportChange::RemoveRtcpSocket(self.id));
+//     }
+// }

@@ -21,7 +21,7 @@ sip-core.workspace = true
 sip-types.workspace = true
 sip-ua.workspace = true
 sip-auth.workspace = true
-session.workspace = true
+rtc-proto.workspace = true
 rtp.workspace = true
 
 tokio-rustls = { workspace = true, optional = true }

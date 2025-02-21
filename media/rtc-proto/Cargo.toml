@@ -1,5 +1,5 @@
 [package]
-name = "ezk-session"
+name = "ezk-rtc-proto"
 version = "0.1.0"
 description = "SDP based media sessions"
 edition.workspace = true

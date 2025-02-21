@@ -1,6 +1,6 @@
 use crate::{Call, MediaBackend, CONTENT_TYPE_SDP};
 use bytesstr::BytesStr;
-use session::{ParseSessionDescriptionError, SessionDescription};
+use rtc_proto::{ParseSessionDescriptionError, SessionDescription};
 use sip_core::{Endpoint, IncomingRequest};
 use sip_types::{
     header::{

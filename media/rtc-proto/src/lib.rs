@@ -8,7 +8,7 @@ use bytes::Bytes;
 use bytesstr::BytesStr;
 use events::{
     IceConnectionStateChanged, IceGatheringStateChanged, TransportChange,
-    TransportConnectionStateChanged, TransportRequiredChanges,
+    TransportConnectionStateChanged,
 };
 use ice::{Component, IceAgent, IceConnectionState, IceGatheringState, ReceivedPkt};
 use local_media::LocalMedia;
@@ -363,8 +363,9 @@ impl SdpSession {
             BundlePolicy::MaxCompat => {
                 let standalone_transport_id = self.transports.insert_with_key(|id| {
                     TransportEntry::TransportBuilder(TransportBuilder::new(
+                        id,
                         &mut self.transport_state,
-                        TransportRequiredChanges::new(id, &mut self.transport_changes),
+                        &mut self.transport_changes,
                         transport_type,
                         self.options.rtcp_mux_policy,
                         self.options.offer_ice,
@@ -383,8 +384,9 @@ impl SdpSession {
                 } else {
                     self.transports.insert_with_key(|id| {
                         TransportEntry::TransportBuilder(TransportBuilder::new(
+                            id,
                             &mut self.transport_state,
-                            TransportRequiredChanges::new(id, &mut self.transport_changes),
+                            &mut self.transport_changes,
                             transport_type,
                             self.options.rtcp_mux_policy,
                             self.options.offer_ice,

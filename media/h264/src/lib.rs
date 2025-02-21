@@ -132,7 +132,7 @@ impl FmtpOptions {
             .max_mbps
             .unwrap_or_else(|| self.profile_level_id.level.max_mbps());
 
-        let max_fs = max_mbps / fps;
+        let max_fs = max_mbps / fps.max(1);
 
         resolution_from_max_fs(num, denom, max_fs)
     }
@@ -146,7 +146,7 @@ impl FmtpOptions {
             .max_mbps
             .unwrap_or_else(|| self.profile_level_id.level.max_mbps());
 
-        max_mbps / max_fs
+        max_mbps / max_fs.max(1)
     }
 
     pub fn max_fps_for_resolution(&self, width: u32, height: u32) -> u32 {
@@ -156,18 +156,20 @@ impl FmtpOptions {
 
         let frame_size = (width * height) / 256;
 
-        max_mbps / frame_size
+        max_mbps / frame_size.max(1)
     }
 
     /// Returns the maximum bitrate in bit/s
     pub fn max_bitrate(&self) -> u32 {
         self.max_br
             .unwrap_or_else(|| self.profile_level_id.level.max_br())
-            * 1000
+            .saturating_mul(1000)
     }
 }
 
 fn resolution_from_max_fs(num: u32, denom: u32, max_fs: u32) -> (u32, u32) {
+    const MAX_FS_BOUND: u32 = u32::MAX >> 9;
+
     fn greatest_common_divisor(mut a: u32, mut b: u32) -> u32 {
         while b != 0 {
             let tmp = b;
@@ -179,8 +181,9 @@ fn resolution_from_max_fs(num: u32, denom: u32, max_fs: u32) -> (u32, u32) {
     }
 
     // Limit max FS to avoid integer overflows
+    let max_fs = max_fs.min(MAX_FS_BOUND);
     let max_pixels = max_fs.saturating_mul(256);
-    let divisor = greatest_common_divisor(num, denom);
+    let divisor = greatest_common_divisor(num.max(1), denom.max(1));
     let num = num / divisor;
     let denom = denom / divisor;
 
@@ -299,26 +302,49 @@ impl fmt::Display for FmtpOptions {
 #[derive(Debug, Clone, Copy)]
 pub enum Profile {
     Baseline,
+    ConstrainedBaseline,
     Main,
     Extended,
     High,
     High10,
     High422,
     High444Predictive,
-    CAVLC444,
+    High10Intra,
+    High422Intra,
+    High444Intra,
+    CAVLC444Intra,
 }
 
 impl Profile {
     pub fn profile_idc(self) -> u8 {
         match self {
-            Profile::Baseline => 66,
+            Profile::Baseline | Profile::ConstrainedBaseline => 66,
             Profile::Main => 77,
             Profile::Extended => 88,
             Profile::High => 100,
-            Profile::High10 => 110,
-            Profile::High422 => 122,
-            Profile::High444Predictive => 244,
-            Profile::CAVLC444 => 44,
+            Profile::High10 | Profile::High10Intra => 110,
+            Profile::High422 | Profile::High422Intra => 122,
+            Profile::High444Predictive | Profile::High444Intra => 244,
+            Profile::CAVLC444Intra => 44,
+        }
+    }
+
+    pub fn profile_iop(self) -> u8 {
+        use profile_level_id::profile_iop_consts::*;
+
+        match self {
+            Profile::Baseline => 0,
+            Profile::ConstrainedBaseline => CONSTRAINT_SET1_FLAG,
+            Profile::Main => 0,
+            Profile::Extended => 0,
+            Profile::High => 0,
+            Profile::High10 => 0,
+            Profile::High422 => 0,
+            Profile::High444Predictive => 0,
+            Profile::High10Intra => CONSTRAINT_SET3_FLAG,
+            Profile::High422Intra => CONSTRAINT_SET3_FLAG,
+            Profile::High444Intra => CONSTRAINT_SET3_FLAG,
+            Profile::CAVLC444Intra => 0,
         }
     }
 }
@@ -449,4 +475,54 @@ impl Level {
             Level::Level_6_2 => (16711680, 139264, 696320, 800000, 800000, 8192, 2, Some(16)),
         }
     }
+}
+
+#[test]
+fn no_panics() {
+    let fmtp = FmtpOptions {
+        profile_level_id: ProfileLevelId::default(),
+        level_asymmetry_allowed: true,
+        packetization_mode: PacketizationMode::SingleNAL,
+        max_mbps: Some(u32::MAX),
+        max_fs: Some(u32::MAX),
+        max_cbp: Some(u32::MAX),
+        max_dpb: Some(u32::MAX),
+        max_br: Some(u32::MAX),
+        redundant_pic_cap: false,
+    };
+
+    for i in 1..100 {
+        for j in 1..100 {
+            println!("{:?}", fmtp.max_resolution(i, j));
+        }
+    }
+    println!("{:?}", fmtp.max_resolution_for_fps(16, 9, 30));
+    println!("{:?}", fmtp.max_fps_for_max_resolution());
+    println!("{:?}", fmtp.max_fps_for_resolution(1920, 1080));
+    println!("{:?}", fmtp.max_bitrate());
+}
+
+#[test]
+fn no_divide_by_zero() {
+    let fmtp = FmtpOptions {
+        profile_level_id: ProfileLevelId::default(),
+        level_asymmetry_allowed: true,
+        packetization_mode: PacketizationMode::SingleNAL,
+        max_mbps: Some(0),
+        max_fs: Some(0),
+        max_cbp: Some(0),
+        max_dpb: Some(0),
+        max_br: Some(0),
+        redundant_pic_cap: false,
+    };
+
+    for i in 1..100 {
+        for j in 1..100 {
+            println!("{:?}", fmtp.max_resolution(i, j));
+        }
+    }
+    println!("{:?}", fmtp.max_resolution_for_fps(16, 9, 30));
+    println!("{:?}", fmtp.max_fps_for_max_resolution());
+    println!("{:?}", fmtp.max_fps_for_resolution(1920, 1080));
+    println!("{:?}", fmtp.max_bitrate());
 }
