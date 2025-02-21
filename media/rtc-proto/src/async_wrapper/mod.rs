@@ -60,7 +60,7 @@ impl AsyncSdpSession {
             state: super::SdpSession::new(address, options),
             sockets: HashMap::new(),
             timeout: Some(Instant::now()), // poll immediately
-            ips: local_ip_address::linux::list_afinet_netifas()
+            ips: local_ip_address::list_afinet_netifas()
                 .unwrap()
                 .into_iter()
                 .map(|(_, addr)| addr)
