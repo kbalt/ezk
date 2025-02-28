@@ -2,15 +2,9 @@
 
 use ::rtp::{
     rtcp_types::{Compound, Packet as RtcpPacket},
-    RtpPacket, RtpSession,
+    RtpPacket,
 };
-use bytes::Bytes;
-use bytesstr::BytesStr;
-use events::{
-    IceConnectionStateChanged, IceGatheringStateChanged, TransportChange,
-    TransportConnectionStateChanged,
-};
-use ice::{Component, IceAgent, IceConnectionState, IceGatheringState, ReceivedPkt};
+use ice::{Component, IceAgent, IceConnectionState, IceGatheringState};
 use local_media::LocalMedia;
 use sdp_types::MediaDescription;
 use slotmap::SlotMap;
@@ -25,27 +19,31 @@ use transport::{
     ReceivedPacket, SessionTransportState, Transport, TransportBuilder, TransportEvent,
 };
 
-mod async_wrapper;
 mod codecs;
 mod events;
 mod local_media;
+mod media;
 mod options;
 mod rtp;
 mod sdp;
 mod transport;
 
-pub use async_wrapper::{AsyncEvent, AsyncSdpSession};
 pub use codecs::{Codec, Codecs, NegotiatedCodec};
-pub use events::{Event, TransportConnectionState};
+pub use events::{
+    Event, IceConnectionStateChanged, IceGatheringStateChanged, MediaAdded, MediaChanged,
+    TransportChange, TransportConnectionState, TransportConnectionStateChanged,
+};
+pub use ice::ReceivedPkt;
 pub use options::{BundlePolicy, Options, RtcpMuxPolicy, TransportType};
 pub use sdp::SdpAnswerState;
 pub use sdp_types::{Direction, MediaType, ParseSessionDescriptionError, SessionDescription};
 
+/// Identifies a single media stream. This may or may not reflect the "mid" SDP attribute.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MediaId(u32);
 
 impl MediaId {
-    fn step(&mut self) -> Self {
+    fn increment(&mut self) -> Self {
         let id = *self;
         self.0 += 1;
         id
@@ -82,7 +80,7 @@ pub struct SdpSession {
     /// Counter for local media ids
     next_media_id: MediaId,
     /// List of all media, representing the current state
-    state: Vec<ActiveMedia>,
+    state: Vec<media::Media>,
 
     // Transports
     transports: SlotMap<TransportId, TransportEntry>,
@@ -155,57 +153,6 @@ impl TransportEntry {
     }
 }
 
-struct ActiveMedia {
-    id: MediaId,
-    local_media_id: LocalMediaId,
-
-    media_type: MediaType,
-
-    /// The RTP session for this media
-    rtp_session: RtpSession,
-    avpf: bool,
-
-    /// When to send the next RTCP report
-    // TODO: do not start rtcp transmitting until transport is ready
-    next_rtcp: Instant,
-    rtcp_interval: Duration,
-
-    /// Optional mid, this is only Some if both offer and answer have the mid attribute set
-    mid: Option<BytesStr>,
-
-    /// SDP Send/Recv direction
-    direction: DirectionBools,
-
-    /// Which transport is used by this media
-    transport: TransportId,
-
-    /// Which codec is negotiated
-    codec_pt: u8,
-    codec: Codec,
-}
-
-impl ActiveMedia {
-    fn matches(
-        &self,
-        transports: &SlotMap<TransportId, TransportEntry>,
-        desc: &MediaDescription,
-    ) -> bool {
-        if self.media_type != desc.media.media_type {
-            return false;
-        }
-
-        if let Some((self_mid, desc_mid)) = self.mid.as_ref().zip(desc.mid.as_ref()) {
-            return self_mid == desc_mid;
-        }
-
-        if let TransportEntry::Transport(transport) = &transports[self.transport] {
-            transport.remote_rtp_address.port() == desc.media.port
-        } else {
-            false
-        }
-    }
-}
-
 enum PendingChange {
     AddMedia(PendingMedia),
     RemoveMedia(MediaId),
@@ -219,7 +166,8 @@ struct PendingMedia {
     mid: String,
     direction: Direction,
     use_avpf: bool,
-    /// Transport to use when not bundling
+    /// Transport to use when not bundling,
+    /// this is discarded when the peer chooses the bundle transport
     standalone_transport: Option<TransportId>,
     /// Transport to use when bundling
     bundle_transport: TransportId,
@@ -342,7 +290,7 @@ impl SdpSession {
 
     /// Request a new media session to be created
     pub fn add_media(&mut self, local_media_id: LocalMediaId, direction: Direction) -> MediaId {
-        let media_id = self.next_media_id.step();
+        let media_id = self.next_media_id.increment();
 
         // Find out which type of transport to use for this media
         let transport_type = self
@@ -417,14 +365,14 @@ impl SdpSession {
     ///
     /// The actual deletion will be performed with the next SDP exchange
     pub fn remove_media(&mut self, media_id: MediaId) {
-        if self.state.iter().any(|e| e.id == media_id) {
+        if self.state.iter().any(|e| e.id() == media_id) {
             self.pending_changes
                 .push(PendingChange::RemoveMedia(media_id))
         }
     }
 
     pub fn update_media(&mut self, media_id: MediaId, new_direction: Direction) {
-        if self.state.iter().any(|e| e.id == media_id) {
+        if self.state.iter().any(|e| e.id() == media_id) {
             self.pending_changes
                 .push(PendingChange::ChangeDirection(media_id, new_direction))
         }
@@ -485,13 +433,7 @@ impl SdpSession {
         }
 
         for media in self.state.iter() {
-            timeout = opt_min(timeout, media.rtp_session.pop_rtp_after(None));
-
-            let rtcp_send_timeout = media
-                .next_rtcp
-                .checked_duration_since(now)
-                .unwrap_or_default();
-            timeout = opt_min(timeout, Some(rtcp_send_timeout))
+            timeout = opt_min(timeout, media.timeout(now));
         }
 
         timeout
@@ -511,25 +453,8 @@ impl SdpSession {
         }
 
         for media in self.state.iter_mut() {
-            if let Some(rtp_packet) = media.rtp_session.pop_rtp(None) {
-                self.events.push_back(Event::ReceiveRTP {
-                    media_id: media.id,
-                    packet: rtp_packet,
-                });
-            }
-
-            // TODO: only emit rtcp if the media's transport state is connected
-            if media.next_rtcp <= now {
-                let transport = self.transports[media.transport].unwrap_mut();
-
-                if transport.connection_state() != TransportConnectionState::Connected {
-                    continue;
-                }
-
-                media.next_rtcp += media.rtcp_interval;
-
-                send_rtcp_report(transport, media);
-            }
+            let transport = self.transports[media.transport_id()].unwrap_mut();
+            media.poll(now, transport, &mut self.events);
         }
     }
 
@@ -606,9 +531,9 @@ impl SdpSession {
                 let entry = self
                     .state
                     .iter_mut()
-                    .filter(|m| m.transport == transport_id)
-                    .find(|e| match (&e.mid, &packet.extensions.mid) {
-                        (Some(a), Some(b)) => a.as_bytes() == b,
+                    .filter(|m| m.transport_id() == transport_id)
+                    .find(|media| match (&media.mid(), &packet.extensions.mid) {
+                        (Some(a), Some(b)) => a == b,
                         _ => false,
                     });
 
@@ -618,12 +543,12 @@ impl SdpSession {
                 } else {
                     self.state
                         .iter_mut()
-                        .filter(|m| m.transport == transport_id)
-                        .find(|e| e.codec_pt == packet.pt)
+                        .filter(|media| media.transport_id() == transport_id)
+                        .find(|media| media.remote_payload_types().contains(&packet.pt))
                 };
 
-                if let Some(entry) = entry {
-                    entry.rtp_session.recv_rtp(packet);
+                if let Some(media) = entry {
+                    media.recv_rtp(packet);
                 } else {
                     log::warn!("Failed to find media for RTP packet ssrc={:?}", packet.ssrc);
                 }
@@ -664,7 +589,6 @@ impl SdpSession {
                     }
                     RtcpPacket::Rr(receiver_report) => receiver_report.ssrc(),
                     RtcpPacket::Sdes(..) => {
-                        // what
                         log::debug!("ignoring invalid RTCP packet");
                         return;
                     }
@@ -682,17 +606,14 @@ impl SdpSession {
                 let media = self
                     .state
                     .iter_mut()
-                    .find(|e| e.rtp_session.remote_ssrc().any(|r_ssrc| r_ssrc.0 == ssrc));
+                    .find(|media| media.remote_ssrc().any(|r_ssrc| r_ssrc.0 == ssrc));
 
                 let Some(media) = media else {
                     log::warn!("Failed to find media for incoming RTCP packet");
                     return;
                 };
 
-                for packet in packets {
-                    // TODO: handle the RTCP packets properly
-                    media.rtp_session.recv_rtcp(packet);
-                }
+                media.recv_rtcp(packets);
             }
             ReceivedPacket::TransportSpecific => {
                 // ignore
@@ -700,17 +621,11 @@ impl SdpSession {
         }
     }
 
-    pub fn send_rtp(&mut self, media_id: MediaId, mut packet: RtpPacket) {
-        let media = self.state.iter_mut().find(|m| m.id == media_id).unwrap();
-        let transport = self.transports[media.transport].unwrap_mut();
+    pub fn send_rtp(&mut self, media_id: MediaId, packet: RtpPacket) {
+        let media = self.state.iter_mut().find(|m| m.id() == media_id).unwrap();
+        let transport = self.transports[media.transport_id()].unwrap_mut();
 
-        packet.ssrc = media.rtp_session.ssrc();
-        packet.extensions.mid = media.mid.as_ref().map(AsRef::<Bytes>::as_ref).cloned();
-
-        // Tell the RTP session that a packet is being sent
-        media.rtp_session.send_rtp(&packet);
-
-        transport.send_rtp(packet);
+        media.send_rtp(transport, packet);
     }
 
     /// Returns the cumulative gathering state of all ice agents
@@ -730,21 +645,22 @@ impl SdpSession {
             .map(|a| a.connection_state())
             .min()
     }
-}
 
-fn send_rtcp_report(transport: &mut Transport, media: &mut ActiveMedia) {
-    let mut encode_buf = vec![0u8; 65535];
+    pub fn ice_gathering_state_of_media(&self, media_id: MediaId) -> Option<IceGatheringState> {
+        self.state
+            .iter()
+            .find(|m| m.id() == media_id)
+            .and_then(|m| self.transports[m.transport_id()].ice_agent())
+            .map(|a| a.gathering_state())
+    }
 
-    let len = match media.rtp_session.write_rtcp_report(&mut encode_buf) {
-        Ok(len) => len,
-        Err(e) => {
-            log::warn!("Failed to write RTCP packet, {e:?}");
-            return;
-        }
-    };
-
-    encode_buf.truncate(len);
-    transport.send_rtcp(encode_buf);
+    pub fn ice_connection_state_of_media(&self, media_id: MediaId) -> Option<IceConnectionState> {
+        self.state
+            .iter()
+            .find(|m| m.id() == media_id)
+            .and_then(|m| self.transports[m.transport_id()].ice_agent())
+            .map(|a| a.connection_state())
+    }
 }
 
 // i'm too lazy to work with the direction type, so using this as a cop out

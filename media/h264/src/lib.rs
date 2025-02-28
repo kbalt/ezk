@@ -49,7 +49,8 @@ pub struct H264EncoderConfig {
 }
 
 impl H264EncoderConfig {
-    pub fn from_fmtp(fmtp: FmtpOptions) -> Self {
+    /// Create a encoder config from the peer's H.264 decoder capabilities, communicated through SDP's fmtp attribute
+    pub fn from_fmtp(fmtp: FmtpOptions, mtu: usize) -> Self {
         Self {
             profile: fmtp.profile_level_id.profile,
             level: fmtp.profile_level_id.level,
@@ -60,8 +61,7 @@ impl H264EncoderConfig {
             max_bitrate: Some(fmtp.max_bitrate()),
             max_slice_len: {
                 match fmtp.packetization_mode {
-                    // TODO: pass MTU as parameter?
-                    PacketizationMode::SingleNAL => Some(1300),
+                    PacketizationMode::SingleNAL => Some(mtu),
                     PacketizationMode::NonInterleavedMode | PacketizationMode::InterleavedMode => {
                         None
                     }
@@ -119,6 +119,7 @@ pub struct FmtpOptions {
 }
 
 impl FmtpOptions {
+    /// Returns the maximum resolution for the given aspect ration
     pub fn max_resolution(&self, num: u32, denom: u32) -> (u32, u32) {
         let max_fs = self
             .max_fs
@@ -127,6 +128,7 @@ impl FmtpOptions {
         resolution_from_max_fs(num, denom, max_fs)
     }
 
+    /// Returns the maximum resolution with the given fps and aspect ratio num/denom
     pub fn max_resolution_for_fps(&self, num: u32, denom: u32, fps: u32) -> (u32, u32) {
         let max_mbps = self
             .max_mbps
@@ -137,6 +139,7 @@ impl FmtpOptions {
         resolution_from_max_fs(num, denom, max_fs)
     }
 
+    /// Returns the maximum supported FPS using the maximum supported resolution
     pub fn max_fps_for_max_resolution(&self) -> u32 {
         let max_fs = self
             .max_fs
@@ -149,6 +152,7 @@ impl FmtpOptions {
         max_mbps / max_fs.max(1)
     }
 
+    /// Returns the maximum supported FPS for the given resolution
     pub fn max_fps_for_resolution(&self, width: u32, height: u32) -> u32 {
         let max_mbps = self
             .max_mbps
@@ -168,7 +172,7 @@ impl FmtpOptions {
 }
 
 fn resolution_from_max_fs(num: u32, denom: u32, max_fs: u32) -> (u32, u32) {
-    const MAX_FS_BOUND: u32 = u32::MAX >> 9;
+    const MAX_FS_BOUND: u32 = 0x7FFFFF;
 
     fn greatest_common_divisor(mut a: u32, mut b: u32) -> u32 {
         while b != 0 {

@@ -1,11 +1,8 @@
-use crate::{
-    events::{
-        IceConnectionStateChanged, MediaAdded, MediaChanged, TransportChange,
-        TransportConnectionStateChanged,
-    },
-    Codecs, Error, Event, LocalMediaId, MediaId, Options, ReceivedPkt, TransportId,
-};
 use ice::{Component, IceGatheringState};
+use proto::{
+    Codecs, Error, Event, IceConnectionStateChanged, LocalMediaId, MediaAdded, MediaChanged,
+    MediaId, Options, ReceivedPkt, TransportChange, TransportConnectionStateChanged, TransportId,
+};
 use rtp::RtpPacket;
 use sdp_types::{Direction, SessionDescription};
 use socket::Socket;
@@ -44,7 +41,7 @@ pub enum AsyncEvent {
 }
 
 pub struct AsyncSdpSession {
-    state: super::SdpSession,
+    state: proto::SdpSession,
     sockets: HashMap<(TransportId, Component), Socket>,
     timeout: Option<Instant>,
     ips: Vec<IpAddr>,
@@ -57,7 +54,7 @@ pub struct AsyncSdpSession {
 impl AsyncSdpSession {
     pub fn new(address: IpAddr, options: Options) -> Self {
         Self {
-            state: super::SdpSession::new(address, options),
+            state: proto::SdpSession::new(address, options),
             sockets: HashMap::new(),
             timeout: Some(Instant::now()), // poll immediately
             ips: local_ip_address::list_afinet_netifas()
@@ -173,7 +170,7 @@ impl AsyncSdpSession {
         Ok(())
     }
 
-    fn handle_events(&mut self) -> Result<(), super::Error> {
+    fn handle_events(&mut self) -> Result<(), proto::Error> {
         while let Some(event) = self.state.pop_event() {
             match event {
                 Event::MediaAdded(event) => self.events.push_back(AsyncEvent::MediaAdded(event)),
@@ -254,7 +251,7 @@ impl AsyncSdpSession {
 
                 Ok(())
             }
-            _ = timeout(self.timeout) => {
+            _ = timeout(&mut self.timeout) => {
                 self.state.poll(Instant::now());
                 self.timeout = self.state.timeout().map(|d| Instant::now() + d);
                 Ok(())
@@ -263,9 +260,12 @@ impl AsyncSdpSession {
     }
 }
 
-async fn timeout(instant: Option<Instant>) {
-    match instant {
-        Some(instant) => sleep_until(instant.into()).await,
+async fn timeout(instant: &mut Option<Instant>) {
+    match *instant {
+        Some(deadline) => {
+            sleep_until(deadline.into()).await;
+            *instant = None;
+        }
         None => pending().await,
     }
 }

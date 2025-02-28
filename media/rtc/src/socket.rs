@@ -1,10 +1,9 @@
-use futures_util::ready;
 use quinn_udp::{RecvMeta, Transmit, UdpSockRef, UdpSocketState};
 use std::{
     collections::VecDeque,
     io::{self, IoSliceMut},
     net::{IpAddr, SocketAddr},
-    task::{Context, Poll},
+    task::{ready, Context, Poll},
 };
 use tokio::{
     io::{Interest, ReadBuf},
@@ -40,7 +39,7 @@ impl Socket {
     }
 
     pub(crate) fn send_pending(&mut self, cx: &mut Context<'_>) {
-        'outer: while let Some((data, source, target)) = self.to_send.front() {
+        'outer: while let Some((data, source, destination)) = self.to_send.front() {
             // Loop makes sure that the waker is registered with the runtime,
             // if poll_send_ready returns Ready but send returns WouldBlock
             loop {
@@ -54,7 +53,7 @@ impl Socket {
                     self.state.send(
                         udp_ref,
                         &Transmit {
-                            destination: *target,
+                            destination: *destination,
                             ecn: None,
                             contents: data,
                             segment_size: None,

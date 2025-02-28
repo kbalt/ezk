@@ -80,12 +80,12 @@ pub fn openh264_encoder_config(c: H264EncoderConfig) -> openh264::encoder::Encod
 /// Create [`FmtpOptions`] from openh264's decoder capabilities.
 ///
 /// Should be used when offering to receive H.264 in a SDP negotiation.
-pub fn openh264_decoder_fmtp() -> FmtpOptions {
+pub fn openh264_decoder_fmtp(api: &openh264::OpenH264API) -> FmtpOptions {
     let capability = unsafe {
         let mut capability = MaybeUninit::uninit();
 
         assert_eq!(
-            openh264::OpenH264API::from_source().WelsGetDecoderCapability(capability.as_mut_ptr()),
+            api.WelsGetDecoderCapability(capability.as_mut_ptr()),
             0,
             "openh264 WelsGetDecoderCapability failed"
         );
