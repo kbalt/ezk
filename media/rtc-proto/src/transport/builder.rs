@@ -317,9 +317,10 @@ impl TransportBuilder {
 
         // Feed the already received messages into the transport
         for pkt in self.backlog {
+            // TODO: handle the RTP/RTCP packets that are received too early
             match transport.receive(pkt) {
-                ReceivedPacket::Rtp(_) => todo!("handle early rtp"),
-                ReceivedPacket::Rtcp(_) => todo!("handle early rtcp"),
+                ReceivedPacket::Rtp(_) => log::warn!("Dropping early RTP packet"),
+                ReceivedPacket::Rtcp(_) => log::warn!("Dropping early RTCP packet"),
                 ReceivedPacket::TransportSpecific => {}
             };
         }

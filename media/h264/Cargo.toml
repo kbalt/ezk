@@ -11,8 +11,8 @@ bytes = "1.10.0"
 rand = "0.9.0"
 thiserror = "2.0.11"
 
-openh264 = { version = "0.7.1", optional = true }
-openh264-sys2 = { version = "0.7.1", optional = true }
+openh264 = { version = "0.8", optional = true }
+openh264-sys2 = { version = "0.8", optional = true }
 
 [features]
 default = ["openh264"]

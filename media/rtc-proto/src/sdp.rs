@@ -80,8 +80,6 @@ impl SdpSession {
                 continue;
             };
 
-            let media_id = self.next_media_id.step();
-
             // Get or create transport for the m-line
             let transport = self.get_or_create_transport(&new_state, &offer, remote_media_desc)?;
 
@@ -102,6 +100,7 @@ impl SdpSession {
                 .find(|f| f.format == codec_pt)
                 .map(|f| f.params.to_string());
 
+            let media_id = self.next_media_id.increment();
             self.events.push_back(Event::MediaAdded(MediaAdded {
                 id: media_id,
                 transport_id: transport,
