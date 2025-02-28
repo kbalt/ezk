@@ -6,11 +6,7 @@ use ::rtp::{
 };
 use bytes::Bytes;
 use bytesstr::BytesStr;
-use events::{
-    IceConnectionStateChanged, IceGatheringStateChanged, TransportChange,
-    TransportConnectionStateChanged, TransportRequiredChanges,
-};
-use ice::{Component, IceAgent, IceConnectionState, IceGatheringState, ReceivedPkt};
+use ice::{Component, IceAgent, IceConnectionState, IceGatheringState};
 use local_media::LocalMedia;
 use sdp_types::MediaDescription;
 use slotmap::SlotMap;
@@ -25,7 +21,6 @@ use transport::{
     ReceivedPacket, SessionTransportState, Transport, TransportBuilder, TransportEvent,
 };
 
-mod async_wrapper;
 mod codecs;
 mod events;
 mod local_media;
@@ -34,18 +29,22 @@ mod rtp;
 mod sdp;
 mod transport;
 
-pub use async_wrapper::{AsyncEvent, AsyncSdpSession};
 pub use codecs::{Codec, Codecs, NegotiatedCodec};
-pub use events::{Event, TransportConnectionState};
+pub use events::{
+    Event, IceConnectionStateChanged, IceGatheringStateChanged, MediaAdded, MediaChanged,
+    TransportChange, TransportConnectionState, TransportConnectionStateChanged,
+};
+pub use ice::ReceivedPkt;
 pub use options::{BundlePolicy, Options, RtcpMuxPolicy, TransportType};
 pub use sdp::SdpAnswerState;
 pub use sdp_types::{Direction, MediaType, ParseSessionDescriptionError, SessionDescription};
 
+/// Identifies a single media stream. This may or may not reflect the "mid" SDP attribute.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MediaId(u32);
 
 impl MediaId {
-    fn step(&mut self) -> Self {
+    fn increment(&mut self) -> Self {
         let id = *self;
         self.0 += 1;
         id
@@ -219,7 +218,8 @@ struct PendingMedia {
     mid: String,
     direction: Direction,
     use_avpf: bool,
-    /// Transport to use when not bundling
+    /// Transport to use when not bundling,
+    /// this is discarded when the peer chooses the bundle transport
     standalone_transport: Option<TransportId>,
     /// Transport to use when bundling
     bundle_transport: TransportId,
@@ -342,7 +342,7 @@ impl SdpSession {
 
     /// Request a new media session to be created
     pub fn add_media(&mut self, local_media_id: LocalMediaId, direction: Direction) -> MediaId {
-        let media_id = self.next_media_id.step();
+        let media_id = self.next_media_id.increment();
 
         // Find out which type of transport to use for this media
         let transport_type = self
@@ -363,8 +363,9 @@ impl SdpSession {
             BundlePolicy::MaxCompat => {
                 let standalone_transport_id = self.transports.insert_with_key(|id| {
                     TransportEntry::TransportBuilder(TransportBuilder::new(
+                        id,
                         &mut self.transport_state,
-                        TransportRequiredChanges::new(id, &mut self.transport_changes),
+                        &mut self.transport_changes,
                         transport_type,
                         self.options.rtcp_mux_policy,
                         self.options.offer_ice,
@@ -383,8 +384,9 @@ impl SdpSession {
                 } else {
                     self.transports.insert_with_key(|id| {
                         TransportEntry::TransportBuilder(TransportBuilder::new(
+                            id,
                             &mut self.transport_state,
-                            TransportRequiredChanges::new(id, &mut self.transport_changes),
+                            &mut self.transport_changes,
                             transport_type,
                             self.options.rtcp_mux_policy,
                             self.options.offer_ice,
@@ -516,15 +518,14 @@ impl SdpSession {
                 });
             }
 
-            // TODO: only emit rtcp if the media's transport state is connected
             if media.next_rtcp <= now {
+                media.next_rtcp += media.rtcp_interval;
+
                 let transport = self.transports[media.transport].unwrap_mut();
 
                 if transport.connection_state() != TransportConnectionState::Connected {
                     continue;
                 }
-
-                media.next_rtcp += media.rtcp_interval;
 
                 send_rtcp_report(transport, media);
             }
@@ -727,6 +728,22 @@ impl SdpSession {
             .filter_map(|t| t.ice_agent())
             .map(|a| a.connection_state())
             .min()
+    }
+
+    pub fn ice_gathering_state_of_media(&self, media_id: MediaId) -> Option<IceGatheringState> {
+        self.state
+            .iter()
+            .find(|m| m.id == media_id)
+            .and_then(|m| self.transports[m.transport].ice_agent())
+            .map(|a| a.gathering_state())
+    }
+
+    pub fn ice_connection_state_of_media(&self, media_id: MediaId) -> Option<IceConnectionState> {
+        self.state
+            .iter()
+            .find(|m| m.id == media_id)
+            .and_then(|m| self.transports[m.transport].ice_agent())
+            .map(|a| a.connection_state())
     }
 }
 

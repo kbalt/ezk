@@ -1,5 +1,5 @@
 use crate::codecs::NegotiatedCodec;
-use crate::events::{MediaAdded, MediaChanged, TransportChange, TransportRequiredChanges};
+use crate::events::{MediaAdded, MediaChanged, TransportChange};
 use crate::transport::{Transport, TransportBuilder};
 use crate::{
     ActiveMedia, DirectionBools, Error, Event, MediaId, PendingChange, SdpSession, TransportEntry,
@@ -80,8 +80,6 @@ impl SdpSession {
                 continue;
             };
 
-            let media_id = self.next_media_id.step();
-
             // Get or create transport for the m-line
             let transport = self.get_or_create_transport(&new_state, &offer, remote_media_desc)?;
 
@@ -102,6 +100,7 @@ impl SdpSession {
                 .find(|f| f.format == codec_pt)
                 .map(|f| f.params.to_string());
 
+            let media_id = self.next_media_id.increment();
             self.events.push_back(Event::MediaAdded(MediaAdded {
                 id: media_id,
                 transport_id: transport,
@@ -213,8 +212,9 @@ impl SdpSession {
             self.transports
                 .try_insert_with_key(|id| -> Result<TransportEntry, Option<_>> {
                     Transport::create_from_offer(
+                        id,
                         &mut self.transport_state,
-                        TransportRequiredChanges::new(id, &mut self.transport_changes),
+                        &mut self.transport_changes,
                         session_desc,
                         remote_media_desc,
                     )
@@ -541,8 +541,9 @@ impl SdpSession {
                         replace(transport_builder, TransportBuilder::placeholder());
 
                     let transport = transport_builder.build_from_answer(
+                        transport_id,
                         &mut self.transport_state,
-                        TransportRequiredChanges::new(transport_id, &mut self.transport_changes),
+                        &mut self.transport_changes,
                         &answer,
                         remote_media_desc,
                     );
