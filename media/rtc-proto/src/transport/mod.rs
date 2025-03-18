@@ -1,8 +1,8 @@
 use crate::{
-    events::{TransportConnectionState, TransportRequiredChanges},
+    events::{TransportChange, TransportConnectionState},
     opt_min,
     rtp::extensions::RtpExtensionIdsExt,
-    Error, TransportType,
+    Error, TransportId, TransportType,
 };
 use dtls_srtp::{make_ssl_context, DtlsSetup, DtlsSrtpSession, DtlsState};
 use ice::{
@@ -128,15 +128,16 @@ enum TransportKind {
 
 impl Transport {
     pub(crate) fn create_from_offer(
+        id: TransportId,
         state: &mut SessionTransportState,
-        mut required_changes: TransportRequiredChanges<'_>,
+        changes: &mut Vec<TransportChange>,
         session_desc: &SessionDescription,
         remote_media_desc: &MediaDescription,
     ) -> Result<Option<Self>, Error> {
         if remote_media_desc.rtcp_mux {
-            required_changes.require_socket();
+            changes.push(TransportChange::CreateSocket(id));
         } else {
-            required_changes.require_socket_pair();
+            changes.push(TransportChange::CreateSocketPair(id));
         }
 
         let (remote_rtp_address, remote_rtcp_address) =
