@@ -1,6 +1,6 @@
 [package]
 name = "ezk-sip-auth"
-version = "0.3.0"
+version = "0.4.0"
 description = "SIP authentication framework"
 categories = ["network-programming", "multimedia"]
 keywords = ["sip", "auth"]

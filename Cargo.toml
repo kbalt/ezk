@@ -11,10 +11,10 @@ repository = "https://github.com/kbalt/ezk"
 
 [workspace.dependencies]
 internal = { package = "ezk-internal", version = "0.2.0", path = "sip/internal" }
-sip-auth = { package = "ezk-sip-auth", version = "0.3.0", path = "sip/sip-auth" }
-sip-core = { package = "ezk-sip-core", version = "0.6.0", path = "sip/sip-core" }
-sip-types = { package = "ezk-sip-types", version = "0.4.0", path = "sip/sip-types" }
-sip-ua = { package = "ezk-sip-ua", version = "0.6.0", path = "sip/sip-ua" }
+sip-auth = { package = "ezk-sip-auth", version = "0.4.0", path = "sip/sip-auth" }
+sip-core = { package = "ezk-sip-core", version = "0.7.0", path = "sip/sip-core" }
+sip-types = { package = "ezk-sip-types", version = "0.5.0", path = "sip/sip-types" }
+sip-ua = { package = "ezk-sip-ua", version = "0.7.0", path = "sip/sip-ua" }
 
 ice = { package = "ezk-ice", version = "0.1.0", path = "media/ice" }
 rtp = { package = "ezk-rtp", version = "0.3.0", path = "media/rtp" }
