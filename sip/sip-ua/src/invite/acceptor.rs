@@ -129,6 +129,11 @@ impl InviteAcceptor {
         }
     }
 
+    /// Configure the `timer` extension
+    pub fn timer_config(&mut self) -> &mut AcceptorTimerConfig {
+        &mut self.timer_config
+    }
+
     /// Returns when the incoming INVITE has been cancelled using a CANCEL or BYE request.
     pub async fn cancelled(&mut self) {
         if self.cancelled {
