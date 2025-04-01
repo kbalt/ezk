@@ -41,6 +41,8 @@ pub struct RefreshNeeded<'s> {
 
 impl RefreshNeeded<'_> {
     pub async fn process_default(self) -> Result<()> {
+        self.session.session_timer.reset();
+
         let invite = self.session.dialog.create_request(Method::INVITE);
 
         let mut target_tp_info = self.session.dialog.target_tp_info.lock().await;
@@ -73,7 +75,7 @@ impl RefreshNeeded<'_> {
 
                     self.session.endpoint.send_outgoing_request(ack).await?;
                 }
-                _ => { /* TODO: how to correctly handle responses here */ }
+                _ => {}
             }
         }
 

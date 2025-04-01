@@ -1,6 +1,6 @@
 [package]
 name = "ezk-sip-ua"
-version = "0.7.0"
+version = "0.7.1"
 description = "Low level SIP user agent utilities"
 categories = ["network-programming", "multimedia"]
 keywords = ["sip"]

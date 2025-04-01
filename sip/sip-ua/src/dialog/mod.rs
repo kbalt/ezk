@@ -115,13 +115,20 @@ impl Dialog {
     pub fn create_request(&self, method: Method) -> Request {
         let mut request = Request::new(method.clone(), self.peer_contact.uri.uri.clone());
 
-        let cseq = CSeq::new(self.local_cseq.fetch_add(1, Ordering::Relaxed), method);
+        let cseq = CSeq::new(
+            self.local_cseq.fetch_add(1, Ordering::Relaxed),
+            method.clone(),
+        );
 
         request.headers.insert_type(Name::FROM, &self.local_fromto);
         request.headers.insert_type(Name::TO, &self.peer_fromto);
         request.headers.insert_named(&MaxForwards(70));
         request.headers.insert_named(&self.call_id);
         request.headers.insert_named(&cseq);
+
+        if method == Method::INVITE {
+            request.headers.insert_named(&self.local_contact);
+        }
 
         if !self.route_set.is_empty() {
             request.headers.insert_type(Name::ROUTE, &self.route_set);
