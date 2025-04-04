@@ -1,10 +1,9 @@
+use super::events::{MediaAdded, MediaChanged, TransportChange};
+use super::media::Media;
+use super::transport::{Transport, TransportBuilder};
+use super::{DirectionBools, Event, PendingChange, SdpSession, TransportEntry};
 use crate::codecs::NegotiatedCodec;
-use crate::events::{MediaAdded, MediaChanged, TransportChange};
-use crate::media::Media;
-use crate::transport::{Transport, TransportBuilder};
-use crate::{
-    DirectionBools, Error, Event, MediaId, PendingChange, SdpSession, TransportEntry, TransportId,
-};
+use crate::{Error, MediaId, TransportId};
 use bytesstr::BytesStr;
 use sdp_types::{
     Connection, Direction, Fmtp, Group, IceOptions, IcePassword, IceUsernameFragment,

@@ -1,7 +1,4 @@
-use crate::{
-    opt_min, Codec, DirectionBools, Event, LocalMediaId, MediaId, Transport,
-    TransportConnectionState, TransportEntry, TransportId,
-};
+use crate::{Codec, LocalMediaId, MediaId, TransportId};
 use bytes::Bytes;
 use bytesstr::BytesStr;
 use rtp::{RtpSession, Ssrc};
@@ -10,6 +7,10 @@ use slotmap::SlotMap;
 use std::{
     collections::VecDeque,
     time::{Duration, Instant},
+};
+
+use super::{
+    opt_min, transport::Transport, DirectionBools, Event, TransportConnectionState, TransportEntry,
 };
 
 pub(crate) struct Media {

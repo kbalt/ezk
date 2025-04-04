@@ -1,6 +1,7 @@
 use rtc::{AsyncEvent, AsyncSdpSession};
 use rtc_proto::{
-    Direction, MediaId, NegotiatedCodec, SessionDescription, TransportConnectionState, TransportId,
+    state::TransportConnectionState, Direction, MediaId, NegotiatedCodec, SessionDescription,
+    TransportId,
 };
 use rtp::RtpPacket;
 use std::{

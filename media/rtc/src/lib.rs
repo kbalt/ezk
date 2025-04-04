@@ -1,7 +1,10 @@
 use ice::{Component, IceGatheringState};
 use proto::{
-    Codecs, Error, Event, IceConnectionStateChanged, LocalMediaId, MediaAdded, MediaChanged,
-    MediaId, Options, ReceivedPkt, TransportChange, TransportConnectionStateChanged, TransportId,
+    state::{
+        Event, IceConnectionStateChanged, MediaAdded, MediaChanged, TransportChange,
+        TransportConnectionStateChanged,
+    },
+    Codecs, Error, LocalMediaId, MediaId, Options, ReceivedPkt, TransportId,
 };
 use rtp::RtpPacket;
 use sdp_types::{Direction, SessionDescription};
@@ -41,7 +44,7 @@ pub enum AsyncEvent {
 }
 
 pub struct AsyncSdpSession {
-    state: proto::SdpSession,
+    state: proto::state::SdpSession,
     sockets: HashMap<(TransportId, Component), Socket>,
     timeout: Option<Instant>,
     ips: Vec<IpAddr>,
@@ -54,7 +57,7 @@ pub struct AsyncSdpSession {
 impl AsyncSdpSession {
     pub fn new(address: IpAddr, options: Options) -> Self {
         Self {
-            state: proto::SdpSession::new(address, options),
+            state: proto::state::SdpSession::new(address, options),
             sockets: HashMap::new(),
             timeout: Some(Instant::now()), // poll immediately
             ips: local_ip_address::list_afinet_netifas()
