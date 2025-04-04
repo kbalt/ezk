@@ -57,13 +57,13 @@ impl Headers {
         self.entries.iter().any(|entry| &entry.name == name)
     }
 
-    /// Inserts `header` using its [`HeaderNamed`] and [`InsertIntoHeaders`] implementation to the front of the list
+    /// Inserts `header` using its [`DynNamed`] and [`ExtendValues`] implementation to the front of the list
     #[inline]
     pub fn insert_named_front<H: DynNamed + ExtendValues + ?Sized>(&mut self, header: &H) {
         self.insert_type_front(header.name(), header)
     }
 
-    /// Inserts `header` using its [`InsertIntoHeaders`] implementation to the front of the list
+    /// Inserts `header` using its [`ExtendValues`] implementation to the front of the list
     #[inline]
     pub fn insert_type_front<H: ExtendValues + ?Sized>(&mut self, name: Name, header: &H) {
         let ctx = PrintCtx::default();

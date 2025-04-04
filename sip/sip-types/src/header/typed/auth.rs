@@ -517,12 +517,12 @@ impl Display for Algorithm {
 }
 
 /// AKA versions
-/// https://www.iana.org/assignments/aka-version-namespace/aka-version-namespace.xhtml
+/// <https://www.iana.org/assignments/aka-version-namespace/aka-version-namespace.xhtml>
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AkaVersion {
-    /// https://datatracker.ietf.org/doc/html/rfc3310
+    /// <https://datatracker.ietf.org/doc/html/rfc3310>
     AKAv1,
-    /// https://datatracker.ietf.org/doc/html/rfc4169
+    /// <https://datatracker.ietf.org/doc/html/rfc4169>
     AKAv2,
     Other(BytesStr),
 }

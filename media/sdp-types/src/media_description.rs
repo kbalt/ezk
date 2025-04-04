@@ -8,7 +8,7 @@ use crate::{
 use bytesstr::BytesStr;
 use std::fmt::{self, Debug};
 
-/// Part of the [`SessionDescription`] describes a single media session
+/// Part of the [`SessionDescription`](crate::SessionDescription) describes a single media session
 ///
 /// [RFC8866](https://www.rfc-editor.org/rfc/rfc8866.html#section-5.14)
 #[derive(Debug, Clone)]

@@ -19,13 +19,13 @@ pub use error::HeaderError;
 
 /// Assign a constant header name to a type.
 ///
-/// Is used by [`Headers`]'s `(get/take)_named` API so no
+/// Is used by [`Headers`](headers::Headers)'s `(get/take)_named` API so no
 /// name has to be provided by the caller.
 pub trait ConstNamed {
     const NAME: Name;
 }
 
-/// Decode a header from one or more values. Used to parse headers from [`Headers`].
+/// Decode a header from one or more values. Used to parse headers from [`Headers`](headers::Headers).
 pub trait DecodeValues: Sized {
     /// Decode a header from a iterator of [`BytesStr`].
     ///
@@ -44,7 +44,7 @@ pub trait HeaderParse: Sized {
 // ==== PRINT TRAITS ====
 
 /// Assign a dynamic header name to a type.
-/// Used for [`Headers`]'s `insert_named(_front)` API.
+/// Used for [`Headers`](headers::Headers)'s `insert_named(_front)` API.
 ///
 /// Can be used for enum holding different header variants.
 pub trait DynNamed {
@@ -57,7 +57,7 @@ impl<T: ConstNamed> DynNamed for T {
     }
 }
 
-/// Insert a header type into [`Header`].
+/// Insert a header type into [`Header`](headers::Headers).
 pub trait ExtendValues {
     /// Called when there already existing values.
     ///
@@ -67,7 +67,7 @@ pub trait ExtendValues {
 
     /// Called when there are no existing values.
     ///
-    /// Must generate header value to be inserted into [`Headers`].
+    /// Must generate header value to be inserted into [`Headers`](headers::Headers).
     fn create_values(&self, ctx: PrintCtx<'_>) -> OneOrMore;
 }
 

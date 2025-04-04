@@ -10,7 +10,7 @@ use nom::combinator::map;
 use nom::sequence::tuple;
 use std::fmt;
 
-/// Type which is being wrapped by [From] and [To]
+/// Type which represent the `From` and `To` header value
 #[derive(Debug, Clone)]
 pub struct FromTo {
     pub uri: NameAddr,
