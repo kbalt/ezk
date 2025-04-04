@@ -104,31 +104,31 @@ impl<M: MediaBackend> OutboundCall<M> {
                     }
                     Response::Failure(tsx_response) => {
                         // Authorize requests if possible
-                        if tsx_response.line.code == StatusCode::UNAUTHORIZED {
-                            let transaction = initiator
-                                .transaction()
-                                .expect("initiator isn't finished yet");
-                            let invite = transaction.request();
-
-                            authenticator
-                                .handle_rejection(
-                                    sip_auth::RequestParts {
-                                        line: &invite.msg.line,
-                                        headers: &invite.msg.headers,
-                                        body: &invite.msg.body,
-                                    },
-                                    sip_auth::ResponseParts {
-                                        line: &tsx_response.line,
-                                        headers: &tsx_response.headers,
-                                        body: &tsx_response.body,
-                                    },
-                                )
-                                .map_err(MakeCallError::Auth)?;
-
-                            continue 'authorize;
-                        } else {
+                        if tsx_response.line.code != StatusCode::UNAUTHORIZED {
                             return Err(MakeCallError::Failed(tsx_response.line));
                         }
+
+                        let transaction = initiator
+                            .transaction()
+                            .expect("initiator isn't finished yet");
+                        let invite = transaction.request();
+
+                        authenticator
+                            .handle_rejection(
+                                sip_auth::RequestParts {
+                                    line: &invite.msg.line,
+                                    headers: &invite.msg.headers,
+                                    body: &invite.msg.body,
+                                },
+                                sip_auth::ResponseParts {
+                                    line: &tsx_response.line,
+                                    headers: &tsx_response.headers,
+                                    body: &tsx_response.body,
+                                },
+                            )
+                            .map_err(MakeCallError::Auth)?;
+
+                        continue 'authorize;
                     }
                     Response::Early(early, tsx_response, ..) => {
                         // Got an early dialog - probably ringing, return Outbound call

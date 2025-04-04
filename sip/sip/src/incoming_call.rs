@@ -30,7 +30,7 @@ pub enum IncomingCallFromInviteError {
     #[error("Failed to parse SDP in INVITE body")]
     InvalidSDP(ParseSessionDescriptionError),
     #[error("Failed to create dialog from INVITE")]
-    CreateDialog(HeaderError),
+    CreateDialog(#[source] HeaderError),
 }
 
 impl IncomingCall<NoMedia> {

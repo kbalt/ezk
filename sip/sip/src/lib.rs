@@ -131,13 +131,13 @@ mod tests {
             .unwrap();
 
         let mut credentials = DigestCredentials::new();
-        credentials.add_for_realm("ccmsipline", DigestUser::new("2001", "opentalk"));
+        credentials.add_for_realm("ccmsipline", DigestUser::new("1101", "opentalk"));
 
         let reg = client
             .register(
                 RegistrarConfig {
                     registrar: "sip:10.6.6.6:5060".parse().unwrap(),
-                    username: "2001".into(),
+                    username: "1101".into(),
                     override_id: None,
                     override_contact: None,
                 },
@@ -146,7 +146,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut sdp_session = rtc_proto::AsyncSdpSession::new(
+        let mut sdp_session = rtc::AsyncSdpSession::new(
             "10.6.0.3".parse().unwrap(),
             Options {
                 offer_transport: TransportType::Rtp,
@@ -178,7 +178,7 @@ mod tests {
 
         let mut outbound = reg
             .make_call(
-                "sip:2002@10.6.6.6".parse().unwrap(),
+                "sip:1102@10.6.6.6".parse().unwrap(),
                 DigestAuthenticator::new(credentials),
                 MediaSession::new(sdp_session),
             )
@@ -209,6 +209,7 @@ mod tests {
                         mut receiver,
                         codec,
                     } => {
+                        println!("Receiver added!");
                         tokio::spawn(async move {
                             while let Some(packet) = receiver.recv().await {
                                 println!("Got rtp");
