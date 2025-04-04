@@ -28,7 +28,8 @@ pub use events::{
     TransportChange, TransportConnectionState, TransportConnectionStateChanged,
 };
 
-pub struct SdpSession {
+/// State of a SDP/RTP based media session
+pub struct SessionState {
     options: Options,
 
     id: u64,
@@ -172,9 +173,13 @@ impl PendingMedia {
     }
 }
 
-impl SdpSession {
+impl SessionState {
+    /// Create a new empty session state.
+    ///
+    /// `address` is placed in the SDP's connection field,
+    /// peers will use that address to reach this endpoint if ICE is not being used.
     pub fn new(address: IpAddr, options: Options) -> Self {
-        SdpSession {
+        SessionState {
             options,
             id: u64::from(rand::random::<u16>()),
             version: u64::from(rand::random::<u16>()),
@@ -211,6 +216,7 @@ impl SdpSession {
         }
     }
 
+    /// Returns if any media is configured or negotiated
     pub fn has_media(&self) -> bool {
         let has_pending_media = self
             .pending_changes
@@ -338,6 +344,7 @@ impl SdpSession {
         }
     }
 
+    /// Mark the media to be updated with the newly given direction
     pub fn update_media(&mut self, media_id: MediaId, new_direction: Direction) {
         if self.state.iter().any(|e| e.id() == media_id) {
             self.pending_changes
@@ -483,6 +490,7 @@ impl SdpSession {
         self.events.pop_front()
     }
 
+    /// Receive a packet from the given transport
     pub fn receive(&mut self, transport_id: TransportId, pkt: ReceivedPkt) {
         let transport = match &mut self.transports[transport_id] {
             TransportEntry::Transport(transport) => transport,
@@ -582,12 +590,13 @@ impl SdpSession {
 
                 media.recv_rtcp(packets);
             }
-            ReceivedPacket::TransportSpecific => {
+            ReceivedPacket::Ignore => {
                 // ignore
             }
         }
     }
 
+    // TODO: add proper error handling
     pub fn send_rtp(&mut self, media_id: MediaId, packet: RtpPacket) {
         let media = self.state.iter_mut().find(|m| m.id() == media_id).unwrap();
         let transport = self.transports[media.transport_id()].unwrap_mut();
@@ -613,6 +622,9 @@ impl SdpSession {
             .min()
     }
 
+    /// `IceGatheringState` of the given media
+    ///
+    /// Returns `None` if the media doesn't exist or isn't using ICE
     pub fn ice_gathering_state_of_media(&self, media_id: MediaId) -> Option<IceGatheringState> {
         self.state
             .iter()
@@ -621,6 +633,9 @@ impl SdpSession {
             .map(|a| a.gathering_state())
     }
 
+    /// `IceConnectionState` of the given media
+    ///
+    /// Returns `None` if the media doesn't exist or isn't using ICE
     pub fn ice_connection_state_of_media(&self, media_id: MediaId) -> Option<IceConnectionState> {
         self.state
             .iter()

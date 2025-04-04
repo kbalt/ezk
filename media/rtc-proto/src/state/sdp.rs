@@ -1,7 +1,7 @@
 use super::events::{MediaAdded, MediaChanged, TransportChange};
 use super::media::Media;
 use super::transport::{Transport, TransportBuilder};
-use super::{DirectionBools, Event, PendingChange, SdpSession, TransportEntry};
+use super::{DirectionBools, Event, PendingChange, SessionState, TransportEntry};
 use crate::codecs::NegotiatedCodec;
 use crate::{Error, MediaId, TransportId};
 use bytesstr::BytesStr;
@@ -25,7 +25,7 @@ enum SdpResponseEntry {
     },
 }
 
-impl SdpSession {
+impl SessionState {
     /// Receive a SDP offer in this session.
     ///
     /// Returns an opaque response state object which can be used to create the actual response SDP.
@@ -244,7 +244,7 @@ impl SdpSession {
         })
     }
 
-    /// Create an SDP Answer from a given state, which must be created by a previous call to [`SdpSession::receive_sdp_offer`].
+    /// Create an SDP Answer from a given state, which must be created by a previous call to [`SessionState::receive_sdp_offer`].
     ///
     /// # Panics
     ///

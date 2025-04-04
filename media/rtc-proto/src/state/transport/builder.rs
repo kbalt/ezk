@@ -321,7 +321,7 @@ impl TransportBuilder {
             match transport.receive(pkt) {
                 ReceivedPacket::Rtp(_) => log::warn!("Dropping early RTP packet"),
                 ReceivedPacket::Rtcp(_) => log::warn!("Dropping early RTCP packet"),
-                ReceivedPacket::TransportSpecific => {}
+                ReceivedPacket::Ignore => {}
             };
         }
 
