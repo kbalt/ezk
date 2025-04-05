@@ -1,9 +1,10 @@
 use crate::header::headers::OneOrMore;
 use crate::header::name::Name;
 use crate::header::{ConstNamed, ExtendValues, HeaderParse};
-use crate::parse::{whitespace, ParseCtx};
+use crate::parse::whitespace;
 use crate::print::PrintCtx;
 use crate::uri::params::{Params, CPS};
+use bytes::Bytes;
 use bytesstr::BytesStr;
 use internal::IResult;
 use nom::bytes::complete::{is_not, tag, take_while};
@@ -49,11 +50,11 @@ impl ConstNamed for RetryAfter {
 }
 
 impl HeaderParse for RetryAfter {
-    fn parse<'i>(ctx: ParseCtx<'_>, i: &'i str) -> IResult<&'i str, Self> {
+    fn parse<'i>(src: &'i Bytes, i: &'i str) -> IResult<&'i str, Self> {
         map(
             tuple((
                 map_res(digit1, FromStr::from_str),
-                Params::<CPS>::parse(ctx),
+                Params::<CPS>::parse(src),
                 opt(preceded(
                     take_while(whitespace),
                     delimited(tag("("), is_not(")"), tag(")")),
@@ -62,7 +63,7 @@ impl HeaderParse for RetryAfter {
             |(value, params, comment)| RetryAfter {
                 value,
                 params,
-                comment: comment.map(|str| BytesStr::from_parse(ctx.src, str)),
+                comment: comment.map(|str| BytesStr::from_parse(src, str)),
             },
         )(i)
     }
@@ -99,7 +100,7 @@ mod test {
     fn retry_after() {
         let input = BytesStr::from_static("120");
 
-        let (rem, retry_after) = RetryAfter::parse(ParseCtx::default(&input), &input).unwrap();
+        let (rem, retry_after) = RetryAfter::parse(input.as_ref(), &input).unwrap();
 
         assert!(rem.is_empty());
 
@@ -112,7 +113,7 @@ mod test {
     fn retry_after_duration() {
         let input = BytesStr::from_static("120;duration=60");
 
-        let (rem, retry_after) = RetryAfter::parse(ParseCtx::default(&input), &input).unwrap();
+        let (rem, retry_after) = RetryAfter::parse(input.as_ref(), &input).unwrap();
 
         assert!(rem.is_empty());
 
@@ -128,7 +129,7 @@ mod test {
     fn retry_after_duration_comment() {
         let input = BytesStr::from_static("120;duration=60 (Some Comment about being busy)");
 
-        let (rem, retry_after) = RetryAfter::parse(ParseCtx::default(&input), &input).unwrap();
+        let (rem, retry_after) = RetryAfter::parse(input.as_ref(), &input).unwrap();
 
         assert!(rem.is_empty());
 

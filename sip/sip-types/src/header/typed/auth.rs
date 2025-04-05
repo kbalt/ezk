@@ -1,8 +1,9 @@
 use crate::header::headers::OneOrMore;
 use crate::header::{ExtendValues, HeaderParse};
-use crate::parse::{parse_quoted, token, whitespace, ParseCtx};
+use crate::parse::{parse_quoted, token, whitespace};
 use crate::print::{AppendCtx, Print, PrintCtx};
 use anyhow::{bail, Context};
+use bytes::Bytes;
 use bytesstr::BytesStr;
 use internal::ws;
 use internal::IResult;
@@ -34,7 +35,7 @@ impl fmt::Display for AuthParam {
 }
 
 impl AuthParam {
-    pub fn parse(ctx: ParseCtx<'_>) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
+    fn parse(src: &bytes::Bytes) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
         move |i| {
             map(
                 ws((
@@ -43,8 +44,8 @@ impl AuthParam {
                     alt((parse_quoted, take_while(token))),
                 )),
                 move |(name, _, value)| AuthParam {
-                    name: BytesStr::from_parse(ctx.src, name),
-                    value: BytesStr::from_parse(ctx.src, value),
+                    name: BytesStr::from_parse(src, name),
+                    value: BytesStr::from_parse(src, value),
                 },
             )(i)
         }
@@ -58,9 +59,9 @@ pub enum AuthChallenge {
 }
 
 impl HeaderParse for AuthChallenge {
-    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> IResult<&'i str, Self> {
+    fn parse<'i>(src: &'i Bytes, i: &'i str) -> IResult<&'i str, Self> {
         map_res(
-            parse_auth_params(ctx),
+            parse_auth_params(src),
             |(scheme, params)| -> anyhow::Result<Self> {
                 match scheme.as_ref() {
                     "Digest" => Ok(Self::Digest(DigestChallenge::from_auth_params(params)?)),
@@ -219,9 +220,9 @@ pub enum AuthResponse {
 }
 
 impl HeaderParse for AuthResponse {
-    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> IResult<&'i str, Self> {
+    fn parse<'i>(src: &'i Bytes, i: &'i str) -> IResult<&'i str, Self> {
         map_res(
-            parse_auth_params(ctx),
+            parse_auth_params(src),
             |(scheme, params)| -> anyhow::Result<Self> {
                 match scheme.as_ref() {
                     "Digest" => Ok(Self::Digest(DigestResponse::from_auth_params(params)?)),
@@ -595,19 +596,19 @@ impl fmt::Display for AlgorithmValue {
 }
 
 fn parse_auth_params(
-    ctx: ParseCtx<'_>,
+    src: &Bytes,
 ) -> impl Fn(&str) -> IResult<&str, (BytesStr, Vec<AuthParam>)> + '_ {
     move |i| {
         tuple((
             map(take_while1(|c| !whitespace(c)), |scheme| {
-                BytesStr::from_parse(ctx.src, scheme)
+                BytesStr::from_parse(src, scheme)
             }),
             preceded(
                 take_while(whitespace),
                 map(
                     tuple((
-                        AuthParam::parse(ctx),
-                        many0(map(ws((tag(","), AuthParam::parse(ctx))), |(_, scheme)| {
+                        AuthParam::parse(src),
+                        many0(map(ws((tag(","), AuthParam::parse(src))), |(_, scheme)| {
                             scheme
                         })),
                     )),
@@ -656,7 +657,7 @@ mod test {
     fn parse_simple_digest_challenge() {
         let input = BytesStr::from_static(r#"Digest realm="example.com", nonce="abc123""#);
 
-        let (rem, auth) = AuthChallenge::parse(ParseCtx::default(&input), &input).unwrap();
+        let (rem, auth) = AuthChallenge::parse(input.as_ref(), &input).unwrap();
 
         match auth {
             AuthChallenge::Digest(DigestChallenge {
@@ -711,7 +712,7 @@ mod test {
             r#"Digest realm="example.com", nonce="abc123", algorithm="AKAv1-MD5""#,
         );
 
-        let (rem, auth) = AuthChallenge::parse(ParseCtx::default(&input), &input).unwrap();
+        let (rem, auth) = AuthChallenge::parse(input.as_ref(), &input).unwrap();
 
         match auth {
             AuthChallenge::Digest(DigestChallenge {
@@ -747,7 +748,7 @@ mod test {
             r#"Digest realm="example.com", nonce="abc123", algorithm="AKAv2-SHA-256""#,
         );
 
-        let (rem, auth) = AuthChallenge::parse(ParseCtx::default(&input), &input).unwrap();
+        let (rem, auth) = AuthChallenge::parse(input.as_ref(), &input).unwrap();
 
         match auth {
             AuthChallenge::Digest(DigestChallenge {
@@ -783,7 +784,7 @@ mod test {
             r#"Digest realm="example.com", nonce="abc123", algorithm="AKAv3-SHA-512-256-sess""#,
         );
 
-        let (rem, auth) = AuthChallenge::parse(ParseCtx::default(&input), &input).unwrap();
+        let (rem, auth) = AuthChallenge::parse(input.as_ref(), &input).unwrap();
 
         match auth {
             AuthChallenge::Digest(DigestChallenge {
@@ -822,7 +823,7 @@ mod test {
             r#"Digest realm="example.com", nonce="abc123", algorithm="AKA-ABC123""#,
         );
 
-        let (rem, auth) = AuthChallenge::parse(ParseCtx::default(&input), &input).unwrap();
+        let (rem, auth) = AuthChallenge::parse(input.as_ref(), &input).unwrap();
 
         match auth {
             AuthChallenge::Digest(DigestChallenge {
@@ -860,7 +861,7 @@ mod test {
             r#"Digest realm="example.com", nonce="abc123", algorithm="AKAvX-ABC123""#,
         );
 
-        let (rem, auth) = AuthChallenge::parse(ParseCtx::default(&input), &input).unwrap();
+        let (rem, auth) = AuthChallenge::parse(input.as_ref(), &input).unwrap();
 
         match auth {
             AuthChallenge::Digest(DigestChallenge {
@@ -901,7 +902,7 @@ mod test {
             r#"Digest realm="example.com", domain="TODO", nonce="abc123", opaque="opaque_value", stale=true, algorithm=SHA-256, qop="auth,auth-int,a_token", another-field="some_extension""#,
         );
 
-        let (rem, auth) = AuthChallenge::parse(ParseCtx::default(&input), &input).unwrap();
+        let (rem, auth) = AuthChallenge::parse(input.as_ref(), &input).unwrap();
 
         match auth {
             AuthChallenge::Digest(DigestChallenge {
@@ -1078,7 +1079,7 @@ mod test {
             "Digest realm=\"example.com\", nonce=\"abc123\", qop=\"auth, auth-int  , AuTh-Int\"",
         );
 
-        let (rem, auth) = AuthChallenge::parse(ParseCtx::default(&input), &input).unwrap();
+        let (rem, auth) = AuthChallenge::parse(input.as_ref(), &input).unwrap();
 
         match auth {
             AuthChallenge::Digest(DigestChallenge {
@@ -1121,7 +1122,7 @@ mod test {
             r#"Digest username="alice", realm="example.com", nonce="abc123", uri="sip:bob@example.com", response="00000000000000000000000000000000""#,
         );
 
-        let (rem, auth) = AuthResponse::parse(ParseCtx::default(&input), &input).unwrap();
+        let (rem, auth) = AuthResponse::parse(input.as_ref(), &input).unwrap();
 
         assert!(rem.is_empty());
 
@@ -1179,7 +1180,7 @@ mod test {
             r#"Digest username="alice", realm="example.com", nonce="abc123", uri="sip:bob@example.com", response="00000000000000000000000000000000", algorithm=SHA-256, opaque="opaque_value", qop="auth", cnonce="def456", nc=00000001, another-field="some_extension""#,
         );
 
-        let (rem, auth) = AuthResponse::parse(ParseCtx::default(&input), &input).unwrap();
+        let (rem, auth) = AuthResponse::parse(input.as_ref(), &input).unwrap();
 
         match auth {
             AuthResponse::Digest(DigestResponse {
@@ -1257,7 +1258,7 @@ mod test {
             r#"Digest username="alice", realm="example.com", nonce="abc123", uri="sip:bob@example.com", response="00000000000000000000000000000000", qop="auth-int", cnonce="def456", nc=00000001"#,
         );
 
-        let (rem, auth) = AuthResponse::parse(ParseCtx::default(&input), &input).unwrap();
+        let (rem, auth) = AuthResponse::parse(input.as_ref(), &input).unwrap();
 
         match auth {
             AuthResponse::Digest(DigestResponse {
@@ -1302,7 +1303,7 @@ mod test {
             r#"Digest username="alice", realm="example.com", nonce="abc123", uri="sip:bob@example.com", response="00000000000000000000000000000000", qop="a_token", cnonce="def456", nc=00000001"#,
         );
 
-        let (rem, auth) = AuthResponse::parse(ParseCtx::default(&input), &input).unwrap();
+        let (rem, auth) = AuthResponse::parse(input.as_ref(), &input).unwrap();
 
         match auth {
             AuthResponse::Digest(DigestResponse {

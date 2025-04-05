@@ -11,7 +11,7 @@ use sip_types::header::typed::{CSeq, CallID, FromTo, Via};
 use sip_types::header::HeaderError;
 use sip_types::msg::{RequestLine, StatusLine};
 use sip_types::print::AppendCtx;
-use sip_types::uri::Uri;
+use sip_types::uri::SipUri;
 use sip_types::{Headers, Method, Name};
 use std::fmt;
 use transaction::{TsxKey, TsxRegistration};
@@ -59,15 +59,9 @@ impl fmt::Display for Request {
 
 impl Request {
     /// Create an empty request
-    pub fn new<U>(method: Method, uri: U) -> Self
-    where
-        U: Into<Box<dyn Uri>>,
-    {
+    pub fn new(method: Method, uri: SipUri) -> Self {
         Self {
-            line: RequestLine {
-                method,
-                uri: uri.into(),
-            },
+            line: RequestLine { method, uri },
             headers: Default::default(),
             body: Bytes::new(),
         }

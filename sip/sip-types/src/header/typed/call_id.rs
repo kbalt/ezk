@@ -1,8 +1,8 @@
 use crate::header::headers::OneOrMore;
 use crate::header::{ConstNamed, ExtendValues, HeaderParse};
-use crate::parse::ParseCtx;
 use crate::print::PrintCtx;
 use crate::Name;
+use bytes::Bytes;
 use bytesstr::BytesStr;
 use internal::{identity, IResult};
 use nom::combinator::map;
@@ -25,10 +25,8 @@ impl ConstNamed for CallID {
 }
 
 impl HeaderParse for CallID {
-    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> IResult<&'i str, Self> {
-        map(identity(), |i| {
-            Self(BytesStr::from_parse(ctx.src, i.trim()))
-        })(i)
+    fn parse<'i>(src: &'i Bytes, i: &'i str) -> IResult<&'i str, Self> {
+        map(identity(), |i| Self(BytesStr::from_parse(src, i.trim())))(i)
     }
 }
 

@@ -7,13 +7,11 @@ use crate::transport::{
 use crate::{BaseHeaders, IncomingRequest, Layer, MayTake, Request, Response, Result, StunError};
 use bytes::{Bytes, BytesMut};
 use bytesstr::BytesStr;
-use internal::{verbose_error_to_owned, Finish};
 use sip_types::header::typed::{Accept, Allow, Supported, Via};
 use sip_types::host::{Host, HostPort};
 use sip_types::msg::{MessageLine, StatusLine};
-use sip_types::parse::{ParseCtx, Parser};
 use sip_types::print::{AppendCtx, BytesPrint, PrintCtx};
-use sip_types::uri::Uri;
+use sip_types::uri::SipUri;
 use sip_types::{Headers, Method, Name, StatusCode};
 use std::any::type_name;
 use std::fmt::Write;
@@ -50,9 +48,6 @@ struct Inner {
     allow: Vec<Allow>,
     supported: Vec<Supported>,
 
-    // Parser used for all parsing operations.
-    parser: Parser,
-
     transports: Transports,
     transactions: Transactions,
 
@@ -63,26 +58,6 @@ impl Endpoint {
     /// Construct a new [`EndpointBuilder`]
     pub fn builder() -> EndpointBuilder {
         EndpointBuilder::new()
-    }
-
-    /// Returns the endpoints current [`Parser`]
-    pub fn parser(&self) -> Parser {
-        self.inner.parser
-    }
-
-    /// Utility function to parse an uri
-    pub fn parse_uri(
-        &self,
-        i: impl AsRef<str>,
-    ) -> Result<Box<dyn Uri>, nom::error::VerboseError<String>> {
-        let bytes = BytesStr::from(i.as_ref());
-        let ctx = ParseCtx::new(bytes.as_ref(), self.parser());
-
-        let (_, uri) = ctx.parse_uri()(&bytes)
-            .finish()
-            .map_err(verbose_error_to_owned)?;
-
-        Ok(uri)
     }
 
     /// Sends an INVITE request and return a [`ClientInvTsx`] which MUST be used to drive the transaction
@@ -141,7 +116,7 @@ impl Endpoint {
 
     /// Try to find or create a suitable transport for a given uri and return a non-empty list
     /// of resolved socket addresses
-    pub async fn select_transport(&self, uri: &dyn Uri) -> Result<(TpHandle, SocketAddr)> {
+    pub async fn select_transport(&self, uri: &SipUri) -> Result<(TpHandle, SocketAddr)> {
         self.transports().select(self, uri).await
     }
 
@@ -155,7 +130,7 @@ impl Endpoint {
         let (transport, destination) = if let Some((transport, destination)) = &target.transport {
             (transport.clone(), *destination)
         } else {
-            let (transport, destination) = self.select_transport(&*request.line.uri).await?;
+            let (transport, destination) = self.select_transport(&request.line.uri).await?;
             target.transport = Some((transport.clone(), destination));
             (transport, destination)
         };
@@ -622,7 +597,6 @@ impl EndpointBuilder {
         let inner = Inner {
             allow: take(&mut self.allow),
             supported: take(&mut self.supported),
-            parser: Default::default(),
             transports: self.transports.build(),
             transactions: Default::default(),
             layer,

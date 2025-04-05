@@ -114,7 +114,7 @@ async fn handle_msg(
 
     let bytes = &bytes[..len];
 
-    match parse_complete(endpoint.parser(), bytes) {
+    match parse_complete(bytes) {
         Ok(CompleteItem::KeepAliveRequest) => {
             inner.socket.send_to(b"\r\n", remote).await?;
         }

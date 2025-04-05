@@ -1,7 +1,7 @@
 use super::streaming::{
     StreamingFactory, StreamingListener, StreamingListenerBuilder, StreamingTransport,
 };
-use sip_types::uri::UriInfo;
+use sip_types::uri::SipUri;
 use std::io;
 use std::net::SocketAddr;
 use tokio::net::{TcpListener as TokioTcpListener, TcpSocket, TcpStream, ToSocketAddrs};
@@ -33,7 +33,7 @@ impl StreamingFactory for TcpConnector {
 
     async fn connect<A: ToSocketAddrs + Send>(
         &self,
-        _: &UriInfo,
+        _: &SipUri,
         addr: SocketAddr,
     ) -> io::Result<Self::Transport> {
         if let Some(bind_addr) = self.bind_addr {

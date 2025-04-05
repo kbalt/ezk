@@ -1,6 +1,6 @@
 use crate::host::HostPort;
 use crate::method::Method;
-use crate::parse::ParseCtx;
+use crate::parse::Parse;
 use crate::print::{AppendCtx, Print, PrintCtx, UriContext};
 use crate::uri::params::{Params, CPS, HPS};
 use bytes::Bytes;
@@ -13,8 +13,7 @@ use nom::sequence::{preceded, terminated, tuple};
 use percent_encoding::{percent_decode_str, percent_encode, AsciiSet};
 use std::borrow::Cow;
 use std::fmt;
-use std::str::{FromStr, Utf8Error};
-use thiserror::Error;
+use std::str::Utf8Error;
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct UserPw {
@@ -149,19 +148,19 @@ fn password(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '!' | '~' | '*' | '\'' | '(' | ')' | '%' | '&' | '=' | '+' | '$' | ',')
 }
 
-impl SipUri {
-    pub fn parse(ctx: ParseCtx<'_>) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
+impl Parse for SipUri {
+    fn parse(src: &Bytes) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
         move |i| {
             map_res(
                 tuple((
                     parse_scheme,
                     parse_user_pw,
-                    HostPort::parse(ctx),
-                    Params::<CPS>::parse(ctx),
-                    Params::<HPS>::parse(ctx),
+                    HostPort::parse(src),
+                    Params::<CPS>::parse(src),
+                    Params::<HPS>::parse(src),
                 )),
                 |(sips, user_pw, host_port, uri_params, header_params)| -> Result<SipUri, Utf8Error> {
-                    let user_part = user_part(ctx.src, user_pw)?;
+                    let user_part = user_part(src, user_pw)?;
 
                     Ok(SipUri {
                         sips,
@@ -174,13 +173,16 @@ impl SipUri {
             )(i)
         }
     }
+}
+impl_from_str!(SipUri);
 
-    pub fn parse_no_params(ctx: ParseCtx<'_>) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
+impl SipUri {
+    pub(crate) fn parse_no_params(src: &Bytes) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
         move |i| {
             map_res(
-                tuple((parse_scheme, parse_user_pw, HostPort::parse(ctx))),
+                tuple((parse_scheme, parse_user_pw, HostPort::parse(src))),
                 |(sips, user_pw, host_port)| -> Result<SipUri, Utf8Error> {
-                    let user_part = user_part(ctx.src, user_pw)?;
+                    let user_part = user_part(src, user_pw)?;
 
                     Ok(SipUri {
                         sips,
@@ -230,24 +232,4 @@ fn parse_user_pw(i: &str) -> IResult<&str, Option<(&str, Option<&str>)>> {
         )),
         tag("@"),
     ))(i)
-}
-
-#[derive(Debug, Error)]
-#[error("invalid sip uri")]
-pub struct InvalidSipUri(());
-
-impl FromStr for SipUri {
-    type Err = InvalidSipUri;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = BytesStr::from(s);
-
-        let ctx = ParseCtx::default(&s);
-
-        let res = Self::parse(ctx)(s.as_ref())
-            .map(|(_, uri)| uri)
-            .map_err(|_| InvalidSipUri(()));
-
-        res
-    }
 }

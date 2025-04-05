@@ -2,7 +2,7 @@ use super::streaming::{
     StreamingFactory, StreamingListener, StreamingListenerBuilder, StreamingTransport,
 };
 use rustls_pki_types::{IpAddr, ServerName};
-use sip_types::{host::Host, uri::UriInfo};
+use sip_types::{host::Host, uri::SipUri};
 use std::convert::TryFrom;
 use std::io;
 use std::net::SocketAddr;
@@ -17,7 +17,7 @@ impl StreamingFactory for TlsConnector {
 
     async fn connect<A: ToSocketAddrs + Send>(
         &self,
-        uri_info: &UriInfo,
+        uri_info: &SipUri,
         addr: SocketAddr,
     ) -> io::Result<Self::Transport> {
         let server_name = match uri_info.host_port.host {

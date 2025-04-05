@@ -1,7 +1,7 @@
 use super::streaming::{
     StreamingFactory, StreamingListener, StreamingListenerBuilder, StreamingTransport,
 };
-use sip_types::uri::UriInfo;
+use sip_types::uri::SipUri;
 use std::io;
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
@@ -15,13 +15,13 @@ impl StreamingFactory for TlsConnector {
 
     async fn connect<A: ToSocketAddrs + Send>(
         &self,
-        uri_info: &UriInfo,
+        uri: &SipUri,
         addr: SocketAddr,
     ) -> io::Result<Self::Transport> {
         // Best effort to guess the domain. If the `Host` a valid domain this will work,
         // but sometimes it might be an IP address or invalid domain. In that case this might succeed anyway
         // since the TlsConnector might be configured to not use SNI and/or hostname verification
-        let domain = uri_info.host_port.host.to_string();
+        let domain = uri.host_port.host.to_string();
 
         let stream = TcpStream::connect(addr).await?;
         let stream = self

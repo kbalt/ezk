@@ -8,7 +8,7 @@ use sip_core::{Endpoint, Request};
 use sip_types::header::typed::{CSeq, CallID, Contact, FromTo, MaxForwards};
 use sip_types::header::HeaderError;
 use sip_types::msg::RequestLine;
-use sip_types::uri::{NameAddr, Uri};
+use sip_types::uri::{NameAddr, SipUri};
 use sip_types::{Headers, Method, Name};
 use tokio::sync::Mutex;
 
@@ -20,7 +20,7 @@ pub struct ClientDialogBuilder {
     pub peer_fromto: FromTo,
     pub local_contact: Contact,
     pub call_id: CallID,
-    pub target: Box<dyn Uri>,
+    pub target: SipUri,
     pub secure: bool,
     pub target_tp_info: TargetTransportInfo,
 }
@@ -30,7 +30,7 @@ impl ClientDialogBuilder {
         endpoint: Endpoint,
         local_addr: NameAddr,
         local_contact: Contact,
-        target: Box<dyn Uri>,
+        target: SipUri,
     ) -> Self {
         Self {
             endpoint,
@@ -39,7 +39,7 @@ impl ClientDialogBuilder {
             peer_fromto: FromTo::new(NameAddr::uri(target.clone()), None),
             local_contact,
             call_id: CallID(random_string()),
-            secure: target.info().secure,
+            secure: target.sips,
             target,
             target_tp_info: TargetTransportInfo::default(),
         }

@@ -1,9 +1,10 @@
 use crate::header::headers::OneOrMore;
 use crate::header::{ConstNamed, ExtendValues, HeaderParse};
 use crate::method::Method;
-use crate::parse::ParseCtx;
+use crate::parse::Parse;
 use crate::print::PrintCtx;
 use crate::Name;
+use bytes::Bytes;
 use internal::{ws, IResult};
 use nom::character::complete::digit1;
 use nom::combinator::{map, map_res};
@@ -37,12 +38,12 @@ impl ConstNamed for RAck {
 }
 
 impl HeaderParse for RAck {
-    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> IResult<&'i str, Self> {
+    fn parse<'i>(src: &'i Bytes, i: &'i str) -> IResult<&'i str, Self> {
         map(
             ws((
                 map_res(digit1, FromStr::from_str),
                 map_res(digit1, FromStr::from_str),
-                Method::parse(ctx),
+                Method::parse(src),
             )),
             |(rack, cseq, method)| RAck { rack, cseq, method },
         )(i)

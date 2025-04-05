@@ -1,4 +1,4 @@
-use crate::parse::{token, ParseCtx};
+use crate::parse::{token, Parse};
 use bytes::Bytes;
 use bytesstr::BytesStr;
 use internal::IResult;
@@ -79,12 +79,12 @@ methods! {
     "REFER",       REFER;
 }
 
-impl Method {
-    /// returns an nom-compatible method-parser
-    pub fn parse(ctx: ParseCtx<'_>) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
-        move |i| map(take_while1(token), |slice| Self::from_parse(ctx.src, slice))(i)
+impl Parse for Method {
+    fn parse(src: &Bytes) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
+        move |i| map(take_while1(token), |slice| Self::from_parse(src, slice))(i)
     }
 }
+impl_from_str!(Method);
 
 impl From<&str> for Method {
     fn from(s: &str) -> Self {
@@ -96,30 +96,22 @@ impl From<&str> for Method {
 
 #[cfg(test)]
 mod test {
+    use std::str::FromStr;
+
     use super::Method;
     use crate::method::Repr;
-    use crate::parse::ParseCtx;
-    use bytesstr::BytesStr;
 
     #[test]
     fn invite_method() {
-        let input = BytesStr::from_static("INVITE");
-
-        assert_eq!(
-            Method::parse(ParseCtx::default(&input))(&input[..]).unwrap(),
-            ("", Method::INVITE)
-        );
+        assert_eq!(Method::from_str("INVITE").unwrap(), Method::INVITE);
 
         assert_eq!(Method::INVITE.to_string(), "INVITE");
     }
 
     #[test]
     fn other_method() {
-        let input = BytesStr::from_static("SOMEOBSCUREMETHOD");
+        let method: Method = "SOMEOBSCUREMETHOD".parse().unwrap();
 
-        let (rem, method) = Method::parse(ParseCtx::default(&input))(&input).unwrap();
-
-        assert!(rem.is_empty());
         assert_eq!(method, Method(Repr::Other("SOMEOBSCUREMETHOD".into())));
 
         assert_eq!(method.to_string(), "SOMEOBSCUREMETHOD");

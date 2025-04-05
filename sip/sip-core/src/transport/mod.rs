@@ -7,7 +7,7 @@ use parking_lot::Mutex;
 use sip_types::host::{Host, HostPort};
 use sip_types::msg::MessageLine;
 use sip_types::print::AppendCtx;
-use sip_types::uri::{Uri, UriInfo};
+use sip_types::uri::SipUri;
 use sip_types::Headers;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
@@ -57,7 +57,7 @@ pub trait Factory: Send + Sync + 'static {
     async fn create(
         &self,
         endpoint: Endpoint,
-        uri_info: &UriInfo,
+        uri: &SipUri,
         addrs: SocketAddr,
     ) -> io::Result<TpHandle>;
 }
@@ -314,14 +314,14 @@ impl Transports {
         }
     }
 
-    async fn resolve_uri(&self, info: &UriInfo<'_>) -> io::Result<Vec<ServerEntry>> {
-        let port = match info.host_port.port {
+    async fn resolve_uri(&self, uri: &SipUri) -> io::Result<Vec<ServerEntry>> {
+        let port = match uri.host_port.port {
             Some(port) => port,
-            None if info.secure => 5061,
+            None if uri.sips => 5061,
             None => 5060,
         };
 
-        self.resolve_host_port(&info.host_port.host, port).await
+        self.resolve_host_port(&uri.host_port.host, port).await
     }
 
     /// Will try to find or create a suitable transport the given Uri
@@ -329,31 +329,29 @@ impl Transports {
     pub(crate) async fn select(
         &self,
         endpoint: &Endpoint,
-        uri: &dyn Uri,
+        uri: &SipUri,
     ) -> Result<(TpHandle, SocketAddr)> {
         log::trace!("select transport for {:?}", uri);
 
-        let info = uri.info();
-
         // Resolve host_port to possible remote addresses
-        let servers = self.resolve_uri(&info).await?;
+        let servers = self.resolve_uri(uri).await?;
 
         for server in servers {
             // Search unmanaged ones (connectionless, e.g. udp)
-            if let Some(transport) = self.find_matching_unmanaged_transport(&info, &server) {
+            if let Some(transport) = self.find_matching_unmanaged_transport(uri, &server) {
                 log::trace!("selected connectionless: {}", transport);
 
                 return Ok((transport.clone(), server.address));
             }
 
             // Search managed idling transports (connections, e.g. tcp / tls)
-            if let Some(found) = self.find_matching_idling_transport(&info, &server) {
+            if let Some(found) = self.find_matching_idling_transport(uri, &server) {
                 return Ok((found, server.address));
             }
 
             // No existing transport found, try and connect a new one
 
-            if let Some(found) = self.connect(endpoint, &info, &server).await {
+            if let Some(found) = self.connect(endpoint, uri, &server).await {
                 return Ok((found, server.address));
             }
         }
@@ -367,7 +365,7 @@ impl Transports {
 
     fn find_matching_unmanaged_transport(
         &self,
-        uri: &UriInfo<'_>,
+        uri: &SipUri,
         server: &ServerEntry,
     ) -> Option<&TpHandle> {
         self.unmanaged.iter().find(|tp| {
@@ -378,9 +376,10 @@ impl Transports {
                 .map(|t| t.as_str() == tp.name())
                 .unwrap_or(true);
 
-            let security_level_matches = uri.allows_security_level(tp.secure());
+            let security_level_matches = if uri.sips { tp.secure() } else { true };
             let transport_param_matches = uri
-                .transport
+                .uri_params
+                .get_val("transport")
                 .as_ref()
                 .is_none_or(|t| tp.matches_transport_param(t));
 
@@ -393,7 +392,7 @@ impl Transports {
 
     fn find_matching_idling_transport(
         &self,
-        uri: &UriInfo<'_>,
+        uri: &SipUri,
         server: &ServerEntry,
     ) -> Option<TpHandle> {
         // TODO: do something about this lock
@@ -418,12 +417,12 @@ impl Transports {
             }
 
             // Check if the transport security is sufficient
-            if !uri.allows_security_level(managed.transport.secure()) {
+            if !uri.sips || managed.transport.secure() {
                 continue;
             }
 
             // Check if the transport's name matches the transport parameter
-            if let Some(transport_param) = &uri.transport {
+            if let Some(transport_param) = uri.uri_params.get_val("transport") {
                 if !managed.transport.matches_transport_param(transport_param) {
                     continue;
                 }
@@ -444,7 +443,7 @@ impl Transports {
     async fn connect(
         &self,
         endpoint: &Endpoint,
-        uri: &UriInfo<'_>,
+        uri: &SipUri,
         server: &ServerEntry,
     ) -> Option<TpHandle> {
         // Try to build new transport with a factory
@@ -455,12 +454,12 @@ impl Transports {
                 }
             }
 
-            if !uri.allows_security_level(factory.secure()) {
+            if !uri.sips || factory.secure() {
                 continue;
             }
 
             // Check if the transport's name matches the transport parameter
-            if let Some(transport_param) = &uri.transport {
+            if let Some(transport_param) = uri.uri_params.get_val("transport") {
                 if !factory.matches_transport_param(transport_param) {
                     continue;
                 }

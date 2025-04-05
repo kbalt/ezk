@@ -2,9 +2,10 @@ use crate::header::headers::OneOrMore;
 use crate::header::name::Name;
 use crate::header::{ConstNamed, ExtendValues, HeaderParse};
 use crate::host::HostPort;
-use crate::parse::{token, whitespace, ParseCtx};
+use crate::parse::{token, whitespace, Parse};
 use crate::print::{AppendCtx, Print, PrintCtx};
 use crate::uri::params::{Param, Params, CPS};
+use bytes::Bytes;
 use bytesstr::BytesStr;
 use internal::ws;
 use internal::IResult;
@@ -46,7 +47,7 @@ impl ConstNamed for Via {
 }
 
 impl HeaderParse for Via {
-    fn parse<'i>(ctx: ParseCtx<'_>, i: &'i str) -> IResult<&'i str, Self> {
+    fn parse<'i>(src: &'i Bytes, i: &'i str) -> IResult<&'i str, Self> {
         map(
             tuple((
                 preceded(
@@ -57,11 +58,11 @@ impl HeaderParse for Via {
                         take_while(whitespace),
                     ),
                 ),
-                HostPort::parse(ctx),
-                Params::<CPS>::parse(ctx),
+                HostPort::parse(src),
+                Params::<CPS>::parse(src),
             )),
             move |(tp, hp, p)| Via {
-                transport: BytesStr::from_parse(ctx.src, tp),
+                transport: BytesStr::from_parse(src, tp),
                 sent_by: hp,
                 params: p,
             },
@@ -103,7 +104,7 @@ mod test {
     fn via() {
         let input = BytesStr::from_static("SIP/2.0/TCP 192.168.123.222:53983;branch=abc123");
 
-        let (rem, via) = Via::parse(ParseCtx::default(&input), &input).unwrap();
+        let (rem, via) = Via::parse(input.as_ref(), &input).unwrap();
 
         assert!(rem.is_empty());
 

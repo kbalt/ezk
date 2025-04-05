@@ -1,7 +1,7 @@
 //! Contains everything header related
 
-use crate::parse::{ParseCtx, Parser};
 use crate::print::PrintCtx;
+use bytes::Bytes;
 use bytesstr::BytesStr;
 use headers::OneOrMore;
 use internal::IResult;
@@ -30,7 +30,7 @@ pub trait DecodeValues: Sized {
     /// Decode a header from a iterator of [`BytesStr`].
     ///
     /// Implementations should assume that `values` will always yield at least one value
-    fn decode<'i, I>(parser: Parser, values: &mut I) -> IResult<&'i str, Self>
+    fn decode<'i, I>(values: &mut I) -> IResult<&'i str, Self>
     where
         I: Iterator<Item = &'i BytesStr>;
 }
@@ -38,7 +38,7 @@ pub trait DecodeValues: Sized {
 /// Simplified parse trait which plays nicer with nom parsers. Should be implemented
 /// by any header that only cares about a single header value.
 pub trait HeaderParse: Sized {
-    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> IResult<&'i str, Self>;
+    fn parse<'i>(src: &'i Bytes, i: &'i str) -> IResult<&'i str, Self>;
 }
 
 // ==== PRINT TRAITS ====
@@ -74,7 +74,7 @@ pub trait ExtendValues {
 // ==== BLANKED IMPL ===-
 
 impl<H: HeaderParse> DecodeValues for H {
-    fn decode<'i, I>(parser: Parser, values: &mut I) -> IResult<&'i str, Self>
+    fn decode<'i, I>(values: &mut I) -> IResult<&'i str, Self>
     where
         I: Iterator<Item = &'i BytesStr>,
     {
@@ -87,12 +87,7 @@ impl<H: HeaderParse> DecodeValues for H {
             }));
         };
 
-        let ctx = ParseCtx {
-            src: value.as_ref(),
-            parser,
-        };
-
-        H::parse(ctx, value.as_str())
+        H::parse(value.as_ref(), value.as_str())
     }
 }
 
@@ -108,14 +103,14 @@ macro_rules! csv_header {
         }
 
         impl $crate::header::HeaderParse for $struct_name {
-            fn parse<'i>(ctx: $crate::parse::ParseCtx, i: &'i str) -> $crate::_private_reexport::IResult<&'i str, Self> {
+            fn parse<'i>(src: &$crate::_private_reexport::Bytes, i: &'i str) -> $crate::_private_reexport::IResult<&'i str, Self> {
                 if let Some(comma_idx) = i.find(',') {
                     Ok((
                         &i[comma_idx..],
-                        Self(<$wrapping>::from_parse(ctx.src, &i[..comma_idx])),
+                        Self(<$wrapping>::from_parse(src, &i[..comma_idx])),
                     ))
                 } else {
-                    Ok(("", Self(<$wrapping>::from_parse(ctx.src, i))))
+                    Ok(("", Self(<$wrapping>::from_parse(src, i))))
                 }
             }
         }
@@ -151,7 +146,7 @@ macro_rules! from_str_header {
         }
 
         impl $crate::header::HeaderParse for $struct_name {
-            fn parse<'i>(_: $crate::parse::ParseCtx, i: &'i str) -> $crate::_private_reexport::IResult<&'i str, Self> {
+            fn parse<'i>(_: &$crate::_private_reexport::Bytes, i: &'i str) -> $crate::_private_reexport::IResult<&'i str, Self> {
                 use $crate::_private_reexport::nom;
                 use $crate::_private_reexport::identity;
                 use nom::combinator::map_res;

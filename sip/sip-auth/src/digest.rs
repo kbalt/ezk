@@ -546,7 +546,7 @@ mod test {
     use sip_types::{
         header::typed::AuthResponse,
         msg::{RequestLine, StatusLine},
-        uri::sip::SipUri,
+        uri::SipUri,
         Headers, Method, Name, StatusCode,
     };
 
@@ -581,7 +581,7 @@ mod test {
 
         let line = RequestLine {
             method: Method::REGISTER,
-            uri: Box::new("sip:example.org".parse::<SipUri>().unwrap()),
+            uri: "sip:example.org".parse::<SipUri>().unwrap(),
         };
 
         authenticator
@@ -662,7 +662,7 @@ mod test {
 
         let line = RequestLine {
             method: Method::REGISTER,
-            uri: Box::new(uri),
+            uri,
         };
 
         authenticator

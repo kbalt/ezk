@@ -2,7 +2,7 @@ use crate::transport::managed::DropNotifier;
 use crate::transport::{Direction, Factory, ReceivedMessage, TpHandle, TpKey, Transport};
 use crate::{Endpoint, EndpointBuilder};
 use decode::{Item, StreamingDecoder};
-use sip_types::uri::UriInfo;
+use sip_types::uri::SipUri;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -53,7 +53,7 @@ pub trait StreamingFactory: Send + Sync + 'static {
 
     async fn connect<A: ToSocketAddrs + Send>(
         &self,
-        uri_info: &UriInfo,
+        uri_info: &SipUri,
         addr: SocketAddr,
     ) -> io::Result<Self::Transport>;
 }
@@ -166,12 +166,12 @@ where
     async fn create(
         &self,
         endpoint: Endpoint,
-        uri_info: &UriInfo,
+        uri: &SipUri,
         addr: SocketAddr,
     ) -> io::Result<TpHandle> {
         log::trace!("{} trying to connect to {}", self.name(), addr);
 
-        let stream = self.connect::<SocketAddr>(uri_info, addr).await?;
+        let stream = self.connect::<SocketAddr>(uri, addr).await?;
         let local = stream.local_addr()?;
         let remote = stream.peer_addr()?;
 
@@ -186,7 +186,7 @@ where
             incoming: false,
         };
 
-        let framed = FramedRead::new(read, StreamingDecoder::new(endpoint.parser()));
+        let framed = FramedRead::new(read, StreamingDecoder::default());
 
         let (transport, notifier) = endpoint.transports().add_managed_used(transport);
 
@@ -239,7 +239,7 @@ where
 
                 let rx = endpoint.transports().add_managed_unused(transport);
 
-                let framed = FramedRead::new(read, StreamingDecoder::new(endpoint.parser()));
+                let framed = FramedRead::new(read, StreamingDecoder::default());
 
                 tokio::spawn(receive_task(
                     endpoint.clone(),

@@ -1,9 +1,9 @@
 use crate::header::headers::OneOrMore;
 use crate::header::{ExtendValues, HeaderParse};
-use crate::parse::ParseCtx;
 use crate::print::{AppendCtx, Print, PrintCtx, UriContext};
 use crate::uri::params::{Params, CPS};
 use crate::uri::NameAddr;
+use bytes::Bytes;
 use internal::IResult;
 use nom::combinator::map;
 use nom::sequence::tuple;
@@ -17,9 +17,9 @@ pub struct Routing {
 }
 
 impl HeaderParse for Routing {
-    fn parse<'i>(ctx: ParseCtx<'_>, i: &'i str) -> IResult<&'i str, Self> {
+    fn parse<'i>(src: &'i Bytes, i: &'i str) -> IResult<&'i str, Self> {
         map(
-            tuple((NameAddr::parse_no_params(ctx), Params::<CPS>::parse(ctx))),
+            tuple((NameAddr::parse_no_params(src), Params::<CPS>::parse(src))),
             |(uri, params)| Self { uri, params },
         )(i)
     }
@@ -50,7 +50,7 @@ impl Print for Routing {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::uri::sip::SipUri;
+    use crate::uri::SipUri;
     use crate::{Headers, Name};
 
     fn test_routing() -> Routing {
@@ -96,7 +96,7 @@ mod test {
         headers.insert(Name::ROUTE, "<sip:example.org>");
 
         let routing: Routing = headers.get(Name::ROUTE).unwrap();
-        assert_eq!(&routing.uri.uri, &test_routing().uri.uri);
+        assert!(routing.uri.uri.compare(&test_routing().uri.uri));
         assert!(routing.params.is_empty());
         assert_eq!(routing.uri.name, None)
     }
@@ -110,11 +110,11 @@ mod test {
 
         assert_eq!(routing.len(), 2);
 
-        assert_eq!(&routing[0].uri.uri, &test_routing().uri.uri);
+        assert!(&routing[0].uri.uri.compare(&test_routing().uri.uri));
         assert!(routing[0].params.is_empty());
         assert_eq!(routing[0].uri.name, None);
 
-        assert_eq!(&routing[1].uri.uri, &test_routing().uri.uri);
+        assert!(&routing[1].uri.uri.compare(&test_routing().uri.uri));
         assert!(routing[1].params.is_empty());
         assert_eq!(routing[1].uri.name, None)
     }

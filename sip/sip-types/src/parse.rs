@@ -1,15 +1,15 @@
-#![allow(unused_parens)]
 //! Parsing utilities for SIP message components
 
-use crate::uri::sip::SipUri;
-use crate::uri::Uri;
+use std::str::FromStr;
+
 use bytes::Bytes;
+use bytesstr::BytesStr;
 use internal::IResult;
-use nom::branch::alt;
 use nom::bytes::complete::{escaped, is_not};
 use nom::character::complete::char;
-use nom::combinator::map;
+use nom::error::{VerboseError, VerboseErrorKind};
 use nom::sequence::delimited;
+use nom::Finish;
 
 pub(crate) fn parse_quoted(i: &str) -> IResult<&str, &str> {
     delimited(char('"'), escaped(is_not("\""), '\\', char('"')), char('"'))(i)
@@ -24,67 +24,40 @@ pub(crate) fn token(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '-' | '.' | '!' | '%' | '*' | '_' | '`' | '\'' | '~' | '+')
 }
 
-/// Can be used to extend the parsing capabilities of this library.
-///
-/// Currently this can be used to register nom parsers for custom URI types
-#[derive(Copy, Clone)]
-pub struct Parser {
-    pub parse_other_uri: fn(&str) -> IResult<&str, Box<dyn Uri>>,
-    pub parse_other_uri_no_params: fn(&str) -> IResult<&str, Box<dyn Uri>>,
-}
+/// Parsable type using nom
+pub trait Parse: Sized + FromStr {
+    /// Create a parser which references the given buffer
+    fn parse(src: &Bytes) -> impl Fn(&str) -> IResult<&str, Self> + '_;
 
-fn fail(_: &str) -> IResult<&str, Box<dyn Uri>> {
-    Err(nom::Err::Error(nom::error::VerboseError { errors: vec![] }))
-}
+    /// Parse from str
+    fn parse_str(i: &str) -> Result<Self, VerboseError<String>> {
+        let src = BytesStr::from(i);
 
-impl Default for Parser {
-    fn default() -> Self {
-        Self {
-            parse_other_uri: fail,
-            parse_other_uri_no_params: fail,
+        let (remaining, parsed) = Self::parse(src.as_ref())(&src)
+            .finish()
+            .map_err(internal::verbose_error_to_owned)?;
+
+        if remaining.is_empty() {
+            Ok(parsed)
+        } else {
+            Err(VerboseError {
+                errors: vec![(
+                    remaining.into(),
+                    VerboseErrorKind::Context("Input was not completely consumed"),
+                )],
+            })
         }
     }
 }
 
-/// Contains the source buffer and a parser
-#[derive(Copy, Clone)]
-pub struct ParseCtx<'p> {
-    pub src: &'p Bytes,
-    pub parser: Parser,
-}
+macro_rules! impl_from_str {
+    ($ty:ty) => {
+        impl std::str::FromStr for $ty {
+            type Err = $crate::_private_reexport::nom::error::VerboseError<String>;
 
-impl<'p> ParseCtx<'p> {
-    pub(crate) fn default<B>(src: &'p B) -> Self
-    where
-        B: AsRef<Bytes> + 'p,
-    {
-        Self {
-            src: src.as_ref(),
-            parser: Default::default(),
+            fn from_str(i: &str) -> Result<Self, Self::Err> {
+                <Self as Parse>::parse_str(i)
+            }
         }
-    }
-
-    pub fn new(src: &'p Bytes, parser: Parser) -> Self {
-        ParseCtx { src, parser }
-    }
-
-    pub fn parse_uri(self) -> impl Fn(&str) -> IResult<&str, Box<dyn Uri>> + 'p {
-        move |i| {
-            alt((
-                map(SipUri::parse(self), |uri| -> Box<dyn Uri> { Box::new(uri) }),
-                self.parser.parse_other_uri,
-            ))(i)
-        }
-    }
-
-    pub fn parse_uri_no_params(self) -> impl Fn(&str) -> IResult<&str, Box<dyn Uri>> + 'p {
-        move |i| {
-            alt((
-                map(SipUri::parse_no_params(self), |uri| -> Box<dyn Uri> {
-                    Box::new(uri)
-                }),
-                self.parser.parse_other_uri_no_params,
-            ))(i)
-        }
-    }
+    };
 }

@@ -11,14 +11,13 @@ from_str_header! {
 mod test {
     use super::*;
     use crate::header::HeaderParse;
-    use crate::parse::ParseCtx;
     use bytesstr::BytesStr;
 
     #[test]
     fn max_fwd() {
         let input = BytesStr::from_static("70");
 
-        let (rem, content_length) = MaxForwards::parse(ParseCtx::default(&input), &input).unwrap();
+        let (rem, content_length) = MaxForwards::parse(input.as_ref(), &input).unwrap();
 
         assert!(rem.is_empty());
 
@@ -29,7 +28,7 @@ mod test {
     fn max_fwd_spaces() {
         let input = BytesStr::from_static("   70   ");
 
-        let (rem, content_length) = MaxForwards::parse(ParseCtx::default(&input), &input).unwrap();
+        let (rem, content_length) = MaxForwards::parse(input.as_ref(), &input).unwrap();
 
         assert!(rem.is_empty());
 

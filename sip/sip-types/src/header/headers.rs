@@ -1,6 +1,5 @@
 use super::{ConstNamed, DecodeValues, DynNamed, ExtendValues, HeaderError};
 use crate::header::name::Name;
-use crate::parse::Parser;
 use crate::print::{AppendCtx, Print, PrintCtx};
 use bytesstr::BytesStr;
 use internal::verbose_error_to_owned;
@@ -15,7 +14,6 @@ use std::{fmt, slice};
 /// Internally it is a `Vec`-backed multimap to keep insertion order
 #[derive(Default, Clone)]
 pub struct Headers {
-    parser: Parser,
     entries: Vec<Entry>,
 }
 
@@ -32,7 +30,6 @@ impl Headers {
     #[inline]
     pub fn new() -> Self {
         Headers {
-            parser: Parser::default(),
             entries: Vec::new(),
         }
     }
@@ -41,14 +38,8 @@ impl Headers {
     #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
         Headers {
-            parser: Parser::default(),
             entries: Vec::with_capacity(capacity),
         }
-    }
-
-    /// Set the [`Parser`] to be used when parsing types.
-    pub fn set_parser(&mut self, parser: Parser) {
-        self.parser = parser;
     }
 
     /// Returns if a header with the given name is inside the map.
@@ -169,7 +160,7 @@ impl Headers {
         &mut self,
     ) -> Option<Result<H, HeaderError>> {
         remove_where(&mut self.entries, |Entry { name, .. }| *name == H::NAME)
-            .map(|Entry { values, .. }| values.decode(H::NAME, self.parser))
+            .map(|Entry { values, .. }| values.decode(H::NAME))
     }
 
     /// Returns a parsed header `H`.
@@ -185,7 +176,7 @@ impl Headers {
     /// HeaderError if the header is not present.
     #[inline]
     pub fn try_get_named<H: ConstNamed + DecodeValues>(&self) -> Option<Result<H, HeaderError>> {
-        Some(self.entry(&H::NAME)?.values.decode(H::NAME, self.parser))
+        Some(self.entry(&H::NAME)?.values.decode(H::NAME))
     }
 
     /// Takes a closure which edits a named header type.
@@ -211,7 +202,7 @@ impl Headers {
     #[inline]
     pub fn try_take<H: DecodeValues>(&mut self, name: Name) -> Option<Result<H, HeaderError>> {
         remove_where(&mut self.entries, |entry| entry.name == name)
-            .map(|Entry { values, .. }| values.decode(name, self.parser))
+            .map(|Entry { values, .. }| values.decode(name))
     }
 
     /// Returns a parsed header `H`.
@@ -226,7 +217,7 @@ impl Headers {
     /// Returns a parsed header `H`. Returns `None` instead a HeaderError if header is not present.
     #[inline]
     pub fn try_get<H: DecodeValues>(&self, name: Name) -> Option<Result<H, HeaderError>> {
-        Some(self.entry(&name)?.values.decode(name, self.parser))
+        Some(self.entry(&name)?.values.decode(name))
     }
 
     /// Takes a closure which edits a header.
@@ -236,12 +227,11 @@ impl Headers {
         H: DecodeValues + ExtendValues,
         F: FnOnce(&mut H),
     {
-        let parser = self.parser;
         let entry = self
             .entry_mut(&name)
             .ok_or_else(|| HeaderError::missing(name.clone()))?;
 
-        let mut header = entry.values.decode(name, parser)?;
+        let mut header = entry.values.decode(name)?;
 
         (edit)(&mut header);
 
@@ -387,10 +377,10 @@ impl OneOrMore {
         }
     }
 
-    fn decode<H: DecodeValues>(&self, name: Name, parser: Parser) -> Result<H, HeaderError> {
+    fn decode<H: DecodeValues>(&self, name: Name) -> Result<H, HeaderError> {
         match &self {
-            OneOrMore::One(v) => H::decode(parser, &mut once(v)).finish(),
-            OneOrMore::More(v) => H::decode(parser, &mut v.iter()).finish(),
+            OneOrMore::One(v) => H::decode(&mut once(v)).finish(),
+            OneOrMore::More(v) => H::decode(&mut v.iter()).finish(),
         }
         .map(|(_, h)| h)
         .map_err(|err| HeaderError::malformed(name, verbose_error_to_owned(err)))

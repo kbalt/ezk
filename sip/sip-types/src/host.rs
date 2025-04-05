@@ -2,7 +2,7 @@
 //!
 //! [Via]: crate::header::typed::Via
 
-use crate::parse::ParseCtx;
+use crate::parse::Parse;
 use crate::print::{Print, PrintCtx, UriContext};
 use bytesstr::BytesStr;
 use internal::IResult;
@@ -26,19 +26,20 @@ pub enum Host {
     Name(BytesStr),
 }
 
-impl Host {
-    pub fn parse(ctx: ParseCtx<'_>) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
+impl Parse for Host {
+    fn parse(src: &bytes::Bytes) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
         move |i| {
             alt((
                 map_res(ip6_reference, |ip6| ip6.parse().map(Self::IP6)),
                 map_res(ip4_address, |ip4| ip4.parse().map(Self::IP4)),
                 map(hostname, |hostname| {
-                    Self::Name(BytesStr::from_parse(ctx.src, hostname))
+                    Self::Name(BytesStr::from_parse(src, hostname))
                 }),
             ))(i)
         }
     }
 }
+impl_from_str!(Host);
 
 /// IPv4addresses =  1*3DIGIT "." 1*3DIGIT "." 1*3DIGIT "." 1*3DIGIT
 fn ip4_address(i: &str) -> IResult<&str, &str> {
@@ -128,12 +129,14 @@ impl HostPort {
             port: None,
         }
     }
+}
 
-    pub fn parse(ctx: ParseCtx<'_>) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
+impl Parse for HostPort {
+    fn parse(src: &bytes::Bytes) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
         move |i| {
             map_res(
                 tuple((
-                    Host::parse(ctx),
+                    Host::parse(src),
                     opt(preceded(tag(":"), take_while(char::is_dec_digit))),
                 )),
                 |(host, port): (Host, Option<&str>)| -> Result<_, ParseIntError> {
@@ -149,6 +152,7 @@ impl HostPort {
         }
     }
 }
+impl_from_str!(HostPort);
 
 impl From<SocketAddrV4> for HostPort {
     fn from(addr: SocketAddrV4) -> Self {
@@ -192,25 +196,13 @@ impl Print for HostPort {
 
 #[cfg(test)]
 mod test {
+    use std::str::FromStr;
+
     use super::*;
 
     #[track_caller]
-    fn parse(i: &'static str) -> HostPort {
-        let input = BytesStr::from_static(i);
-
-        let (rem, out) = HostPort::parse(ParseCtx::default(&input))(&input).unwrap();
-
-        assert_eq!(
-            rem, "",
-            "expected rem to be empty\ninput={input:?}\noutput={out:?}"
-        );
-
-        out
-    }
-
-    #[track_caller]
     fn expect_hostname(i: &'static str) {
-        let got = parse(i);
+        let got = HostPort::from_str(i).unwrap();
         assert_eq!(got, HostPort::host_name(i));
     }
 
@@ -220,7 +212,7 @@ mod test {
             host: Host::IP4(i.parse().unwrap()),
             port: None,
         };
-        let got = parse(i);
+        let got = HostPort::from_str(i).unwrap();
         assert_eq!(got, expected);
     }
 
@@ -230,7 +222,7 @@ mod test {
             host: Host::IP6(i[1..i.len() - 1].parse().unwrap()),
             port: None,
         };
-        let got = parse(i);
+        let got = HostPort::from_str(i).unwrap();
         assert_eq!(got, expected);
     }
 

@@ -1,10 +1,10 @@
 use crate::header::headers::OneOrMore;
 use crate::header::name::Name;
 use crate::header::{ConstNamed, ExtendValues, HeaderParse};
-use crate::parse::ParseCtx;
 use crate::print::{AppendCtx, Print, PrintCtx};
 use crate::uri::params::{Params, CPS};
 use anyhow::bail;
+use bytes::Bytes;
 use bytesstr::BytesStr;
 use internal::ws;
 use internal::IResult;
@@ -121,9 +121,9 @@ impl Print for SubscriptionState {
 }
 
 impl HeaderParse for SubscriptionState {
-    fn parse<'i>(ctx: ParseCtx<'_>, i: &'i str) -> IResult<&'i str, Self> {
+    fn parse<'i>(src: &'i Bytes, i: &'i str) -> IResult<&'i str, Self> {
         map_res(
-            ws((take_while1(|b| b != ';'), Params::<CPS>::parse(ctx))),
+            ws((take_while1(|b| b != ';'), Params::<CPS>::parse(src))),
             |(sub_state, mut params)| -> anyhow::Result<Self> {
                 Ok(Self {
                     state: match sub_state {

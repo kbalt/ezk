@@ -82,7 +82,7 @@ impl Dialog {
             call_id: request.base_headers.call_id.clone(),
             route_set,
             // TODO check how this works exactly
-            secure: request.line.uri.info().secure,
+            secure: request.line.uri.sips,
             target_tp_info: Default::default(),
         };
 

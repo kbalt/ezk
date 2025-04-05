@@ -1,9 +1,9 @@
 use crate::header::headers::OneOrMore;
 use crate::header::{ExtendValues, HeaderParse};
-use crate::parse::ParseCtx;
 use crate::print::{AppendCtx, Print, PrintCtx, UriContext};
 use crate::uri::params::{Params, CPS};
 use crate::uri::NameAddr;
+use bytes::Bytes;
 use bytesstr::BytesStr;
 use internal::IResult;
 use nom::combinator::map;
@@ -26,25 +26,12 @@ impl FromTo {
             params: Params::new(),
         }
     }
-
-    pub fn parse<'p>(ctx: ParseCtx<'p>) -> impl Fn(&'p str) -> IResult<&'p str, Self> + 'p {
-        move |i| {
-            map(
-                tuple((NameAddr::parse_no_params(ctx), Params::<CPS>::parse(ctx))),
-                |(uri, mut params)| FromTo {
-                    uri,
-                    tag: params.take("tag"),
-                    params,
-                },
-            )(i)
-        }
-    }
 }
 
 impl HeaderParse for FromTo {
-    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> IResult<&'i str, Self> {
+    fn parse<'i>(src: &'i Bytes, i: &'i str) -> IResult<&'i str, Self> {
         map(
-            tuple((NameAddr::parse_no_params(ctx), Params::<CPS>::parse(ctx))),
+            tuple((NameAddr::parse_no_params(src), Params::<CPS>::parse(src))),
             |(uri, mut params)| FromTo {
                 uri,
                 tag: params.take("tag"),
@@ -78,7 +65,7 @@ impl Print for FromTo {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::uri::sip::SipUri;
+    use crate::uri::SipUri;
     use crate::{Headers, Name};
 
     fn test_fromto() -> FromTo {
@@ -107,7 +94,7 @@ mod test {
 
         let from_to: FromTo = headers.get(Name::FROM).unwrap();
 
-        assert_eq!(&from_to.uri.uri, &test_fromto().uri.uri);
+        assert!(from_to.uri.uri.compare(&test_fromto().uri.uri));
         assert_eq!(from_to.tag, Some(BytesStr::from_static("321")));
     }
 }

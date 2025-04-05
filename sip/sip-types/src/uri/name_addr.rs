@@ -1,6 +1,7 @@
-use crate::parse::{parse_quoted, whitespace, ParseCtx};
+use super::sip::SipUri;
+use crate::parse::{parse_quoted, whitespace, Parse};
 use crate::print::{AppendCtx, Print, PrintCtx};
-use crate::uri::Uri;
+use bytes::Bytes;
 use bytesstr::BytesStr;
 use internal::IResult;
 use nom::branch::alt;
@@ -15,71 +16,67 @@ use std::fmt;
 #[derive(Clone, Debug)]
 pub struct NameAddr {
     pub name: Option<BytesStr>,
-    pub uri: Box<dyn Uri>,
+    pub uri: SipUri,
 }
 
 impl NameAddr {
     #[inline]
-    pub fn new<N, U>(name: N, uri: U) -> Self
+    pub fn new<N, U>(name: N, uri: SipUri) -> Self
     where
         N: Into<BytesStr>,
-        U: Into<Box<dyn Uri>>,
     {
         Self {
             name: Some(name.into()),
-            uri: uri.into(),
+            uri,
         }
     }
 
     #[inline]
-    pub fn uri<U>(uri: U) -> Self
-    where
-        U: Into<Box<dyn Uri>>,
-    {
-        Self {
-            name: None,
-            uri: uri.into(),
-        }
+    pub fn uri(uri: SipUri) -> Self {
+        Self { name: None, uri }
     }
 
-    pub fn parse(ctx: ParseCtx<'_>) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
+    pub(crate) fn parse_no_params(src: &Bytes) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
         move |i| {
             map(
                 alt((
                     tuple((
                         opt(alt((parse_quoted, take_while1(display)))),
                         take_while(whitespace),
-                        delimited(tag("<"), ctx.parse_uri(), tag(">")),
+                        delimited(tag("<"), SipUri::parse(src), tag(">")),
                     )),
-                    map(ctx.parse_uri(), |uri| (None, "", uri)),
+                    map(SipUri::parse_no_params(src), |uri| (None, "", uri)),
                 )),
                 move |(name, _, uri)| Self {
-                    name: name.map(|name| BytesStr::from_parse(ctx.src, name.trim())),
-                    uri,
-                },
-            )(i)
-        }
-    }
-
-    pub fn parse_no_params(ctx: ParseCtx<'_>) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
-        move |i| {
-            map(
-                alt((
-                    tuple((
-                        opt(alt((parse_quoted, take_while1(display)))),
-                        take_while(whitespace),
-                        delimited(tag("<"), ctx.parse_uri(), tag(">")),
-                    )),
-                    map(ctx.parse_uri_no_params(), |uri| (None, "", uri)),
-                )),
-                move |(name, _, uri)| Self {
-                    name: name.map(|name| BytesStr::from_parse(ctx.src, name.trim())),
+                    name: name.map(|name| BytesStr::from_parse(src, name.trim())),
                     uri,
                 },
             )(i)
         }
     }
 }
+
+impl Parse for NameAddr {
+    fn parse(src: &Bytes) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
+        move |i| {
+            map(
+                alt((
+                    tuple((
+                        opt(alt((parse_quoted, take_while1(display)))),
+                        take_while(whitespace),
+                        delimited(tag("<"), SipUri::parse(src), tag(">")),
+                    )),
+                    map(SipUri::parse(src), |uri| (None, "", uri)),
+                )),
+                move |(name, _, uri)| Self {
+                    name: name.map(|name| BytesStr::from_parse(src, name.trim())),
+                    uri,
+                },
+            )(i)
+        }
+    }
+}
+impl_from_str!(NameAddr);
 
 impl Print for NameAddr {
     fn print(&self, f: &mut fmt::Formatter<'_>, ctx: PrintCtx<'_>) -> fmt::Result {
@@ -105,13 +102,13 @@ mod test {
     fn name_addr() {
         let input = BytesStr::from_static("Bob <sip:bob@example.com>");
 
-        let (rem, name_addr) = NameAddr::parse(ParseCtx::default(&input))(&input).unwrap();
+        let (rem, name_addr) = NameAddr::parse(input.as_ref())(&input).unwrap();
 
         assert!(rem.is_empty());
 
         assert_eq!(name_addr.name.as_ref().map(BytesStr::as_ref), Some("Bob"));
 
-        let sip_uri: &SipUri = name_addr.uri.downcast_ref().unwrap();
+        let sip_uri: &SipUri = &name_addr.uri;
 
         assert!(!sip_uri.sips);
         assert!(sip_uri.uri_params.is_empty());

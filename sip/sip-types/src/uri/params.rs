@@ -1,4 +1,4 @@
-use crate::parse::{parse_quoted, ParseCtx};
+use crate::parse::parse_quoted;
 use bytes::Bytes;
 use bytesstr::BytesStr;
 use internal::ws;
@@ -109,15 +109,15 @@ impl<S: ParamsSpec> Params<S> {
         }
     }
 
-    pub fn parse(ctx: ParseCtx<'_>) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
+    pub(crate) fn parse(src: &Bytes) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
         move |i| {
             map(
                 opt(map(
                     ws((
                         tag(S::FIRST_DELIMITER),
-                        Param::do_parse(ctx.src, S::CHAR_SPEC),
+                        Param::do_parse(src, S::CHAR_SPEC),
                         many0(map(
-                            ws((tag(S::DELIMITER), Param::do_parse(ctx.src, S::CHAR_SPEC))),
+                            ws((tag(S::DELIMITER), Param::do_parse(src, S::CHAR_SPEC))),
                             |(_, param)| param,
                         )),
                     )),
@@ -350,7 +350,7 @@ mod test {
     fn common_params_parse() {
         let input = BytesStr::from_static(";some_single_key;some_key=with_value");
 
-        let (rem, params) = Params::<CPS>::parse(ParseCtx::default(&input))(&input).unwrap();
+        let (rem, params) = Params::<CPS>::parse(input.as_ref())(&input).unwrap();
 
         assert!(rem.is_empty());
 
@@ -382,9 +382,8 @@ mod test {
 
     #[test]
     fn common_params_decode() {
-        let input = BytesStr::from_static(";emoji=%F0%9F%98%80");
-
-        let (rem, params) = Params::<CPS>::parse(ParseCtx::default(&input))(&input).unwrap();
+        let src = BytesStr::from_static(";emoji=%F0%9F%98%80");
+        let (rem, params) = Params::<HPS>::parse(src.as_ref())(&src).unwrap();
 
         assert!(rem.is_empty());
 
@@ -397,9 +396,8 @@ mod test {
 
     #[test]
     fn header_params_parse() {
-        let input = BytesStr::from_static("?some_single_key&some_key=with_value");
-
-        let (rem, params) = Params::<HPS>::parse(ParseCtx::default(&input))(&input).unwrap();
+        let src = BytesStr::from_static("?some_single_key&some_key=with_value");
+        let (rem, params) = Params::<HPS>::parse(src.as_ref())(&src).unwrap();
 
         assert!(rem.is_empty());
 

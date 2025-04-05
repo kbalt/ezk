@@ -1,7 +1,6 @@
 use super::headers::OneOrMore;
 use super::{ConstNamed, DecodeValues, ExtendValues, HeaderParse};
 use crate::header::name::Name;
-use crate::parse::{ParseCtx, Parser};
 use crate::print::PrintCtx;
 use bytesstr::BytesStr;
 use internal::IResult;
@@ -11,21 +10,16 @@ impl<H: ConstNamed> ConstNamed for Vec<H> {
 }
 
 impl<H: HeaderParse> DecodeValues for Vec<H> {
-    fn decode<'i, I>(parser: Parser, values: &mut I) -> IResult<&'i str, Self>
+    fn decode<'i, I>(values: &mut I) -> IResult<&'i str, Self>
     where
         I: Iterator<Item = &'i BytesStr>,
     {
         let mut items = Vec::new();
 
         for value in values {
-            let ctx = ParseCtx {
-                src: value.as_ref(),
-                parser,
-            };
-
             let mut i = value.as_str();
 
-            while let Ok((remaining, hdr)) = H::parse(ctx, i) {
+            while let Ok((remaining, hdr)) = H::parse(value.as_ref(), i) {
                 items.push(hdr);
 
                 let remaining = remaining.trim_start_matches(char::is_whitespace);

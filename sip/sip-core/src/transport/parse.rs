@@ -2,7 +2,7 @@ use bytes::Bytes;
 use internal::Finish;
 use sip_types::header::typed::ContentLength;
 use sip_types::msg::{Line, MessageLine, PullParser};
-use sip_types::parse::{ParseCtx, Parser};
+use sip_types::parse::Parse;
 use sip_types::Headers;
 use std::str::from_utf8;
 use stun_types::{is_stun_message, Message};
@@ -25,7 +25,7 @@ pub enum CompleteItem {
     },
 }
 
-pub fn parse_complete(parser: Parser, bytes: &[u8]) -> Result<CompleteItem, Error> {
+pub fn parse_complete(bytes: &[u8]) -> Result<CompleteItem, Error> {
     if bytes == b"\r\n\r\n" {
         return Ok(CompleteItem::KeepAliveRequest);
     } else if bytes == b"\r\n" {
@@ -36,7 +36,7 @@ pub fn parse_complete(parser: Parser, bytes: &[u8]) -> Result<CompleteItem, Erro
         stun_types::IsStunMessageInfo::TooShort
         | stun_types::IsStunMessageInfo::YesIncomplete { needed: _ } => Err(Error::FailedToParse),
         stun_types::IsStunMessageInfo::Yes { len } => parse_complete_stun(&bytes[..len]),
-        stun_types::IsStunMessageInfo::No => parse_complete_sip(parser, bytes),
+        stun_types::IsStunMessageInfo::No => parse_complete_sip(bytes),
     }
 }
 
@@ -52,7 +52,7 @@ fn parse_complete_stun(bytes: &[u8]) -> Result<CompleteItem, Error> {
     Ok(CompleteItem::Stun(msg))
 }
 
-fn parse_complete_sip(parser_: Parser, bytes: &[u8]) -> Result<CompleteItem, Error> {
+fn parse_complete_sip(bytes: &[u8]) -> Result<CompleteItem, Error> {
     let buffer = Bytes::copy_from_slice(bytes);
 
     let mut parser = PullParser::new(&buffer, 0);
@@ -75,9 +75,7 @@ fn parse_complete_sip(parser_: Parser, bytes: &[u8]) -> Result<CompleteItem, Err
         })?;
 
         if message_line.is_none() {
-            let ctx = ParseCtx::new(&buffer, parser_);
-
-            match MessageLine::parse(ctx)(line) {
+            match MessageLine::parse(&buffer)(line) {
                 Ok((_, line)) => {
                     message_line = Some(line);
                 }

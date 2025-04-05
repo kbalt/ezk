@@ -2,7 +2,7 @@ use crate::Result;
 use bytes::{Buf, Bytes, BytesMut};
 use internal::Finish;
 use sip_types::msg::{Line, MessageLine, PullParser};
-use sip_types::parse::{ParseCtx, Parser};
+use sip_types::parse::Parse;
 use sip_types::Headers;
 use std::io;
 use std::str::{from_utf8, Utf8Error};
@@ -44,18 +44,9 @@ pub struct DecodedMessage {
     pub buffer: Bytes,
 }
 
+#[derive(Default)]
 pub struct StreamingDecoder {
     head_progress: usize,
-    parser: Parser,
-}
-
-impl StreamingDecoder {
-    pub fn new(parser: Parser) -> Self {
-        Self {
-            head_progress: 0,
-            parser,
-        }
-    }
 }
 
 impl Decoder for StreamingDecoder {
@@ -159,9 +150,7 @@ impl Decoder for StreamingDecoder {
             let line = from_utf8(item)?;
 
             if message_line.is_none() {
-                let ctx = ParseCtx::new(&src_bytes, self.parser);
-
-                match MessageLine::parse(ctx)(line) {
+                match MessageLine::parse(&src_bytes)(line) {
                     Ok((_, line)) => message_line = Some(line),
                     Err(_) => return Err(Error::Malformed),
                 }

@@ -1,10 +1,10 @@
 use crate::header::headers::OneOrMore;
 use crate::header::name::Name;
 use crate::header::{ConstNamed, ExtendValues, HeaderParse};
-use crate::parse::ParseCtx;
 use crate::print::{AppendCtx, Print, PrintCtx, UriContext};
 use crate::uri::params::{Params, CPS};
 use crate::uri::NameAddr;
+use bytes::Bytes;
 use internal::IResult;
 use nom::combinator::map;
 use nom::sequence::tuple;
@@ -34,9 +34,9 @@ impl ConstNamed for Contact {
 }
 
 impl HeaderParse for Contact {
-    fn parse<'i>(ctx: ParseCtx<'_>, i: &'i str) -> IResult<&'i str, Self> {
+    fn parse<'i>(src: &'i Bytes, i: &'i str) -> IResult<&'i str, Self> {
         map(
-            tuple((NameAddr::parse_no_params(ctx), Params::<CPS>::parse(ctx))),
+            tuple((NameAddr::parse_no_params(src), Params::<CPS>::parse(src))),
             |(uri, params)| Contact { uri, params },
         )(i)
     }
@@ -68,7 +68,7 @@ impl Print for Contact {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::uri::sip::SipUri;
+    use crate::uri::SipUri;
     use crate::Headers;
 
     fn test_contact() -> Contact {
@@ -114,7 +114,7 @@ mod test {
         headers.insert(Name::CONTACT, "<sip:example.org>");
 
         let contact: Contact = headers.get_named().unwrap();
-        assert_eq!(&contact.uri.uri, &test_contact().uri.uri);
+        assert!(contact.uri.uri.compare(&test_contact().uri.uri));
         assert!(contact.params.is_empty());
         assert_eq!(contact.uri.name, None)
     }
@@ -128,11 +128,11 @@ mod test {
 
         assert_eq!(contact.len(), 2);
 
-        assert_eq!(&contact[0].uri.uri, &test_contact().uri.uri);
+        assert!(contact[0].uri.uri.compare(&test_contact().uri.uri));
         assert!(contact[0].params.is_empty());
         assert_eq!(contact[0].uri.name, None);
 
-        assert_eq!(&contact[1].uri.uri, &test_contact().uri.uri);
+        assert!(contact[1].uri.uri.compare(&test_contact().uri.uri));
         assert!(contact[1].params.is_empty());
         assert_eq!(contact[1].uri.name, None)
     }

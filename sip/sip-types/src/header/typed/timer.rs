@@ -1,8 +1,8 @@
 use crate::header::{ConstNamed, ExtendValues, HeaderParse, OneOrMore};
-use crate::parse::ParseCtx;
 use crate::print::{AppendCtx, Print, PrintCtx};
 use crate::uri::params::{Params, CPS};
 use crate::Name;
+use bytes::Bytes;
 use internal::{ws, IResult};
 use nom::character::complete::alphanumeric1;
 use nom::combinator::{map, map_res};
@@ -35,11 +35,11 @@ impl ConstNamed for SessionExpires {
 }
 
 impl HeaderParse for SessionExpires {
-    fn parse<'i>(ctx: ParseCtx<'_>, i: &'i str) -> IResult<&'i str, Self> {
+    fn parse<'i>(src: &'i Bytes, i: &'i str) -> IResult<&'i str, Self> {
         map(
             ws((
                 map_res(alphanumeric1, FromStr::from_str),
-                Params::<CPS>::parse(ctx),
+                Params::<CPS>::parse(src),
             )),
             |(delta_secs, mut params)| -> Self {
                 let refresher = if let Some(param) = params.take("refresher") {
@@ -94,7 +94,7 @@ mod test {
     fn min_se() {
         let input = BytesStr::from_static("160");
 
-        let (rem, min_se) = MinSe::parse(ParseCtx::default(&input), &input).unwrap();
+        let (rem, min_se) = MinSe::parse(input.as_ref(), &input).unwrap();
 
         assert!(rem.is_empty());
 
@@ -105,7 +105,7 @@ mod test {
     fn session_expires() {
         let input = BytesStr::from_static("1000");
 
-        let (rem, se) = SessionExpires::parse(ParseCtx::default(&input), &input).unwrap();
+        let (rem, se) = SessionExpires::parse(input.as_ref(), &input).unwrap();
 
         assert!(rem.is_empty());
 
@@ -117,7 +117,7 @@ mod test {
     fn session_expires_refresher_uac() {
         let input = BytesStr::from_static("1000;refresher=uac");
 
-        let (rem, se) = SessionExpires::parse(ParseCtx::default(&input), &input).unwrap();
+        let (rem, se) = SessionExpires::parse(input.as_ref(), &input).unwrap();
 
         assert!(rem.is_empty());
 
@@ -129,7 +129,7 @@ mod test {
     fn session_expires_refresher_uas() {
         let input = BytesStr::from_static("1000;refresher=uas");
 
-        let (rem, se) = SessionExpires::parse(ParseCtx::default(&input), &input).unwrap();
+        let (rem, se) = SessionExpires::parse(input.as_ref(), &input).unwrap();
 
         assert!(rem.is_empty());
 

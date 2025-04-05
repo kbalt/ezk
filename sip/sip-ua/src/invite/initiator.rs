@@ -13,7 +13,7 @@ use sip_core::transport::OutgoingRequest;
 use sip_core::{Endpoint, Error, Request};
 use sip_types::header::typed::{Contact, RSeq, Refresher, Supported};
 use sip_types::header::HeaderError;
-use sip_types::uri::{NameAddr, Uri};
+use sip_types::uri::{NameAddr, SipUri};
 use sip_types::{Method, Name, StatusCode};
 use std::collections::HashMap;
 use std::future::poll_fn;
@@ -59,7 +59,7 @@ impl InviteInitiator {
         endpoint: Endpoint,
         local_addr: NameAddr,
         local_contact: Contact,
-        target: Box<dyn Uri>,
+        target: SipUri,
     ) -> Self {
         let dialog = ClientDialogBuilder::new(endpoint, local_addr, local_contact, target);
 

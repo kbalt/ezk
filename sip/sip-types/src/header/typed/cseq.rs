@@ -2,9 +2,10 @@ use crate::header::headers::OneOrMore;
 use crate::header::name::Name;
 use crate::header::{ConstNamed, ExtendValues, HeaderParse};
 use crate::method::Method;
-use crate::parse::{whitespace, ParseCtx};
+use crate::parse::{whitespace, Parse};
 use crate::print::PrintCtx;
 use anyhow::Result;
+use bytes::Bytes;
 use internal::IResult;
 use nom::bytes::complete::take_while;
 use nom::character::complete::digit1;
@@ -32,12 +33,12 @@ impl ConstNamed for CSeq {
 }
 
 impl HeaderParse for CSeq {
-    fn parse<'i>(ctx: ParseCtx, i: &'i str) -> IResult<&'i str, Self> {
+    fn parse<'i>(src: &'i Bytes, i: &'i str) -> IResult<&'i str, Self> {
         map_res(
             separated_pair(
                 map_res(digit1, FromStr::from_str),
                 take_while(whitespace),
-                Method::parse(ctx),
+                Method::parse(src),
             ),
             |(cseq, method)| -> Result<_, ParseIntError> { Ok(CSeq { cseq, method }) },
         )(i)

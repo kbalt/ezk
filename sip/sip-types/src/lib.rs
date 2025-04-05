@@ -10,13 +10,14 @@ mod macros;
 #[macro_use]
 pub mod print;
 #[macro_use]
+pub mod parse;
+#[macro_use]
 pub mod uri;
 mod code;
 pub mod header;
 pub mod host;
 mod method;
 pub mod msg;
-pub mod parse;
 
 pub use code::CodeKind;
 pub use code::StatusCode;
@@ -28,6 +29,7 @@ pub use header::name::Name;
 
 #[doc(hidden)]
 pub mod _private_reexport {
+    pub use bytes::Bytes;
     pub use internal::{identity, IResult};
     pub use nom;
 }

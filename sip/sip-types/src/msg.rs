@@ -2,9 +2,9 @@
 
 use crate::code::StatusCode;
 use crate::method::Method;
-use crate::parse::{token, whitespace, ParseCtx};
+use crate::parse::{token, whitespace, Parse};
 use crate::print::{AppendCtx, Print, PrintCtx};
-use crate::uri::Uri;
+use crate::uri::SipUri;
 use crate::Name;
 use anyhow::Result;
 use bytes::Bytes;
@@ -89,17 +89,6 @@ pub enum MessageLine {
 }
 
 impl MessageLine {
-    /// takes a buffer containing a complete message-head buffer and returns a function which parses
-    /// the message line of a sip message.
-    pub fn parse<'p>(ctx: ParseCtx<'p>) -> impl Fn(&'p str) -> IResult<&'p str, Self> + 'p {
-        move |i| {
-            alt((
-                map(StatusLine::parse(ctx), MessageLine::Response),
-                map(RequestLine::parse(ctx), MessageLine::Request),
-            ))(i)
-        }
-    }
-
     pub fn is_request(&self) -> bool {
         matches!(self, Self::Request(..))
     }
@@ -111,6 +100,18 @@ impl MessageLine {
         }
     }
 }
+
+impl Parse for MessageLine {
+    fn parse(src: &Bytes) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
+        move |i| {
+            alt((
+                map(StatusLine::parse(src), MessageLine::Response),
+                map(RequestLine::parse(src), MessageLine::Request),
+            ))(i)
+        }
+    }
+}
+impl_from_str!(MessageLine);
 
 impl Print for MessageLine {
     fn print(&self, f: &mut fmt::Formatter<'_>, ctx: PrintCtx<'_>) -> fmt::Result {
@@ -127,7 +128,7 @@ impl Print for MessageLine {
 #[derive(Debug, Clone)]
 pub struct RequestLine {
     pub method: Method,
-    pub uri: Box<dyn Uri>,
+    pub uri: SipUri,
 }
 
 impl Print for RequestLine {
@@ -136,15 +137,15 @@ impl Print for RequestLine {
     }
 }
 
-impl RequestLine {
-    pub(crate) fn parse<'p>(ctx: ParseCtx<'p>) -> impl Fn(&'p str) -> IResult<&'p str, Self> + 'p {
+impl Parse for RequestLine {
+    fn parse(src: &Bytes) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
         move |i| {
             map(
                 separated_pair(
-                    Method::parse(ctx),
+                    Method::parse(src),
                     take_while(whitespace),
                     terminated(
-                        ctx.parse_uri(),
+                        SipUri::parse(src),
                         tuple((take_while(whitespace), tag("SIP/2.0"))),
                     ),
                 ),
@@ -153,6 +154,7 @@ impl RequestLine {
         }
     }
 }
+impl_from_str!(RequestLine);
 
 /// The leading line of a SIP response message
 #[derive(Debug, Clone)]
@@ -173,8 +175,8 @@ impl fmt::Display for StatusLine {
     }
 }
 
-impl StatusLine {
-    pub(crate) fn parse(ctx: ParseCtx<'_>) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
+impl Parse for StatusLine {
+    fn parse(src: &Bytes) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
         move |i| {
             map(
                 preceded(
@@ -190,7 +192,7 @@ impl StatusLine {
                         code: StatusCode::from(code),
                         reason: reason.and_then(|reason| match reason.trim() {
                             "" => None,
-                            s => Some(BytesStr::from_parse(ctx.src, s)),
+                            s => Some(BytesStr::from_parse(src, s)),
                         }),
                     }
                 },
@@ -198,6 +200,7 @@ impl StatusLine {
         }
     }
 }
+impl_from_str!(StatusLine);
 
 /// Simple pull parser which returns all lines in a SIP message.
 ///
