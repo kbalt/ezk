@@ -7,7 +7,7 @@ use sip_auth::{ClientAuthenticator, DigestAuthenticator, DigestCredentials, Dige
 use sip_core::{Endpoint, IncomingRequest, Layer, MayTake};
 use sip_types::{
     header::typed::{Contact, ContentType},
-    uri::{sip::SipUri, NameAddr},
+    uri::{NameAddr, SipUri},
     Method, StatusCode,
 };
 

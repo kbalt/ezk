@@ -6,7 +6,7 @@ use sip_auth::{ClientAuthenticator, RequestParts, ResponseParts};
 use sip_core::{transport::TargetTransportInfo, Endpoint};
 use sip_types::{
     header::typed::{Contact, FromTo},
-    uri::{sip::SipUri, NameAddr},
+    uri::{NameAddr, SipUri},
     Name, StatusCode,
 };
 use sip_ua::register::Registration as RegistrationProto;
@@ -76,7 +76,7 @@ impl Registration {
         let mut registration = RegistrationProto::new(
             id.clone(),
             contact.clone(),
-            config.registrar.clone().into(),
+            config.registrar.clone(),
             Duration::from_secs(300),
         );
 

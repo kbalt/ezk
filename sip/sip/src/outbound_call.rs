@@ -6,7 +6,7 @@ use sip_core::{transaction::TsxResponse, Endpoint, Request};
 use sip_types::{
     header::typed::{Contact, ContentType},
     msg::StatusLine,
-    uri::{sip::SipUri, NameAddr},
+    uri::{NameAddr, SipUri},
     StatusCode,
 };
 use sip_ua::invite::{
@@ -72,7 +72,7 @@ impl<M: MediaBackend> OutboundCall<M> {
         target: SipUri,
         mut media: M,
     ) -> Result<Self, MakeCallError<M::Error, A::Error>> {
-        let mut initiator = InviteInitiator::new(endpoint.clone(), id, contact, Box::new(target));
+        let mut initiator = InviteInitiator::new(endpoint.clone(), id, contact, target);
 
         // Only create a SDP offer if the sdp-session has media set by the user
         let sdp_offer = if media.has_media() {
