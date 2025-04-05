@@ -1,0 +1,18 @@
+[package]
+name = "ezk-rtc"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ice.workspace = true
+rtp.workspace = true
+sdp-types.workspace = true
+log.workspace = true
+
+local-ip-address = "0.6"
+proto = { package = "ezk-rtc-proto", path = "../rtc-proto" }
+quinn-udp = "0.5"
+tokio = { version = "1", features = ["net"] }

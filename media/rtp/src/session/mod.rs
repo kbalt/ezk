@@ -219,10 +219,12 @@ impl RtpSession {
         None
     }
 
-    pub fn pop_rtp_after(&self, jitter_buffer_length: Option<Duration>) -> Option<Duration> {
+    pub fn pop_rtp_after(
+        &self,
+        now: Instant,
+        jitter_buffer_length: Option<Duration>,
+    ) -> Option<Duration> {
         let jitter_buffer_length = jitter_buffer_length.unwrap_or(DEFAULT_JITTERBUFFER_LENGTH);
-
-        let now = Instant::now();
 
         self.receiver
             .iter()
