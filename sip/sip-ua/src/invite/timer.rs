@@ -44,11 +44,11 @@ impl AcceptorTimerConfig {
         // the UAC side is responsible for refreshes
         self.refresher = match self.refresher {
             Refresher::Uas => {
-                real_delta_secs = delta_secs - 10;
+                real_delta_secs = delta_secs / 2;
                 Refresher::Uas
             }
             Refresher::Unspecified | Refresher::Uac => {
-                real_delta_secs = delta_secs + 10;
+                real_delta_secs = delta_secs;
                 Refresher::Uac
             }
         };
@@ -102,11 +102,11 @@ impl InitiatorTimerConfig {
 
             let refresher = match se.refresher {
                 Refresher::Uas => {
-                    real_delta_secs = se.delta_secs - 10;
+                    real_delta_secs = se.delta_secs;
                     Refresher::Uas
                 }
                 Refresher::Unspecified | Refresher::Uac => {
-                    real_delta_secs = se.delta_secs + 10;
+                    real_delta_secs = se.delta_secs / 2;
                     Refresher::Uac
                 }
             };
