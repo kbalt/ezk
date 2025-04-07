@@ -1,6 +1,6 @@
 [package]
 name = "ezk-sip-types"
-version = "0.6.0"
+version = "0.6.1"
 description = "SIP types providing parsing & serialization"
 categories = ["network-programming", "multimedia"]
 keywords = ["sip"]
