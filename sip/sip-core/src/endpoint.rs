@@ -47,6 +47,7 @@ struct Inner {
     // capabilities
     allow: Vec<Allow>,
     supported: Vec<Supported>,
+    user_agent: Option<BytesStr>,
 
     transports: Transports,
     transactions: Transactions,
@@ -147,6 +148,13 @@ impl Endpoint {
 
     /// Print the request to its buffer (if needed) and send it via the transport
     pub async fn send_outgoing_request(&self, message: &mut OutgoingRequest) -> io::Result<()> {
+        // Append the endpoints configured user agent, if there isn't one already
+        if let Some(user_agent) = &self.inner.user_agent {
+            if !message.msg.headers.contains(&Name::USER_AGENT) {
+                message.msg.headers.insert(Name::USER_AGENT, user_agent);
+            }
+        }
+
         if message.parts.buffer.is_empty() {
             let mut buffer = BytesMut::new();
 
@@ -501,6 +509,7 @@ pub struct EndpointBuilder {
     accept: Vec<Accept>,
     allow: Vec<Allow>,
     supported: Vec<Supported>,
+    user_agent: Option<BytesStr>,
 
     transports: TransportsBuilder,
     layer: Vec<Box<dyn Layer>>,
@@ -521,6 +530,7 @@ impl EndpointBuilder {
             accept: vec![],
             allow: vec![],
             supported: vec![],
+            user_agent: None,
             transports: Default::default(),
             layer: Default::default(),
         }
@@ -545,6 +555,14 @@ impl EndpointBuilder {
         S: Into<BytesStr>,
     {
         self.supported.push(Supported(supported.into()))
+    }
+
+    /// Set the User-Agent header to be sent with every request
+    pub fn user_agent<S>(&mut self, user_agent: S)
+    where
+        S: Into<BytesStr>,
+    {
+        self.user_agent = Some(user_agent.into())
     }
 
     /// Add an unmanaged transport to the endpoint which will never vanish or break (e.g. UDP)
@@ -597,6 +615,7 @@ impl EndpointBuilder {
         let inner = Inner {
             allow: take(&mut self.allow),
             supported: take(&mut self.supported),
+            user_agent: take(&mut self.user_agent),
             transports: self.transports.build(),
             transactions: Default::default(),
             layer,
