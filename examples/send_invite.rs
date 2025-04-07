@@ -2,7 +2,7 @@ use sip_auth::{ClientAuthenticator, DigestAuthenticator, DigestCredentials, Dige
 use sip_core::transport::udp::Udp;
 use sip_core::{Endpoint, Result};
 use sip_types::header::typed::Contact;
-use sip_types::uri::NameAddr;
+use sip_types::uri::{NameAddr, SipUri};
 use sip_ua::dialog::DialogLayer;
 use sip_ua::invite::InviteLayer;
 
@@ -20,8 +20,8 @@ async fn main() -> Result<()> {
     // Build endpoint to start the SIP Stack
     let endpoint = builder.build();
 
-    let local_uri = endpoint.parse_uri("sip:127.0.0.1").unwrap();
-    let target = endpoint.parse_uri("sip:127.0.0.1").unwrap();
+    let local_uri: SipUri = "sip:127.0.0.1".parse().unwrap();
+    let target: SipUri = "sip:127.0.0.1".parse().unwrap();
 
     let mut initiator = sip_ua::invite::initiator::InviteInitiator::new(
         endpoint,
