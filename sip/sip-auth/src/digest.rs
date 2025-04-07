@@ -115,7 +115,7 @@ struct ChallengedRealm {
 }
 
 /// A cached authorization response that will be used/reused to authorize a request
-pub struct ResponseEntry {
+pub(crate) struct ResponseEntry {
     pub realm: BytesStr,
     pub header: DigestResponse,
 

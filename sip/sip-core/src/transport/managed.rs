@@ -26,31 +26,31 @@ use tokio::sync::{mpsc, oneshot};
 enum Never {}
 
 /// Returns a tuple pair of [`RefOwner`] and its  
-pub fn ref_counter() -> (RefOwner, DropNotifier) {
+pub(crate) fn ref_counter() -> (RefOwner, DropNotifier) {
     let (tx, rx) = mpsc::channel(1);
 
     (RefOwner(Arc::new(tx)), DropNotifier(rx))
 }
 
 #[derive(Debug, Clone)]
-pub struct RefOwner(Arc<mpsc::Sender<Never>>);
+pub(crate) struct RefOwner(Arc<mpsc::Sender<Never>>);
 
 impl RefOwner {
-    pub fn downgrade(&self) -> WeakRefOwner {
+    pub(crate) fn downgrade(&self) -> WeakRefOwner {
         WeakRefOwner(Arc::downgrade(&self.0))
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct WeakRefOwner(Weak<mpsc::Sender<Never>>);
+pub(crate) struct WeakRefOwner(Weak<mpsc::Sender<Never>>);
 
 impl WeakRefOwner {
-    pub fn upgrade(&self) -> Option<RefOwner> {
+    pub(crate) fn upgrade(&self) -> Option<RefOwner> {
         self.0.upgrade().map(RefOwner)
     }
 }
 
-pub struct DropNotifier(mpsc::Receiver<Never>);
+pub(crate) struct DropNotifier(mpsc::Receiver<Never>);
 
 impl Future for DropNotifier {
     type Output = ();
@@ -63,18 +63,18 @@ impl Future for DropNotifier {
     }
 }
 
-pub enum ManagedTransportState {
+pub(crate) enum ManagedTransportState {
     Used(WeakRefOwner),
     Unused(oneshot::Sender<DropNotifier>),
 }
 
-pub struct MangedTransport {
+pub(crate) struct MangedTransport {
     pub transport: Arc<dyn Transport>,
     pub state: ManagedTransportState,
 }
 
 impl MangedTransport {
-    pub fn try_get(&mut self) -> Option<TpHandle> {
+    pub(crate) fn try_get(&mut self) -> Option<TpHandle> {
         match &self.state {
             ManagedTransportState::Used(weak_tx) => {
                 let owner = weak_tx.upgrade()?;

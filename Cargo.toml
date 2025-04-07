@@ -25,3 +25,6 @@ stun-types = { package = "ezk-stun-types", version = "0.3.0", path = "media/stun
 rustls-pki-types = { version = "1", features = ["std"] }
 tokio-native-tls = { version = "0.3" }
 tokio-rustls = { version = "0.26", default-features = false }
+
+[workspace.lints.rust]
+unreachable_pub = "warn"

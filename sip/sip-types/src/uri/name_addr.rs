@@ -96,7 +96,7 @@ fn display(c: char) -> bool {
 mod test {
     use super::*;
     use crate::host::Host;
-    use crate::uri::sip::{SipUri, UserPart};
+    use crate::uri::sip::{SipUri, SipUriUserPart};
 
     #[test]
     fn name_addr() {
@@ -113,7 +113,7 @@ mod test {
         assert!(!sip_uri.sips);
         assert!(sip_uri.uri_params.is_empty());
         assert!(sip_uri.header_params.is_empty());
-        assert!(matches!(&sip_uri.user_part, UserPart::User(x) if x == "bob"));
+        assert!(matches!(&sip_uri.user_part, SipUriUserPart::User(x) if x == "bob"));
 
         assert!(sip_uri.host_port.port.is_none());
         assert!(matches!(&sip_uri.host_port.host,  Host::Name(name) if name == "example.com"));

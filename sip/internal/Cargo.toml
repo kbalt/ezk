@@ -11,5 +11,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 nom = { version = "7", default-features = false, features = ["alloc"] }

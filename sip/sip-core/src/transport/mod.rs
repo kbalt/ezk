@@ -485,7 +485,7 @@ impl Transports {
     }
 
     /// Adds the given connected transport and return a strong tp-handle and notifier
-    pub fn add_managed_used<T>(&self, transport: T) -> (TpHandle, DropNotifier)
+    pub(crate) fn add_managed_used<T>(&self, transport: T) -> (TpHandle, DropNotifier)
     where
         T: Transport,
     {
@@ -508,7 +508,7 @@ impl Transports {
     ///
     /// Returns a oneshot receiver which yields a [`DropNotifier`].
     /// That notifier will be sent once the transports gets used.
-    pub fn add_managed_unused<T>(&self, transport: T) -> oneshot::Receiver<DropNotifier>
+    pub(crate) fn add_managed_unused<T>(&self, transport: T) -> oneshot::Receiver<DropNotifier>
     where
         T: Transport,
     {
@@ -535,7 +535,7 @@ impl Transports {
     ///
     /// Returns a oneshot receiver which yields a [`DropNotifier`].
     /// That notifier will be sent once the transports gets reused.
-    pub fn set_unused(&self, tp_key: &TpKey) -> oneshot::Receiver<DropNotifier> {
+    pub(crate) fn set_unused(&self, tp_key: &TpKey) -> oneshot::Receiver<DropNotifier> {
         let (tx, rx) = oneshot::channel();
 
         let mut transports = self.transports.lock();
@@ -549,7 +549,7 @@ impl Transports {
     }
 
     /// Returns the transport behind the key. Sets the state to used if its not
-    pub fn set_used(&self, tp_key: &TpKey) -> TpHandle {
+    pub(crate) fn set_used(&self, tp_key: &TpKey) -> TpHandle {
         let mut transports = self.transports.lock();
         let managed = transports
             .get_mut(tp_key)
@@ -561,13 +561,18 @@ impl Transports {
     }
 
     /// Remove the transport behind the key
-    pub fn drop_transport(&self, tp_key: &TpKey) {
+    pub(crate) fn drop_transport(&self, tp_key: &TpKey) {
         log::trace!("drop transport {:?}", tp_key);
 
         self.transports.lock().remove(tp_key);
     }
 
-    pub async fn receive_stun(&self, message: Message, source: SocketAddr, transport: TpHandle) {
+    pub(crate) async fn receive_stun(
+        &self,
+        message: Message,
+        source: SocketAddr,
+        transport: TpHandle,
+    ) {
         self.stun.receive(message, source, transport).await
     }
 }

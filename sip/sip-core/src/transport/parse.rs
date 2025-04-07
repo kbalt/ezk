@@ -8,12 +8,12 @@ use std::str::from_utf8;
 use stun_types::{is_stun_message, Message};
 
 #[derive(Debug, thiserror::Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("the given input was invalid in this context and couldn't be parsed")]
     FailedToParse,
 }
 
-pub enum CompleteItem {
+pub(crate) enum CompleteItem {
     KeepAliveRequest,
     KeepAliveResponse,
     Stun(Message),
@@ -25,7 +25,7 @@ pub enum CompleteItem {
     },
 }
 
-pub fn parse_complete(bytes: &[u8]) -> Result<CompleteItem, Error> {
+pub(crate) fn parse_complete(bytes: &[u8]) -> Result<CompleteItem, Error> {
     if bytes == b"\r\n\r\n" {
         return Ok(CompleteItem::KeepAliveRequest);
     } else if bytes == b"\r\n" {

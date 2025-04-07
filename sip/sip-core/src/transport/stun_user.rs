@@ -6,7 +6,7 @@ use stun::{IncomingMessage, StunEndpointUser};
 use stun_types::attributes::{MappedAddress, Software, XorMappedAddress};
 use stun_types::{Class, MessageBuilder, Method, TransactionId};
 
-pub struct StunUser;
+pub(crate) struct StunUser;
 
 #[async_trait::async_trait]
 impl StunEndpointUser for StunUser {
@@ -33,7 +33,7 @@ impl stun::TransportInfo for TpHandle {
 }
 
 impl Transports {
-    pub async fn discover_public_address(
+    pub(crate) async fn discover_public_address(
         &self,
         stun_server: SocketAddr,
         transport: &TpHandle,

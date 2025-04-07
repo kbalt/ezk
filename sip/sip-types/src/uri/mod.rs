@@ -6,4 +6,4 @@ mod name_addr;
 mod sip;
 
 pub use name_addr::NameAddr;
-pub use sip::SipUri;
+pub use sip::{SipUri, SipUriUserPart, SipUriUserPassword};

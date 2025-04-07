@@ -11,6 +11,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 byteorder = "1.4"
 rand = "0.9"

@@ -9,7 +9,7 @@ use std::str::{from_utf8, Utf8Error};
 use tokio_util::codec::Decoder;
 
 #[derive(Debug, thiserror::Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error(transparent)]
     Io(io::Error),
     #[error("receiving message too large")]
@@ -30,13 +30,13 @@ impl From<io::Error> for Error {
     }
 }
 
-pub enum Item {
+pub(crate) enum Item {
     DecodedMessage(DecodedMessage),
     KeepAliveRequest,
     KeepAliveResponse,
 }
 
-pub struct DecodedMessage {
+pub(crate) struct DecodedMessage {
     pub line: MessageLine,
     pub headers: Headers,
     pub body: Bytes,
@@ -45,7 +45,7 @@ pub struct DecodedMessage {
 }
 
 #[derive(Default)]
-pub struct StreamingDecoder {
+pub(crate) struct StreamingDecoder {
     head_progress: usize,
 }
 

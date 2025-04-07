@@ -23,7 +23,7 @@ pub(super) struct DialogEntry {
 }
 
 impl DialogEntry {
-    pub fn new(peer_cseq: Option<u32>) -> Self {
+    pub(crate) fn new(peer_cseq: Option<u32>) -> Self {
         Self {
             backlog: Default::default(),
             next_peer_cseq: peer_cseq.map(|peer_cseq| peer_cseq + 1),

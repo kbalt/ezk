@@ -16,24 +16,24 @@ use std::fmt;
 use std::str::Utf8Error;
 
 #[derive(Clone, PartialEq, Eq)]
-pub struct UserPw {
+pub struct SipUriUserPassword {
     pub user: BytesStr,
     pub password: BytesStr,
 }
 
 #[derive(Clone, PartialEq, Eq)]
-pub enum UserPart {
+pub enum SipUriUserPart {
     Empty,
     User(BytesStr),
     // Boxed because deprecated and rarely used
-    UserPw(Box<UserPw>),
+    UserPw(Box<SipUriUserPassword>),
 }
 
 #[derive(Clone)]
 pub struct SipUri {
     pub sips: bool,
 
-    pub user_part: UserPart,
+    pub user_part: SipUriUserPart,
     pub host_port: HostPort,
 
     pub uri_params: Params<CPS>,
@@ -44,7 +44,7 @@ impl SipUri {
     pub fn new(host_port: HostPort) -> Self {
         SipUri {
             sips: false,
-            user_part: UserPart::Empty,
+            user_part: SipUriUserPart::Empty,
             host_port,
             uri_params: Params::new(),
             header_params: Params::new(),
@@ -60,11 +60,11 @@ impl SipUri {
 
     pub fn set_user(&mut self, user: BytesStr) {
         match &mut self.user_part {
-            UserPart::Empty => {
-                self.user_part = UserPart::User(user);
+            SipUriUserPart::Empty => {
+                self.user_part = SipUriUserPart::User(user);
             }
-            UserPart::User(old) => *old = user,
-            UserPart::UserPw(old) => old.user = user,
+            SipUriUserPart::User(old) => *old = user,
+            SipUriUserPart::UserPw(old) => old.user = user,
         }
     }
 
@@ -97,9 +97,11 @@ impl Print for SipUri {
         }
 
         match &self.user_part {
-            UserPart::Empty => {}
-            UserPart::User(user) => write!(f, "{}@", percent_encode(user.as_ref(), &USER_SET))?,
-            UserPart::UserPw(user_pw) => {
+            SipUriUserPart::Empty => {}
+            SipUriUserPart::User(user) => {
+                write!(f, "{}@", percent_encode(user.as_ref(), &USER_SET))?
+            }
+            SipUriUserPart::UserPw(user_pw) => {
                 write!(
                     f,
                     "{}:{}@",
@@ -197,7 +199,10 @@ impl SipUri {
     }
 }
 
-fn user_part(src: &Bytes, user_pw: Option<(&str, Option<&str>)>) -> Result<UserPart, Utf8Error> {
+fn user_part(
+    src: &Bytes,
+    user_pw: Option<(&str, Option<&str>)>,
+) -> Result<SipUriUserPart, Utf8Error> {
     if let Some((user, password)) = user_pw {
         let user = match percent_decode_str(user).decode_utf8()? {
             Cow::Borrowed(slice) => BytesStr::from_parse(src, slice),
@@ -205,15 +210,15 @@ fn user_part(src: &Bytes, user_pw: Option<(&str, Option<&str>)>) -> Result<UserP
         };
 
         if let Some(pw) = password {
-            Ok(UserPart::UserPw(Box::new(UserPw {
+            Ok(SipUriUserPart::UserPw(Box::new(SipUriUserPassword {
                 user,
                 password: BytesStr::from_parse(src, pw),
             })))
         } else {
-            Ok(UserPart::User(user))
+            Ok(SipUriUserPart::User(user))
         }
     } else {
-        Ok(UserPart::Empty)
+        Ok(SipUriUserPart::Empty)
     }
 }
 
