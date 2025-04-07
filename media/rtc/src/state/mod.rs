@@ -1,10 +1,10 @@
 use crate::{BundlePolicy, Codecs, LocalMediaId, MediaId, Options, TransportId, TransportType};
-use ice::{Component, IceAgent, IceConnectionState, IceGatheringState, ReceivedPkt};
-use local_media::LocalMedia;
-use rtp::{
+use ::rtp::{
     rtcp_types::{Compound, Packet as RtcpPacket},
     RtpPacket,
 };
+use ice::{Component, IceAgent, IceConnectionState, IceGatheringState, ReceivedPkt};
+use local_media::LocalMedia;
 use sdp_types::{Direction, MediaDescription, MediaType};
 use slotmap::SlotMap;
 use std::{
@@ -20,6 +20,7 @@ use transport::{
 mod events;
 mod local_media;
 mod media;
+mod rtp;
 mod sdp;
 mod transport;
 

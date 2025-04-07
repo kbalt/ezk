@@ -1,3 +1,7 @@
+use super::{
+    opt_min, rtp::extensions::RtpExtensionIdsExt, TransportChange, TransportConnectionState,
+};
+use crate::{Error, TransportId, TransportType};
 use dtls_srtp::{make_ssl_context, DtlsSetup, DtlsSrtpSession, DtlsState};
 use ice::{
     Component, IceAgent, IceConnectionState, IceCredentials, IceEvent, IceGatheringState,
@@ -23,10 +27,6 @@ mod sdes_srtp;
 
 pub(crate) use builder::TransportBuilder;
 pub(crate) use packet_kind::PacketKind;
-
-use crate::{rtp::extensions::RtpExtensionIdsExt, Error, TransportId, TransportType};
-
-use super::{opt_min, TransportChange, TransportConnectionState};
 
 #[derive(Default)]
 pub(crate) struct SessionTransportState {

@@ -117,7 +117,10 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use crate::{call::CallEvent, Client, MediaSession, RegistrarConfig};
-    use rtc_proto::{BundlePolicy, Codec, Codecs, Options, RtcpMuxPolicy, TransportType};
+    use rtc::{
+        tokio::TokioSessionState, BundlePolicy, Codec, Codecs, Direction, MediaType, Options,
+        RtcpMuxPolicy, TransportType,
+    };
     use sip_auth::{DigestAuthenticator, DigestCredentials, DigestUser};
     use std::time::Duration;
 
@@ -146,7 +149,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut sdp_session = rtc::AsyncSdpSession::new(
+        let mut sdp_session = TokioSessionState::new(
             "10.6.0.3".parse().unwrap(),
             Options {
                 offer_transport: TransportType::Rtp,
@@ -159,22 +162,22 @@ mod tests {
 
         let audio = sdp_session
             .add_local_media(
-                Codecs::new(rtc_proto::MediaType::Audio).with_codec(Codec::G722),
+                Codecs::new(MediaType::Audio).with_codec(Codec::G722),
                 1,
-                rtc_proto::Direction::SendRecv,
+                Direction::SendRecv,
             )
             .unwrap();
 
         let video = sdp_session
             .add_local_media(
-                Codecs::new(rtc_proto::MediaType::Video).with_codec(Codec::H264.with_pt(97)),
+                Codecs::new(MediaType::Video).with_codec(Codec::H264.with_pt(97)),
                 1,
-                rtc_proto::Direction::SendRecv,
+                Direction::SendRecv,
             )
             .unwrap();
 
-        sdp_session.add_media(audio, rtc_proto::Direction::SendRecv);
-        sdp_session.add_media(video, rtc_proto::Direction::SendRecv);
+        sdp_session.add_media(audio, Direction::SendRecv);
+        sdp_session.add_media(video, Direction::SendRecv);
 
         let mut outbound = reg
             .make_call(

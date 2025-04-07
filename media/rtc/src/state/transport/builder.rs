@@ -5,8 +5,7 @@ use super::{
     IceAgent, ReceivedPacket, SessionTransportState, Transport, TransportEvent, TransportKind,
 };
 use crate::{
-    rtp::extensions::RtpExtensionIdsExt,
-    state::{TransportChange, TransportConnectionState},
+    state::{rtp::extensions::RtpExtensionIdsExt, TransportChange, TransportConnectionState},
     ReceivedPkt, RtcpMuxPolicy, TransportId, TransportType,
 };
 use core::panic;

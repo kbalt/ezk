@@ -1,8 +1,8 @@
 use sip_core::transport::udp::Udp;
 use sip_core::{Endpoint, IncomingRequest, Layer, MayTake, Result};
 use sip_types::header::typed::Contact;
-use sip_types::uri::sip::SipUri;
 use sip_types::uri::NameAddr;
+use sip_types::uri::SipUri;
 use sip_types::{Method, StatusCode};
 use sip_ua::dialog::{Dialog, DialogLayer};
 use sip_ua::invite::acceptor::InviteAcceptor;
