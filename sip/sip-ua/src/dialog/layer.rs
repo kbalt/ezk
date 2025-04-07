@@ -192,8 +192,6 @@ impl Drop for UsageGuard {
             // Make sure to release the lock before dropping the usage to avoid potential deadlocks
             drop(dialogs);
             drop(usage);
-        } else {
-            log::warn!("usage dropped after dialog")
         }
     }
 }

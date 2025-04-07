@@ -317,7 +317,7 @@ impl Endpoint {
     #[tracing::instrument(level = "debug", skip(self, message), fields(%message))]
     async fn do_receive(self, mut message: ReceivedMessage) {
         log::trace!(
-            "Received message from {}: \n{:?}",
+            "Received from {}: \n{:?}",
             message.tp_info.source,
             BytesPrint(&message.tp_info.buffer)
         );
@@ -355,7 +355,7 @@ impl Endpoint {
                     body: message.body,
                 };
 
-                log::debug!("delegating message to transaction {}", tsx_key);
+                log::trace!("delegating message to transaction {}", tsx_key);
 
                 if let Some(rejected_tsx_message) = handler(tsx_message) {
                     log::trace!("transaction {} rejected message", tsx_key);
@@ -374,7 +374,7 @@ impl Endpoint {
                 }
             }
             Err(registration) => {
-                log::debug!("no transaction for {tsx_key} found, created registration");
+                log::trace!("no transaction for {tsx_key} found, created registration");
                 tsx = Some(registration);
             }
         }
