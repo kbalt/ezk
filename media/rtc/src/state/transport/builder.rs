@@ -3,11 +3,10 @@ use super::{
     resolve_rtp_and_rtcp_address,
     sdes_srtp::{self, SdesSrtpOffer},
     IceAgent, ReceivedPacket, SessionTransportState, Transport, TransportEvent, TransportKind,
-    TransportRequiredChanges,
 };
 use crate::{
-    events::TransportConnectionState, rtp::extensions::RtpExtensionIdsExt, ReceivedPkt,
-    RtcpMuxPolicy, TransportType,
+    state::{rtp::extensions::RtpExtensionIdsExt, TransportChange, TransportConnectionState},
+    ReceivedPkt, RtcpMuxPolicy, TransportId, TransportType,
 };
 use core::panic;
 use ice::{IceCredentials, IceEvent};
@@ -50,15 +49,16 @@ impl TransportBuilder {
     }
 
     pub(crate) fn new(
+        id: TransportId,
         state: &mut SessionTransportState,
-        mut required_changes: TransportRequiredChanges<'_>,
+        changes: &mut Vec<TransportChange>,
         type_: TransportType,
         rtcp_mux_policy: RtcpMuxPolicy,
         offer_ice: bool,
     ) -> Self {
         match rtcp_mux_policy {
-            RtcpMuxPolicy::Negotiate => required_changes.require_socket_pair(),
-            RtcpMuxPolicy::Require => required_changes.require_socket(),
+            RtcpMuxPolicy::Negotiate => changes.push(TransportChange::CreateSocketPair(id)),
+            RtcpMuxPolicy::Require => changes.push(TransportChange::CreateSocket(id)),
         }
 
         let kind = match type_ {
@@ -187,8 +187,9 @@ impl TransportBuilder {
 
     pub(crate) fn build_from_answer(
         mut self,
+        id: TransportId,
         state: &mut SessionTransportState,
-        mut required_changes: TransportRequiredChanges<'_>,
+        changes: &mut Vec<TransportChange>,
         session_desc: &SessionDescription,
         remote_media_desc: &MediaDescription,
     ) -> Transport {
@@ -197,7 +198,7 @@ impl TransportBuilder {
 
         // Remove RTCP socket if the answer has rtcp-mux set
         if remote_media_desc.rtcp_mux && self.local_rtcp_port.is_some() {
-            required_changes.remove_rtcp_socket();
+            changes.push(TransportChange::RemoveRtcpSocket(id));
             self.local_rtcp_port = None;
         }
 
@@ -315,10 +316,11 @@ impl TransportBuilder {
 
         // Feed the already received messages into the transport
         for pkt in self.backlog {
+            // TODO: handle the RTP/RTCP packets that are received too early
             match transport.receive(pkt) {
-                ReceivedPacket::Rtp(_) => todo!("handle early rtp"),
-                ReceivedPacket::Rtcp(_) => todo!("handle early rtcp"),
-                ReceivedPacket::TransportSpecific => {}
+                ReceivedPacket::Rtp(_) => log::warn!("Dropping early RTP packet"),
+                ReceivedPacket::Rtcp(_) => log::warn!("Dropping early RTCP packet"),
+                ReceivedPacket::Ignore => {}
             };
         }
 

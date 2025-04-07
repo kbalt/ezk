@@ -1,9 +1,9 @@
 use crate::{
-    events::{
-        IceConnectionStateChanged, MediaAdded, MediaChanged, TransportChange,
+    state::{
+        Event, IceConnectionStateChanged, MediaAdded, MediaChanged, SessionState, TransportChange,
         TransportConnectionStateChanged,
     },
-    Codecs, Error, Event, LocalMediaId, MediaId, Options, ReceivedPkt, TransportId,
+    Codecs, Error, LocalMediaId, MediaId, Options, ReceivedPkt, TransportId,
 };
 use ice::{Component, IceGatheringState};
 use rtp::RtpPacket;
@@ -24,7 +24,7 @@ mod socket;
 
 /// Session event returned by [`AsyncSdpSession::run`]
 #[derive(Debug)]
-pub enum AsyncEvent {
+pub enum TokioEvent {
     /// See [`MediaAdded`]
     MediaAdded(MediaAdded),
     /// See [`MediaChanged`]
@@ -43,24 +43,25 @@ pub enum AsyncEvent {
     },
 }
 
-pub struct AsyncSdpSession {
-    state: super::SdpSession,
+/// Async wrapper around [`SessionState`] using the tokio runtime
+pub struct TokioSessionState {
+    state: SessionState,
     sockets: HashMap<(TransportId, Component), Socket>,
     timeout: Option<Instant>,
     ips: Vec<IpAddr>,
 
     buf: Vec<MaybeUninit<u8>>,
 
-    events: VecDeque<AsyncEvent>,
+    events: VecDeque<TokioEvent>,
 }
 
-impl AsyncSdpSession {
+impl TokioSessionState {
     pub fn new(address: IpAddr, options: Options) -> Self {
         Self {
-            state: super::SdpSession::new(address, options),
+            state: SessionState::new(address, options),
             sockets: HashMap::new(),
             timeout: Some(Instant::now()), // poll immediately
-            ips: local_ip_address::linux::list_afinet_netifas()
+            ips: local_ip_address::list_afinet_netifas()
                 .unwrap()
                 .into_iter()
                 .map(|(_, addr)| addr)
@@ -173,21 +174,21 @@ impl AsyncSdpSession {
         Ok(())
     }
 
-    fn handle_events(&mut self) -> Result<(), super::Error> {
+    fn handle_events(&mut self) -> Result<(), Error> {
         while let Some(event) = self.state.pop_event() {
             match event {
-                Event::MediaAdded(event) => self.events.push_back(AsyncEvent::MediaAdded(event)),
+                Event::MediaAdded(event) => self.events.push_back(TokioEvent::MediaAdded(event)),
                 Event::MediaChanged(event) => {
-                    self.events.push_back(AsyncEvent::MediaChanged(event))
+                    self.events.push_back(TokioEvent::MediaChanged(event))
                 }
-                Event::MediaRemoved(id) => self.events.push_back(AsyncEvent::MediaRemoved(id)),
+                Event::MediaRemoved(id) => self.events.push_back(TokioEvent::MediaRemoved(id)),
                 Event::IceGatheringState(..) => {}
                 Event::IceConnectionState(event) => {
-                    self.events.push_back(AsyncEvent::IceConnectionState(event))
+                    self.events.push_back(TokioEvent::IceConnectionState(event))
                 }
                 Event::TransportConnectionState(event) => self
                     .events
-                    .push_back(AsyncEvent::TransportConnectionState(event)),
+                    .push_back(TokioEvent::TransportConnectionState(event)),
                 Event::SendData {
                     transport_id,
                     component,
@@ -203,14 +204,14 @@ impl AsyncSdpSession {
                 }
                 Event::ReceiveRTP { media_id, packet } => self
                     .events
-                    .push_back(AsyncEvent::ReceiveRTP { media_id, packet }),
+                    .push_back(TokioEvent::ReceiveRTP { media_id, packet }),
             }
         }
 
         Ok(())
     }
 
-    async fn run_until_all_candidates_are_gathered(&mut self) -> Result<(), crate::Error> {
+    pub async fn run_until_all_candidates_are_gathered(&mut self) -> Result<(), crate::Error> {
         while !matches!(
             self.state.ice_gathering_state(),
             None | Some(IceGatheringState::Complete)
@@ -222,7 +223,7 @@ impl AsyncSdpSession {
         Ok(())
     }
 
-    pub async fn run(&mut self) -> Result<AsyncEvent, Error> {
+    pub async fn run(&mut self) -> Result<TokioEvent, Error> {
         loop {
             if let Some(event) = self.events.pop_front() {
                 return Ok(event);
@@ -254,7 +255,7 @@ impl AsyncSdpSession {
 
                 Ok(())
             }
-            _ = timeout(self.timeout) => {
+            _ = timeout(&mut self.timeout) => {
                 self.state.poll(Instant::now());
                 self.timeout = self.state.timeout().map(|d| Instant::now() + d);
                 Ok(())
@@ -263,9 +264,12 @@ impl AsyncSdpSession {
     }
 }
 
-async fn timeout(instant: Option<Instant>) {
-    match instant {
-        Some(instant) => sleep_until(instant.into()).await,
+async fn timeout(instant: &mut Option<Instant>) {
+    match *instant {
+        Some(deadline) => {
+            sleep_until(deadline.into()).await;
+            *instant = None;
+        }
         None => pending().await,
     }
 }

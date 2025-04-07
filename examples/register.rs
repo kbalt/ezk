@@ -3,8 +3,8 @@ use sip_core::transport::udp::Udp;
 use sip_core::transport::TargetTransportInfo;
 use sip_core::{Endpoint, Result};
 use sip_types::header::typed::Contact;
-use sip_types::uri::sip::SipUri;
 use sip_types::uri::NameAddr;
+use sip_types::uri::SipUri;
 use sip_types::CodeKind;
 use sip_ua::register::Registration;
 use std::sync::Arc;
@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
     let mut registration = Registration::new(
         NameAddr::uri(id),
         Contact::new(NameAddr::uri(contact)),
-        registrar.into(),
+        registrar,
         Duration::from_secs(600),
     );
 
