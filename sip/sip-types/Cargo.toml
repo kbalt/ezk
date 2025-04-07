@@ -1,6 +1,6 @@
 [package]
 name = "ezk-sip-types"
-version = "0.5.0"
+version = "0.6.0"
 description = "SIP types providing parsing & serialization"
 categories = ["network-programming", "multimedia"]
 keywords = ["sip"]
@@ -15,11 +15,9 @@ repository.workspace = true
 internal.workspace = true
 
 bytesstr = "1"
-downcast-rs = "2"
 memchr = "2"
 percent-encoding = "2"
 bytes = "1"
 anyhow = "1"
 lazy_static = "1"
-thiserror = "2"
 nom = { version = "7", default-features = false, features = ["alloc"] }
