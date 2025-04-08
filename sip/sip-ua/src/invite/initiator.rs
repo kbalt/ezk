@@ -87,9 +87,6 @@ impl InviteInitiator {
         }
 
         if self.support_timer {
-            let timer_str = BytesStr::from_static("timer");
-            request.headers.insert_named(&Supported(timer_str));
-
             self.timer_config.populate_request(&mut request);
         }
 

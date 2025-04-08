@@ -3,6 +3,7 @@ use sip_core::transport::OutgoingResponse;
 use sip_core::{IncomingRequest, Request};
 use sip_types::header::typed::{MinSe, Refresher, Require, SessionExpires};
 use sip_types::header::HeaderError;
+use sip_types::Name;
 use std::future::pending;
 use std::pin::Pin;
 use std::time::Duration;
@@ -86,6 +87,7 @@ impl InitiatorTimerConfig {
             });
         }
 
+        request.headers.insert(Name::SUPPORTED, "timer");
         request.headers.insert_named(&MinSe(self.expires_secs_min));
     }
 
@@ -160,6 +162,16 @@ impl SessionTimer {
                 sleep_.set(sleep(Duration::from_secs(self.real_delta_secs as u64)))
             }
         }
+    }
+
+    /// Populate headers of an INVITE refresh request
+    pub fn populate_refresh(&mut self, request: &mut Request) {
+        if let RefreshInterval::Unsupported = &mut self.interval {
+            return;
+        }
+
+        request.headers.insert(Name::SUPPORTED, "timer");
+        request.headers.insert(Name::REQUIRE, "timer");
     }
 }
 

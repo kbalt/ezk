@@ -28,7 +28,7 @@ pub struct InviteSession {
     /// Receiver side of dialog-usage events
     usage_events: Receiver<UsageEvent>,
 
-    session_timer: SessionTimer,
+    pub session_timer: SessionTimer,
 
     // drop usage before dialog
     _usage_guard: UsageGuard,
@@ -39,11 +39,21 @@ pub struct RefreshNeeded<'s> {
     pub session: &'s mut InviteSession,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum SessionRefreshError {
+    #[error(transparent)]
+    Core(#[from] sip_core::Error),
+    #[error("Unexpected status code {0:?}")]
+    UnexpectedStatus(StatusCode),
+}
+
 impl RefreshNeeded<'_> {
-    pub async fn process_default(self) -> Result<()> {
+    /// Send an empty INVITE request refreshing the INVITE session
+    pub async fn process_default(self) -> Result<(), SessionRefreshError> {
         self.session.session_timer.reset();
 
-        let invite = self.session.dialog.create_request(Method::INVITE);
+        let mut invite = self.session.dialog.create_request(Method::INVITE);
+        self.session.session_timer.populate_refresh(&mut invite);
 
         let mut target_tp_info = self.session.dialog.target_tp_info.lock().await;
 
@@ -73,9 +83,13 @@ impl RefreshNeeded<'_> {
                         ack.insert(ack_req)
                     };
 
-                    self.session.endpoint.send_outgoing_request(ack).await?;
+                    self.session
+                        .endpoint
+                        .send_outgoing_request(ack)
+                        .await
+                        .map_err(sip_core::Error::from)?;
                 }
-                _ => {}
+                _ => return Err(SessionRefreshError::UnexpectedStatus(response.line.code)),
             }
         }
 
