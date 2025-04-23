@@ -115,6 +115,10 @@ impl Media {
         self.avpf
     }
 
+    pub(crate) fn dtmf_pt(&self) -> Option<u8> {
+        self.dtmf_pt
+    }
+
     pub(crate) fn timeout(&self, now: Instant) -> Option<Duration> {
         let jt = self.rtp_session.pop_rtp_after(now, None);
 

@@ -670,6 +670,15 @@ impl SessionState {
 
         let transport = self.transports[media.transport_id()].unwrap();
 
+        if let Some(dtmf_pt) = media.dtmf_pt() {
+            rtpmap.push(RtpMap {
+                payload: dtmf_pt,
+                encoding: "telephone-event".into(),
+                clock_rate: codec.clock_rate,
+                params: None,
+            });
+        }
+
         let mut media_desc = MediaDescription {
             media: sdp_types::Media {
                 media_type: self.local_media[media.local_media_id()].codecs.media_type,
