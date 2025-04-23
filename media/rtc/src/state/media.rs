@@ -40,6 +40,8 @@ pub(crate) struct Media {
     /// Which codec is negotiated
     codec_pt: u8,
     codec: Codec,
+
+    dtmf_pt: Option<u8>,
 }
 
 impl Media {
@@ -54,6 +56,7 @@ impl Media {
         transport: TransportId,
         codec_pt: u8,
         codec: Codec,
+        dtmf_pt: Option<u8>,
     ) -> Self {
         Self {
             id,
@@ -68,6 +71,7 @@ impl Media {
             transport,
             codec_pt,
             codec,
+            dtmf_pt,
         }
     }
 

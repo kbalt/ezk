@@ -10,6 +10,13 @@ pub struct NegotiatedCodec {
     pub channels: Option<u32>,
     pub send_fmtp: Option<String>,
     pub recv_fmtp: Option<String>,
+    pub dtmf: Option<NegotiatedDtmf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NegotiatedDtmf {
+    pub pt: u8,
+    pub fmtp: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -98,8 +105,8 @@ impl Codecs {
         }
     }
 
-    pub fn allow_dtmf(mut self, dtmf: bool) -> Self {
-        self.allow_dtmf = dtmf;
+    pub fn with_dtmf(mut self) -> Self {
+        self.allow_dtmf = true;
         self
     }
 

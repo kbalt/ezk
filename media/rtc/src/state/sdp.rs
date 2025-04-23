@@ -2,7 +2,7 @@ use super::events::{MediaAdded, MediaChanged, TransportChange};
 use super::media::Media;
 use super::transport::{Transport, TransportBuilder};
 use super::{DirectionBools, Event, PendingChange, SessionState, TransportEntry};
-use crate::codecs::NegotiatedCodec;
+use crate::codecs::{NegotiatedCodec, NegotiatedDtmf};
 use crate::{Error, MediaId, TransportId};
 use bytesstr::BytesStr;
 use sdp_types::{
@@ -63,8 +63,7 @@ impl SessionState {
                     .map(|config| (id, config))
             });
 
-            let Some((local_media_id, (codec, codec_pt, negotiated_direction))) = chosen_media
-            else {
+            let Some((local_media_id, chosen_codec)) = chosen_media else {
                 // no local media found for this
                 response.push(SdpResponseEntry::Rejected {
                     media_type: remote_media_desc.media.media_type,
@@ -92,23 +91,36 @@ impl SessionState {
             let recv_fmtp = remote_media_desc
                 .fmtp
                 .iter()
-                .find(|f| f.format == codec_pt)
+                .find(|f| f.format == chosen_codec.remote_pt)
                 .map(|f| f.params.to_string());
+
+            let dtmf = if let Some(dtmf_pt) = chosen_codec.dtmf {
+                let fmtp = remote_media_desc
+                    .fmtp
+                    .iter()
+                    .find(|fmtp| fmtp.format == dtmf_pt)
+                    .map(|fmtp| fmtp.params.to_string());
+
+                Some(NegotiatedDtmf { pt: dtmf_pt, fmtp })
+            } else {
+                None
+            };
 
             let media_id = self.next_media_id.increment();
             self.events.push_back(Event::MediaAdded(MediaAdded {
                 id: media_id,
                 transport_id: transport,
                 local_media_id,
-                direction: negotiated_direction.into(),
+                direction: chosen_codec.direction.into(),
                 codec: NegotiatedCodec {
-                    send_pt: codec_pt,
-                    recv_pt: codec_pt,
-                    name: codec.name.clone(),
-                    clock_rate: codec.clock_rate,
-                    channels: codec.channels,
-                    send_fmtp: codec.fmtp.clone(),
+                    send_pt: chosen_codec.remote_pt,
+                    recv_pt: chosen_codec.remote_pt,
+                    name: chosen_codec.codec.name.clone(),
+                    clock_rate: chosen_codec.codec.clock_rate,
+                    channels: chosen_codec.codec.channels,
+                    send_fmtp: chosen_codec.codec.fmtp.clone(),
                     recv_fmtp,
+                    dtmf,
                 },
             }));
 
@@ -118,11 +130,12 @@ impl SessionState {
                 local_media_id,
                 remote_media_desc.media.media_type,
                 remote_media_desc.mid.clone(),
-                negotiated_direction,
+                chosen_codec.direction,
                 is_avpf(&remote_media_desc.media.proto),
                 transport,
-                codec_pt,
-                codec,
+                chosen_codec.remote_pt,
+                chosen_codec.codec,
+                chosen_codec.dtmf,
             ));
         }
 
@@ -388,6 +401,16 @@ impl SessionState {
                 }
             }
 
+            for &(pt, clock_rate) in &local_media.dtmf {
+                rtpmap.push(RtpMap {
+                    payload: pt,
+                    encoding: "telephone-event".into(),
+                    clock_rate,
+                    params: None,
+                });
+                fmts.push(pt);
+            }
+
             let mut media_desc = MediaDescription {
                 media: sdp_types::Media {
                     media_type: local_media.codecs.media_type,
@@ -544,29 +567,42 @@ impl SessionState {
                     self.transports[transport_id] = TransportEntry::Transport(transport);
                 }
 
-                let (codec, codec_pt, direction) = self.local_media[pending_media.local_media_id]
+                let chosen_codec = self.local_media[pending_media.local_media_id]
                     .choose_codec_from_answer(remote_media_desc)
                     .unwrap();
 
                 let recv_fmtp = remote_media_desc
                     .fmtp
                     .iter()
-                    .find(|f| f.format == codec_pt)
+                    .find(|f| f.format == chosen_codec.remote_pt)
                     .map(|f| f.params.to_string());
+
+                let dtmf = if let Some(dtmf_pt) = chosen_codec.dtmf {
+                    let fmtp = remote_media_desc
+                        .fmtp
+                        .iter()
+                        .find(|fmtp| fmtp.format == dtmf_pt)
+                        .map(|fmtp| fmtp.params.to_string());
+
+                    Some(NegotiatedDtmf { pt: dtmf_pt, fmtp })
+                } else {
+                    None
+                };
 
                 self.events.push_back(Event::MediaAdded(MediaAdded {
                     id: pending_media.id,
                     transport_id,
                     local_media_id: pending_media.local_media_id,
-                    direction: direction.into(),
+                    direction: chosen_codec.direction.into(),
                     codec: NegotiatedCodec {
-                        send_pt: codec_pt,
-                        recv_pt: codec_pt,
-                        name: codec.name.clone(),
-                        clock_rate: codec.clock_rate,
-                        channels: codec.channels,
-                        send_fmtp: codec.fmtp.clone(),
+                        send_pt: chosen_codec.remote_pt,
+                        recv_pt: chosen_codec.remote_pt,
+                        name: chosen_codec.codec.name.clone(),
+                        clock_rate: chosen_codec.codec.clock_rate,
+                        channels: chosen_codec.codec.channels,
+                        send_fmtp: chosen_codec.codec.fmtp.clone(),
                         recv_fmtp,
+                        dtmf,
                     },
                 }));
 
@@ -575,11 +611,12 @@ impl SessionState {
                     pending_media.local_media_id,
                     pending_media.media_type,
                     remote_media_desc.mid.clone(),
-                    direction,
+                    chosen_codec.direction,
                     pending_media.use_avpf,
                     transport_id,
-                    codec_pt,
-                    codec,
+                    chosen_codec.remote_pt,
+                    chosen_codec.codec,
+                    chosen_codec.dtmf,
                 ));
 
                 // remove the matched pending added media to avoid doubly matching it
@@ -616,17 +653,20 @@ impl SessionState {
     ) -> MediaDescription {
         let (codec, codec_pt) = media.codec_with_pt();
 
-        let rtpmap = RtpMap {
+        let mut rtpmap = vec![];
+        let mut fmtp = vec![];
+
+        rtpmap.push(RtpMap {
             payload: codec_pt,
             encoding: codec.name.as_ref().into(),
             clock_rate: codec.clock_rate,
             params: Default::default(),
-        };
+        });
 
-        let fmtp = codec.fmtp.as_ref().map(|param| Fmtp {
+        fmtp.extend(codec.fmtp.as_ref().map(|param| Fmtp {
             format: codec_pt,
             params: param.as_str().into(),
-        });
+        }));
 
         let transport = self.transports[media.transport_id()].unwrap();
 
@@ -649,8 +689,8 @@ impl SessionState {
             }),
             rtcp_mux: transport.remote_rtp_address == transport.remote_rtcp_address,
             mid: media.mid().map(Into::into),
-            rtpmap: vec![rtpmap],
-            fmtp: fmtp.into_iter().collect(),
+            rtpmap,
+            fmtp,
             ice_ufrag: None,
             ice_pwd: None,
             ice_candidates: vec![],

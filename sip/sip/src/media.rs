@@ -98,12 +98,14 @@ pub struct MediaSession {
 /// The negotiated codec for the sender/receiver
 ///
 /// pt and fmtp values might differ between sender and receiver.
+#[derive(Debug)]
 pub struct Codec {
     pub pt: u8,
     pub name: Cow<'static, str>,
     pub clock_rate: u32,
     pub channels: Option<u32>,
     pub fmtp: Option<String>,
+    pub dtmf_pt: Option<u8>,
 }
 
 struct MediaState {
@@ -280,6 +282,7 @@ fn add_sender(
             clock_rate: media_state.codec.clock_rate,
             channels: media_state.codec.channels,
             fmtp: media_state.codec.send_fmtp.clone(),
+            dtmf_pt: media_state.codec.dtmf.as_ref().map(|dtmf| dtmf.pt),
         },
     }
 }
@@ -296,6 +299,7 @@ fn add_receiver(media_state: &mut MediaState) -> MediaEvent {
             clock_rate: media_state.codec.clock_rate,
             channels: media_state.codec.channels,
             fmtp: media_state.codec.recv_fmtp.clone(),
+            dtmf_pt: media_state.codec.dtmf.as_ref().map(|dtmf| dtmf.pt),
         },
     }
 }

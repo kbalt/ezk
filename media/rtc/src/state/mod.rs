@@ -9,7 +9,7 @@ use sdp_types::{Direction, MediaDescription, MediaType};
 use slotmap::SlotMap;
 use std::{
     cmp::min,
-    collections::VecDeque,
+    collections::{BTreeSet, VecDeque},
     net::{IpAddr, SocketAddr},
     time::{Duration, Instant},
 };
@@ -254,11 +254,28 @@ impl SessionState {
             }
         }
 
+        let mut dtmf = vec![];
+
+        if codecs.allow_dtmf {
+            let clock_rates: BTreeSet<u32> =
+                codecs.codecs.iter().map(|codec| codec.clock_rate).collect();
+
+            for clock_rate in clock_rates {
+                dtmf.push((self.next_pt, clock_rate));
+
+                if self.next_pt > 127 {
+                    self.next_pt = prev_next_pt;
+                    return None;
+                }
+            }
+        }
+
         Some(self.local_media.insert(LocalMedia {
             codecs,
             limit,
             use_count: 0,
             direction: direction.into(),
+            dtmf,
         }))
     }
 
