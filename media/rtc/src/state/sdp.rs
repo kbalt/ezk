@@ -143,7 +143,6 @@ impl SessionState {
         let removed_media = replace(&mut self.state, new_state);
 
         for media in removed_media {
-            self.local_media[media.local_media_id()].use_count -= 1;
             self.events.push_back(Event::MediaRemoved(media.id()));
         }
 

@@ -233,7 +233,6 @@ impl SessionState {
     pub fn add_local_media(
         &mut self,
         mut codecs: Codecs,
-        limit: u32,
         direction: Direction,
     ) -> Option<LocalMediaId> {
         let prev_next_pt = self.next_pt;
@@ -272,8 +271,6 @@ impl SessionState {
 
         Some(self.local_media.insert(LocalMedia {
             codecs,
-            limit,
-            use_count: 0,
             direction: direction.into(),
             dtmf,
         }))

@@ -5,9 +5,7 @@ use super::DirectionBools;
 
 pub(super) struct LocalMedia {
     pub(super) codecs: Codecs,
-    pub(super) limit: u32,
     pub(super) direction: DirectionBools,
-    pub(super) use_count: u32,
 
     /// DTMF payload type to clockrate mapping for this media
     pub(super) dtmf: Vec<(u8, u32)>,
@@ -22,7 +20,7 @@ pub(super) struct ChosenCodec {
 
 impl LocalMedia {
     pub(super) fn maybe_use_for_offer(&mut self, desc: &MediaDescription) -> Option<ChosenCodec> {
-        if self.limit == self.use_count || self.codecs.media_type != desc.media.media_type {
+        if self.codecs.media_type != desc.media.media_type {
             return None;
         }
 
@@ -75,8 +73,6 @@ impl LocalMedia {
                 // There would be no sender or receiver
                 return None;
             }
-
-            self.use_count += 1;
 
             let dtmf = desc
                 .rtpmap

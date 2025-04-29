@@ -93,10 +93,9 @@ impl TokioSessionState {
     pub fn add_local_media(
         &mut self,
         codecs: Codecs,
-        limit: u32,
         direction: Direction,
     ) -> Option<LocalMediaId> {
-        self.state.add_local_media(codecs, limit, direction)
+        self.state.add_local_media(codecs, direction)
     }
 
     pub fn add_media(&mut self, local_media_id: LocalMediaId, direction: Direction) -> MediaId {
