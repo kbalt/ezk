@@ -52,7 +52,7 @@ pub struct TransportConnectionStateChanged {
     pub new: TransportConnectionState,
 }
 
-/// Session event returned by [`SdpSession::pop_event`](crate::SdpSession::pop_event)
+/// Session event returned by [`SessionState::pop_event`](super::SessionState::pop_event)
 #[derive(Debug)]
 pub enum Event {
     /// See [`MediaAdded`]
@@ -116,41 +116,15 @@ pub enum TransportConnectionState {
 pub enum TransportChange {
     /// The transport requests it's own UDP socket to be used
     ///
-    /// The port of the socket must be reported using [`SdpSession::set_transport_ports`](super::SdpSession::set_transport_ports)
+    /// The port of the socket must be reported using [`SessionState::set_transport_ports`](super::SessionState::set_transport_ports)
     CreateSocket(TransportId),
     /// Request for two UDP sockets to be created. One for RTP and RTCP each.
     /// Ideally the RTP port is an even port and the RTCP port is RTP port + 1
     ///
-    /// The ports of the sockets must reported using [`SdpSession::set_transport_ports`](super::SdpSession::set_transport_ports)
+    /// The ports of the sockets must reported using [`SessionState::set_transport_ports`](super::SessionState::set_transport_ports)
     CreateSocketPair(TransportId),
     /// Remove the resources associated with the transport. Any pending data should still be sent.
     Remove(TransportId),
     /// Remove the RTCP socket of the given transport.
     RemoveRtcpSocket(TransportId),
-}
-
-// TODO; can this be removed because it too complex for something so simple
-pub(crate) struct TransportRequiredChanges<'a> {
-    pub(crate) id: TransportId,
-    pub(crate) changes: &'a mut Vec<TransportChange>,
-}
-
-impl<'a> TransportRequiredChanges<'a> {
-    pub(crate) fn new(id: TransportId, changes: &'a mut Vec<TransportChange>) -> Self {
-        Self { id, changes }
-    }
-
-    pub(crate) fn require_socket(&mut self) {
-        self.changes.push(TransportChange::CreateSocket(self.id))
-    }
-
-    pub(crate) fn require_socket_pair(&mut self) {
-        self.changes
-            .push(TransportChange::CreateSocketPair(self.id))
-    }
-
-    pub(crate) fn remove_rtcp_socket(&mut self) {
-        self.changes
-            .push(TransportChange::RemoveRtcpSocket(self.id));
-    }
 }

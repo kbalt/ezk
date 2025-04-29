@@ -1,21 +1,16 @@
-use crate::codecs::NegotiatedCodec;
-use crate::events::{MediaAdded, MediaChanged, TransportChange, TransportRequiredChanges};
-use crate::transport::{Transport, TransportBuilder};
-use crate::{
-    ActiveMedia, DirectionBools, Error, Event, MediaId, PendingChange, SdpSession, TransportEntry,
-    TransportId,
-};
+use super::events::{MediaAdded, MediaChanged, TransportChange};
+use super::media::Media;
+use super::transport::{Transport, TransportBuilder};
+use super::{DirectionBools, Event, PendingChange, SessionState, TransportEntry};
+use crate::codecs::{NegotiatedCodec, NegotiatedDtmf};
+use crate::{Error, MediaId, TransportId};
 use bytesstr::BytesStr;
-use rtp::{RtpSession, Ssrc};
 use sdp_types::{
-    Connection, Direction, Fmtp, Group, IceOptions, IcePassword, IceUsernameFragment, Media,
+    Connection, Direction, Fmtp, Group, IceOptions, IcePassword, IceUsernameFragment,
     MediaDescription, MediaType, Origin, Rtcp, RtpMap, SessionDescription, Time, TransportProtocol,
 };
-use std::{
-    collections::HashMap,
-    mem::replace,
-    time::{Duration, Instant},
-};
+use std::mem::take;
+use std::{collections::HashMap, mem::replace};
 
 /// Some additional information to create a SDP answer. Must be passed into [`SdpSession::create_sdp_answer`].
 ///
@@ -30,7 +25,7 @@ enum SdpResponseEntry {
     },
 }
 
-impl SdpSession {
+impl SessionState {
     /// Receive a SDP offer in this session.
     ///
     /// Returns an opaque response state object which can be used to create the actual response SDP.
@@ -54,9 +49,9 @@ impl SdpSession {
                 .position(|media| media.matches(&self.transports, remote_media_desc));
 
             if let Some(position) = matched_position {
-                self.update_active_media(requested_direction, self.state[position].id);
+                self.update_active_media(requested_direction, self.state[position].id());
                 let media = self.state.remove(position);
-                response.push(SdpResponseEntry::Active(media.id));
+                response.push(SdpResponseEntry::Active(media.id()));
                 new_state.push(media);
                 continue;
             }
@@ -68,8 +63,7 @@ impl SdpSession {
                     .map(|config| (id, config))
             });
 
-            let Some((local_media_id, (codec, codec_pt, negotiated_direction))) = chosen_media
-            else {
+            let Some((local_media_id, chosen_codec)) = chosen_media else {
                 // no local media found for this
                 response.push(SdpResponseEntry::Rejected {
                     media_type: remote_media_desc.media.media_type,
@@ -79,8 +73,6 @@ impl SdpSession {
                 log::debug!("Rejecting mline={mline}, no compatible local media found");
                 continue;
             };
-
-            let media_id = self.next_media_id.step();
 
             // Get or create transport for the m-line
             let transport = self.get_or_create_transport(&new_state, &offer, remote_media_desc)?;
@@ -99,48 +91,60 @@ impl SdpSession {
             let recv_fmtp = remote_media_desc
                 .fmtp
                 .iter()
-                .find(|f| f.format == codec_pt)
+                .find(|f| f.format == chosen_codec.remote_pt)
                 .map(|f| f.params.to_string());
 
+            let dtmf = if let Some(dtmf_pt) = chosen_codec.dtmf {
+                let fmtp = remote_media_desc
+                    .fmtp
+                    .iter()
+                    .find(|fmtp| fmtp.format == dtmf_pt)
+                    .map(|fmtp| fmtp.params.to_string());
+
+                Some(NegotiatedDtmf { pt: dtmf_pt, fmtp })
+            } else {
+                None
+            };
+
+            let media_id = self.next_media_id.increment();
             self.events.push_back(Event::MediaAdded(MediaAdded {
                 id: media_id,
                 transport_id: transport,
                 local_media_id,
-                direction: negotiated_direction.into(),
+                direction: chosen_codec.direction.into(),
                 codec: NegotiatedCodec {
-                    send_pt: codec_pt,
-                    recv_pt: codec_pt,
-                    name: codec.name.clone(),
-                    clock_rate: codec.clock_rate,
-                    channels: codec.channels,
-                    send_fmtp: codec.fmtp.clone(),
+                    send_pt: chosen_codec.remote_pt,
+                    recv_pt: chosen_codec.remote_pt,
+                    name: chosen_codec.codec.name.clone(),
+                    clock_rate: chosen_codec.codec.clock_rate,
+                    channels: chosen_codec.codec.channels,
+                    send_fmtp: chosen_codec.codec.fmtp.clone(),
                     recv_fmtp,
+                    dtmf,
                 },
             }));
 
             response.push(SdpResponseEntry::Active(media_id));
-            new_state.push(ActiveMedia {
-                id: media_id,
+            new_state.push(Media::new(
+                media_id,
                 local_media_id,
-                media_type: remote_media_desc.media.media_type,
-                rtp_session: RtpSession::new(Ssrc(rand::random()), codec.clock_rate),
-                avpf: is_avpf(&remote_media_desc.media.proto),
-                next_rtcp: Instant::now() + Duration::from_secs(5),
-                rtcp_interval: rtcp_interval(remote_media_desc.media.media_type),
-                mid: remote_media_desc.mid.clone(),
-                direction: negotiated_direction,
+                remote_media_desc.media.media_type,
+                remote_media_desc.mid.clone(),
+                chosen_codec.direction,
+                is_avpf(&remote_media_desc.media.proto),
                 transport,
-                codec_pt,
-                codec,
-            });
+                chosen_codec.remote_pt,
+                chosen_codec.codec,
+                chosen_codec.dtmf,
+            ));
         }
 
         // Store new state and destroy all media sessions
         let removed_media = replace(&mut self.state, new_state);
 
         for media in removed_media {
-            self.local_media[media.local_media_id].use_count -= 1;
-            self.events.push_back(Event::MediaRemoved(media.id));
+            self.local_media[media.local_media_id()].use_count -= 1;
+            self.events.push_back(Event::MediaRemoved(media.id()));
         }
 
         self.remove_unused_transports();
@@ -152,7 +156,7 @@ impl SdpSession {
     fn remove_unused_transports(&mut self) {
         self.transports.retain(|id, _| {
             // Is the transport in use by active media?
-            let in_use_by_active = self.state.iter().any(|media| media.transport == id);
+            let in_use_by_active = self.state.iter().any(|media| media.transport_id() == id);
 
             // Is the transport in use by any pending changes?
             let in_use_by_pending = self.pending_changes.iter().any(|change| {
@@ -176,17 +180,17 @@ impl SdpSession {
         let media = self
             .state
             .iter_mut()
-            .find(|m| m.id == media_id)
+            .find(|media| media.id() == media_id)
             .expect("media_id must be valid");
 
-        if media.direction != requested_direction {
+        if media.direction() != requested_direction.into() {
             self.events.push_back(Event::MediaChanged(MediaChanged {
                 id: media_id,
-                old_direction: media.direction.into(),
+                old_direction: media.direction(),
                 new_direction: requested_direction.into(),
             }));
 
-            media.direction = requested_direction;
+            media.set_direction(requested_direction);
         }
     }
 
@@ -195,7 +199,7 @@ impl SdpSession {
     /// If the transport type is unknown or cannot be created Ok(None) is returned. The media section must then be declined.
     fn get_or_create_transport(
         &mut self,
-        new_state: &[ActiveMedia],
+        new_state: &[Media],
         session_desc: &SessionDescription,
         remote_media_desc: &MediaDescription,
     ) -> Result<Option<TransportId>, Error> {
@@ -213,8 +217,9 @@ impl SdpSession {
             self.transports
                 .try_insert_with_key(|id| -> Result<TransportEntry, Option<_>> {
                     Transport::create_from_offer(
+                        id,
                         &mut self.transport_state,
-                        TransportRequiredChanges::new(id, &mut self.transport_changes),
+                        &mut self.transport_changes,
                         session_desc,
                         remote_media_desc,
                     )
@@ -232,7 +237,7 @@ impl SdpSession {
 
     fn find_bundled_transport(
         &self,
-        new_state: &[ActiveMedia],
+        new_state: &[Media],
         offer: &SessionDescription,
         mid: &BytesStr,
     ) -> Option<TransportId> {
@@ -241,14 +246,18 @@ impl SdpSession {
             .iter()
             .find(|g| g.typ == "BUNDLE" && g.mids.contains(mid))?;
 
-        new_state.iter().chain(&self.state).find_map(|m| {
-            let mid = m.mid.as_ref()?;
+        new_state.iter().chain(&self.state).find_map(|media| {
+            let mid = media.mid()?;
 
-            group.mids.contains(mid).then_some(m.transport)
+            group
+                .mids
+                .iter()
+                .any(|v| v == mid)
+                .then_some(media.transport_id())
         })
     }
 
-    /// Create an SDP Answer from a given state, which must be created by a previous call to [`SdpSession::receive_sdp_offer`].
+    /// Create an SDP Answer from a given state, which must be created by a previous call to [`SessionState::receive_sdp_offer`].
     ///
     /// # Panics
     ///
@@ -261,7 +270,7 @@ impl SdpSession {
                 SdpResponseEntry::Active(media_id) => self
                     .state
                     .iter()
-                    .find(|media| media.id == media_id)
+                    .find(|media| media.id() == media_id)
                     .unwrap(),
                 SdpResponseEntry::Rejected { media_type, mid } => {
                     let mut desc = MediaDescription::rejected(media_type);
@@ -332,12 +341,12 @@ impl SdpSession {
                 match change {
                     PendingChange::AddMedia(..) => {}
                     PendingChange::RemoveMedia(media_id) => {
-                        if media.id == *media_id {
+                        if media.id() == *media_id {
                             continue;
                         }
                     }
                     PendingChange::ChangeDirection(media_id, direction) => {
-                        if media.id == *media_id {
+                        if media.id() == *media_id {
                             override_direction = Some(*direction);
                         }
                     }
@@ -384,7 +393,6 @@ impl SdpSession {
                     params: codec.channels.map(|c| c.to_string().into()),
                 });
 
-                // TODO: are multiple fmtps allowed?
                 if let Some(param) = &codec.fmtp {
                     fmtp.push(Fmtp {
                         format: pt,
@@ -393,8 +401,18 @@ impl SdpSession {
                 }
             }
 
+            for &(pt, clock_rate) in &local_media.dtmf {
+                rtpmap.push(RtpMap {
+                    payload: pt,
+                    encoding: "telephone-event".into(),
+                    clock_rate,
+                    params: None,
+                });
+                fmts.push(pt);
+            }
+
             let mut media_desc = MediaDescription {
-                media: Media {
+                media: sdp_types::Media {
                     media_type: local_media.codecs.media_type,
                     port: local_rtp_port.expect("rtp port not set for transport"),
                     ports_num: None,
@@ -494,7 +512,7 @@ impl SdpSession {
                 let pending_removal = self
                     .pending_changes
                     .iter()
-                    .any(|c| matches!(c, PendingChange::RemoveMedia(id) if *id == media.id));
+                    .any(|c| matches!(c, PendingChange::RemoveMedia(id) if *id == media.id()));
 
                 if pending_removal {
                     // Ignore this active media since it's supposed to be removed
@@ -502,16 +520,14 @@ impl SdpSession {
                 }
 
                 if media.matches(&self.transports, remote_media_desc) {
-                    // // TODO: update media
-                    // let _ = requested_direction;
-                    let media_id = media.id;
+                    let media_id = media.id();
                     self.update_active_media(requested_direction, media_id);
                     continue 'next_media_desc;
                 }
             }
 
             // Try to match a new media session
-            for pending_change in &self.pending_changes {
+            for (i, pending_change) in self.pending_changes.iter().enumerate() {
                 let PendingChange::AddMedia(pending_media) = pending_change else {
                     continue;
                 };
@@ -541,8 +557,9 @@ impl SdpSession {
                         replace(transport_builder, TransportBuilder::placeholder());
 
                     let transport = transport_builder.build_from_answer(
+                        transport_id,
                         &mut self.transport_state,
-                        TransportRequiredChanges::new(transport_id, &mut self.transport_changes),
+                        &mut self.transport_changes,
                         &answer,
                         remote_media_desc,
                     );
@@ -550,46 +567,60 @@ impl SdpSession {
                     self.transports[transport_id] = TransportEntry::Transport(transport);
                 }
 
-                let (codec, codec_pt, direction) = self.local_media[pending_media.local_media_id]
+                let chosen_codec = self.local_media[pending_media.local_media_id]
                     .choose_codec_from_answer(remote_media_desc)
                     .unwrap();
 
                 let recv_fmtp = remote_media_desc
                     .fmtp
                     .iter()
-                    .find(|f| f.format == codec_pt)
+                    .find(|f| f.format == chosen_codec.remote_pt)
                     .map(|f| f.params.to_string());
+
+                let dtmf = if let Some(dtmf_pt) = chosen_codec.dtmf {
+                    let fmtp = remote_media_desc
+                        .fmtp
+                        .iter()
+                        .find(|fmtp| fmtp.format == dtmf_pt)
+                        .map(|fmtp| fmtp.params.to_string());
+
+                    Some(NegotiatedDtmf { pt: dtmf_pt, fmtp })
+                } else {
+                    None
+                };
 
                 self.events.push_back(Event::MediaAdded(MediaAdded {
                     id: pending_media.id,
                     transport_id,
                     local_media_id: pending_media.local_media_id,
-                    direction: direction.into(),
+                    direction: chosen_codec.direction.into(),
                     codec: NegotiatedCodec {
-                        send_pt: codec_pt,
-                        recv_pt: codec_pt,
-                        name: codec.name.clone(),
-                        clock_rate: codec.clock_rate,
-                        channels: codec.channels,
-                        send_fmtp: codec.fmtp.clone(),
+                        send_pt: chosen_codec.remote_pt,
+                        recv_pt: chosen_codec.remote_pt,
+                        name: chosen_codec.codec.name.clone(),
+                        clock_rate: chosen_codec.codec.clock_rate,
+                        channels: chosen_codec.codec.channels,
+                        send_fmtp: chosen_codec.codec.fmtp.clone(),
                         recv_fmtp,
+                        dtmf,
                     },
                 }));
 
-                self.state.push(ActiveMedia {
-                    id: pending_media.id,
-                    local_media_id: pending_media.local_media_id,
-                    media_type: pending_media.media_type,
-                    rtp_session: RtpSession::new(Ssrc(rand::random()), codec.clock_rate),
-                    avpf: pending_media.use_avpf,
-                    next_rtcp: Instant::now() + Duration::from_secs(5),
-                    rtcp_interval: rtcp_interval(pending_media.media_type),
-                    mid: remote_media_desc.mid.clone(),
-                    direction,
-                    transport: transport_id,
-                    codec_pt,
-                    codec,
-                });
+                self.state.push(Media::new(
+                    pending_media.id,
+                    pending_media.local_media_id,
+                    pending_media.media_type,
+                    remote_media_desc.mid.clone(),
+                    chosen_codec.direction,
+                    pending_media.use_avpf,
+                    transport_id,
+                    chosen_codec.remote_pt,
+                    chosen_codec.codec,
+                    chosen_codec.dtmf,
+                ));
+
+                // remove the matched pending added media to avoid doubly matching it
+                self.pending_changes.remove(i);
 
                 continue 'next_media_desc;
             }
@@ -598,50 +629,68 @@ impl SdpSession {
             log::warn!("Failed to match mline={mline} to any offered media");
         }
 
-        self.pending_changes.clear();
+        // remove all media that is pending removal
+        for change in take(&mut self.pending_changes) {
+            if let PendingChange::RemoveMedia(media_id) = change {
+                self.state.retain(|m| {
+                    if m.id() == media_id {
+                        self.events.push_back(Event::MediaRemoved(media_id));
+                        false
+                    } else {
+                        true
+                    }
+                });
+            }
+        }
+
         self.remove_unused_transports();
     }
 
     fn media_description_for_active(
         &self,
-        active: &ActiveMedia,
+        media: &Media,
         override_direction: Option<Direction>,
     ) -> MediaDescription {
-        let rtpmap = RtpMap {
-            payload: active.codec_pt,
-            encoding: active.codec.name.as_ref().into(),
-            clock_rate: active.codec.clock_rate,
-            params: Default::default(),
-        };
+        let (codec, codec_pt) = media.codec_with_pt();
 
-        let fmtp = active.codec.fmtp.as_ref().map(|param| Fmtp {
-            format: active.codec_pt,
-            params: param.as_str().into(),
+        let mut rtpmap = vec![];
+        let mut fmtp = vec![];
+
+        rtpmap.push(RtpMap {
+            payload: codec_pt,
+            encoding: codec.name.as_ref().into(),
+            clock_rate: codec.clock_rate,
+            params: Default::default(),
         });
 
-        let transport = self.transports[active.transport].unwrap();
+        fmtp.extend(codec.fmtp.as_ref().map(|param| Fmtp {
+            format: codec_pt,
+            params: param.as_str().into(),
+        }));
+
+        let transport = self.transports[media.transport_id()].unwrap();
 
         let mut media_desc = MediaDescription {
-            media: Media {
-                media_type: active.media_type,
+            media: sdp_types::Media {
+                media_type: self.local_media[media.local_media_id()].codecs.media_type,
                 port: transport
                     .local_rtp_port
                     .expect("Did not set port for RTP socket"),
                 ports_num: None,
-                proto: transport.type_().sdp_type(active.avpf),
-                fmts: vec![active.codec_pt],
+                proto: transport.type_().sdp_type(media.use_avpf()),
+                fmts: vec![codec_pt],
             },
             connection: None,
             bandwidth: vec![],
-            direction: override_direction.unwrap_or(active.direction.into()),
+            direction: override_direction.unwrap_or(media.direction()),
             rtcp: transport.local_rtcp_port.map(|port| Rtcp {
                 port,
                 address: None,
             }),
             rtcp_mux: transport.remote_rtp_address == transport.remote_rtcp_address,
-            mid: active.mid.clone(),
-            rtpmap: vec![rtpmap],
-            fmtp: fmtp.into_iter().collect(),
+            mid: media.mid().map(Into::into),
+            rtpmap,
+            fmtp,
             ice_ufrag: None,
             ice_pwd: None,
             ice_candidates: vec![],
@@ -664,8 +713,11 @@ impl SdpSession {
         let mut bundle_groups: HashMap<TransportId, Vec<BytesStr>> = HashMap::new();
 
         for media in &self.state {
-            if let Some(mid) = media.mid.clone() {
-                bundle_groups.entry(media.transport).or_default().push(mid);
+            if let Some(mid) = media.mid() {
+                bundle_groups
+                    .entry(media.transport_id())
+                    .or_default()
+                    .push(mid.into());
             }
         }
 
@@ -701,12 +753,5 @@ fn is_avpf(t: &TransportProtocol) -> bool {
         | TransportProtocol::RtpSavp
         | TransportProtocol::UdpTlsRtpSavp
         | TransportProtocol::Other(..) => false,
-    }
-}
-
-fn rtcp_interval(media_type: MediaType) -> Duration {
-    match media_type {
-        MediaType::Video => Duration::from_secs(1),
-        _ => Duration::from_secs(5),
     }
 }

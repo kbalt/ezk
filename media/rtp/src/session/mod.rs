@@ -209,7 +209,7 @@ impl RtpSession {
                 last_rtp_received_timestamp,
                 self.clock_rate,
                 pop_earliest,
-            );
+            )?;
 
             if let Some(packet) = receiver.jitter_buffer.pop(max_timestamp) {
                 return Some(packet);
@@ -219,10 +219,12 @@ impl RtpSession {
         None
     }
 
-    pub fn pop_rtp_after(&self, jitter_buffer_length: Option<Duration>) -> Option<Duration> {
+    pub fn pop_rtp_after(
+        &self,
+        now: Instant,
+        jitter_buffer_length: Option<Duration>,
+    ) -> Option<Duration> {
         let jitter_buffer_length = jitter_buffer_length.unwrap_or(DEFAULT_JITTERBUFFER_LENGTH);
-
-        let now = Instant::now();
 
         self.receiver
             .iter()
@@ -369,10 +371,13 @@ fn map_instant_to_rtp_timestamp(
     reference_timestamp: ExtendedRtpTimestamp,
     clock_rate: u32,
     instant: Instant,
-) -> ExtendedRtpTimestamp {
+) -> Option<ExtendedRtpTimestamp> {
     let delta = instant.signed_duration_since(reference_instant);
     let delta_in_rtp_timesteps = (delta.as_seconds_f32() * clock_rate as f32) as i64;
-    ExtendedRtpTimestamp((reference_timestamp.0 as i64 + delta_in_rtp_timesteps) as u64)
+
+    u64::try_from(reference_timestamp.0 as i64 - delta_in_rtp_timesteps)
+        .ok()
+        .map(ExtendedRtpTimestamp)
 }
 
 fn lower_32bits(i: u64) -> u32 {
