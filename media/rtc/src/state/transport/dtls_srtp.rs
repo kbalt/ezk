@@ -1,15 +1,13 @@
 use openssl::{
-    asn1::Asn1Time,
+    asn1::{Asn1Time, Asn1Type},
     bn::{BigNum, MsbOption},
     error::ErrorStack,
     hash::MessageDigest,
+    nid::Nid,
     pkey::{PKey, Private},
     rsa::Rsa,
     ssl::{ErrorCode, Ssl, SslAcceptor, SslContext, SslMethod, SslStream, SslVerifyMode},
-    x509::{
-        extension::{BasicConstraints, KeyUsage, SubjectKeyIdentifier},
-        X509NameBuilder, X509,
-    },
+    x509::{X509Name, X509},
 };
 use sdp_types::FingerprintAlgorithm;
 use srtp::openssl::Config;
@@ -125,10 +123,12 @@ impl DtlsSrtpSession {
             DtlsState::Connecting => self.stream.connect(),
             DtlsState::Accepting => self.stream.accept(),
             _ => {
+                // TODO: this assert fails when the dtls sesson is closed by a peer
                 assert!(
                     self.stream.get_mut().to_read.is_none(),
                     "IoQueue has something to read, but state is None"
                 );
+
                 return Ok(None);
             }
         };
@@ -216,44 +216,31 @@ fn make_ca_cert() -> Result<(X509, PKey<Private>), ErrorStack> {
     openssl::init();
 
     let rsa = Rsa::generate(2048)?;
-    let key_pair = PKey::from_rsa(rsa)?;
-
-    let mut x509_name = X509NameBuilder::new()?;
-    x509_name.append_entry_by_text("C", "XX")?;
-    x509_name.append_entry_by_text("ST", "XX")?;
-    x509_name.append_entry_by_text("O", "EZK")?;
-    x509_name.append_entry_by_text("CN", "EZK-DTLS-SRTP")?;
-    let x509_name = x509_name.build();
+    let pkey = PKey::from_rsa(rsa)?;
 
     let mut cert_builder = X509::builder()?;
     cert_builder.set_version(2)?;
+
     let serial_number = {
         let mut serial = BigNum::new()?;
         serial.rand(159, MsbOption::MAYBE_ZERO, false)?;
         serial.to_asn1_integer()?
     };
     cert_builder.set_serial_number(&serial_number)?;
-    cert_builder.set_subject_name(&x509_name)?;
-    cert_builder.set_issuer_name(&x509_name)?;
-    cert_builder.set_pubkey(&key_pair)?;
+
+    cert_builder.set_pubkey(&pkey)?;
     cert_builder.set_not_before(Asn1Time::days_from_now(0)?.as_ref())?;
     cert_builder.set_not_after(Asn1Time::days_from_now(365)?.as_ref())?;
 
-    cert_builder.append_extension(BasicConstraints::new().critical().ca().build()?)?;
-    cert_builder.append_extension(
-        KeyUsage::new()
-            .critical()
-            .key_cert_sign()
-            .crl_sign()
-            .build()?,
-    )?;
+    let mut x509_name = X509Name::builder()?;
+    x509_name.append_entry_by_nid_with_type(Nid::COMMONNAME, "ezk", Asn1Type::UTF8STRING)?;
+    let x509_name = x509_name.build();
 
-    let subject_key_identifier =
-        SubjectKeyIdentifier::new().build(&cert_builder.x509v3_context(None, None))?;
-    cert_builder.append_extension(subject_key_identifier)?;
+    cert_builder.set_subject_name(&x509_name)?;
+    cert_builder.set_issuer_name(&x509_name)?;
 
-    cert_builder.sign(&key_pair, MessageDigest::sha256())?;
+    cert_builder.sign(&pkey, MessageDigest::sha256())?;
     let cert = cert_builder.build();
 
-    Ok((cert, key_pair))
+    Ok((cert, pkey))
 }

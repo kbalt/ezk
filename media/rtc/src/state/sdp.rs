@@ -3,7 +3,7 @@ use super::media::Media;
 use super::transport::{Transport, TransportBuilder};
 use super::{DirectionBools, Event, PendingChange, SessionState, TransportEntry};
 use crate::codecs::{NegotiatedCodec, NegotiatedDtmf};
-use crate::{Error, MediaId, TransportId};
+use crate::{Error, MediaId, TransportId, TransportType};
 use bytesstr::BytesStr;
 use sdp_types::{
     Connection, Direction, Fmtp, Group, IceOptions, IcePassword, IceUsernameFragment,
@@ -212,9 +212,13 @@ impl SessionState {
         }
 
         // TODO: this is very messy, create_from_offer return Ok(None) if the transport is not supported
+
         let maybe_transport_id =
             self.transports
                 .try_insert_with_key(|id| -> Result<TransportEntry, Option<_>> {
+                    // Returns Ok(Transport) on success
+                    // Returns Err(None) if the transport
+                    // Returns Err(Some(err)) on fatal error (failed )
                     Transport::create_from_offer(
                         id,
                         &mut self.transport_state,
@@ -261,25 +265,26 @@ impl SessionState {
     /// # Panics
     ///
     /// This function will panic if any transport has not been assigned a port.
-    pub fn create_sdp_answer(&self, state: SdpAnswerState) -> SessionDescription {
+    pub fn create_sdp_answer(&mut self, state: SdpAnswerState) -> SessionDescription {
         let mut media_descriptions = vec![];
 
         for entry in state.0 {
-            let active = match entry {
-                SdpResponseEntry::Active(media_id) => self
-                    .state
-                    .iter()
-                    .find(|media| media.id() == media_id)
-                    .unwrap(),
+            match entry {
+                SdpResponseEntry::Active(media_id) => {
+                    let media = self
+                        .state
+                        .iter()
+                        .find(|media| media.id() == media_id)
+                        .unwrap();
+
+                    media_descriptions.push(self.media_description_for_active(media, None));
+                }
                 SdpResponseEntry::Rejected { media_type, mid } => {
                     let mut desc = MediaDescription::rejected(media_type);
                     desc.mid = mid;
                     media_descriptions.push(desc);
-                    continue;
                 }
-            };
-
-            media_descriptions.push(self.media_description_for_active(active, None));
+            }
         }
 
         let mut sess_desc = SessionDescription {
@@ -325,10 +330,20 @@ impl SessionState {
             });
         }
 
+        if self
+            .transports
+            .values()
+            .any(|t| t.type_() == TransportType::DtlsSrtp)
+        {
+            sess_desc
+                .fingerprint
+                .push(self.transport_state.dtls_fingerprint());
+        }
+
         sess_desc
     }
 
-    pub fn create_sdp_offer(&self) -> SessionDescription {
+    pub fn create_sdp_offer(&mut self) -> SessionDescription {
         let mut media_descriptions = vec![];
 
         // Put the current media sessions in the offer
@@ -489,6 +504,16 @@ impl SessionState {
             sess_desc.ice_pwd = Some(IcePassword {
                 pwd: ice_credentials.pwd.clone().into(),
             });
+        }
+
+        if self
+            .transports
+            .values()
+            .any(|t| t.type_() == TransportType::DtlsSrtp)
+        {
+            sess_desc
+                .fingerprint
+                .push(self.transport_state.dtls_fingerprint());
         }
 
         sess_desc

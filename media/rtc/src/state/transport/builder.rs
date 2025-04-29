@@ -11,7 +11,7 @@ use crate::{
 use core::panic;
 use ice::{IceCredentials, IceEvent};
 use rtp::RtpExtensionIds;
-use sdp_types::{Fingerprint, MediaDescription, SessionDescription, Setup};
+use sdp_types::{MediaDescription, SessionDescription, Setup};
 use std::{
     collections::VecDeque,
     time::{Duration, Instant},
@@ -34,7 +34,7 @@ pub(crate) struct TransportBuilder {
 enum TransportBuilderKind {
     Rtp,
     SdesSrtp(SdesSrtpOffer),
-    DtlsSrtp { fingerprint: Vec<Fingerprint> },
+    DtlsSrtp,
 }
 
 impl TransportBuilder {
@@ -66,9 +66,7 @@ impl TransportBuilder {
             TransportType::SdesSrtp => {
                 TransportBuilderKind::SdesSrtp(sdes_srtp::SdesSrtpOffer::new())
             }
-            TransportType::DtlsSrtp => TransportBuilderKind::DtlsSrtp {
-                fingerprint: vec![state.dtls_fingerprint()],
-            },
+            TransportType::DtlsSrtp => TransportBuilderKind::DtlsSrtp,
         };
 
         let ice_agent = if offer_ice {
@@ -104,9 +102,9 @@ impl TransportBuilder {
             TransportBuilderKind::SdesSrtp(offer) => {
                 offer.extend_crypto(&mut desc.crypto);
             }
-            TransportBuilderKind::DtlsSrtp { fingerprint, .. } => {
+            TransportBuilderKind::DtlsSrtp => {
                 desc.setup = Some(Setup::ActPass);
-                desc.fingerprint.extend_from_slice(fingerprint);
+                // we're not setting the fingerprint attribute on media level
             }
         }
 
@@ -125,7 +123,7 @@ impl TransportBuilder {
         match self.kind {
             TransportBuilderKind::Rtp => TransportType::Rtp,
             TransportBuilderKind::SdesSrtp { .. } => TransportType::SdesSrtp,
-            TransportBuilderKind::DtlsSrtp { .. } => TransportType::DtlsSrtp,
+            TransportBuilderKind::DtlsSrtp => TransportType::DtlsSrtp,
         }
     }
 
@@ -264,7 +262,7 @@ impl TransportBuilder {
                     events: VecDeque::new(),
                 }
             }
-            TransportBuilderKind::DtlsSrtp { fingerprint } => {
+            TransportBuilderKind::DtlsSrtp => {
                 let setup = match remote_media_desc.setup {
                     Some(Setup::Active) => DtlsSetup::Accept,
                     Some(Setup::Passive) => DtlsSetup::Connect,
@@ -292,7 +290,6 @@ impl TransportBuilder {
                     negotiated_extension_ids: receive_extension_ids,
                     connection_state: TransportConnectionState::New,
                     kind: TransportKind::DtlsSrtp {
-                        fingerprint,
                         setup: match setup {
                             DtlsSetup::Accept => Setup::Passive,
                             DtlsSetup::Connect => Setup::Active,

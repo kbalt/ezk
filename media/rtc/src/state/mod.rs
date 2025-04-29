@@ -405,9 +405,7 @@ impl SessionState {
     }
 
     /// Returns a duration after which [`poll`](Self::poll) must be called
-    pub fn timeout(&self) -> Option<Duration> {
-        let now = Instant::now();
-
+    pub fn timeout(&self, now: Instant) -> Option<Duration> {
         let mut timeout = None;
 
         for transport in self.transports.values() {

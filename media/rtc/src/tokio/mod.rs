@@ -240,6 +240,8 @@ impl TokioSessionState {
             (socket_id, result) = poll_sockets(&mut self.sockets, &mut buf) => {
                 let (dst, source) = result?;
 
+                let now = Instant::now();
+
                 let pkt = ReceivedPkt {
                     data: buf.filled().to_vec(),
                     source,
@@ -248,15 +250,16 @@ impl TokioSessionState {
                 };
 
                 self.state.receive(socket_id.0, pkt);
-                self.timeout = self.state.timeout().map(|d| Instant::now() + d);
-
-                buf.set_filled(0);
+                self.timeout = self.state.timeout(now).map(|d| now + d);
 
                 Ok(())
             }
             _ = timeout(&mut self.timeout) => {
-                self.state.poll(Instant::now());
-                self.timeout = self.state.timeout().map(|d| Instant::now() + d);
+                let now = Instant::now();
+
+                self.state.poll(now);
+                self.timeout = self.state.timeout(now).map(|d| now + d);
+
                 Ok(())
             }
         }

@@ -31,6 +31,7 @@ pub(crate) use packet_kind::PacketKind;
 #[derive(Default)]
 pub(crate) struct SessionTransportState {
     ssl_context: Option<openssl::ssl::SslContext>,
+    dtls_fingerprint: Option<Fingerprint>,
     ice_credentials: Option<IceCredentials>,
     stun_servers: Vec<SocketAddr>,
 }
@@ -44,17 +45,25 @@ impl SessionTransportState {
         self.ssl_context.get_or_insert_with(make_ssl_context)
     }
 
-    fn dtls_fingerprint(&mut self) -> Fingerprint {
-        let ctx = self.ssl_context();
+    pub(crate) fn dtls_fingerprint(&mut self) -> Fingerprint {
+        if let Some(dtls_fingerprint) = &self.dtls_fingerprint {
+            dtls_fingerprint.clone()
+        } else {
+            let ctx = self.ssl_context();
 
-        Fingerprint {
-            algorithm: FingerprintAlgorithm::SHA256,
-            fingerprint: ctx
-                .certificate()
-                .unwrap()
-                .digest(MessageDigest::sha256())
-                .unwrap()
-                .to_vec(),
+            let dtls_fingerprint = Fingerprint {
+                algorithm: FingerprintAlgorithm::SHA256,
+                fingerprint: ctx
+                    .certificate()
+                    .unwrap()
+                    .digest(MessageDigest::sha256())
+                    .unwrap()
+                    .to_vec(),
+            };
+
+            self.dtls_fingerprint = Some(dtls_fingerprint.clone());
+
+            dtls_fingerprint
         }
     }
 
@@ -115,8 +124,6 @@ enum TransportKind {
         outbound: srtp::Session,
     },
     DtlsSrtp {
-        /// Local DTLS certificate fingerprint attribute
-        fingerprint: Vec<Fingerprint>,
         setup: Setup,
 
         dtls: DtlsSrtpSession,
@@ -283,7 +290,6 @@ impl Transport {
             negotiated_extension_ids: receive_extension_ids,
             connection_state: TransportConnectionState::New,
             kind: TransportKind::DtlsSrtp {
-                fingerprint: vec![state.dtls_fingerprint()],
                 setup: match setup {
                     DtlsSetup::Accept => Setup::Passive,
                     DtlsSetup::Connect => Setup::Active,
@@ -312,11 +318,9 @@ impl Transport {
             TransportKind::SdesSrtp { crypto, .. } => {
                 desc.crypto.extend_from_slice(crypto);
             }
-            TransportKind::DtlsSrtp {
-                fingerprint, setup, ..
-            } => {
+            TransportKind::DtlsSrtp { setup, .. } => {
                 desc.setup = Some(*setup);
-                desc.fingerprint.extend_from_slice(fingerprint);
+                // we're not setting the fingerprint attribute on the media level
             }
         }
 
