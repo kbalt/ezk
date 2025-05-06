@@ -50,7 +50,7 @@ pub trait MediaBackend {
 }
 
 impl MediaBackend for TokioSessionState {
-    type Error = rtc::Error;
+    type Error = rtc::tokio::Error;
     type Event = TokioEvent;
 
     fn has_media(&self) -> bool {

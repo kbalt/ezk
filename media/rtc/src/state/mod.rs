@@ -28,6 +28,7 @@ pub use events::{
     Event, IceConnectionStateChanged, IceGatheringStateChanged, MediaAdded, MediaChanged,
     TransportChange, TransportConnectionState, TransportConnectionStateChanged,
 };
+pub use sdp::{SdpAnswerState, SdpError};
 
 /// State of a SDP/RTP based media session
 pub struct SessionState {

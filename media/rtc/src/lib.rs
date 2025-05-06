@@ -1,4 +1,4 @@
-#![warn(unreachable_pub)]
+#![warn(unreachable_pub, clippy::unreachable)]
 
 mod codecs;
 mod options;
@@ -27,10 +27,4 @@ impl MediaId {
 slotmap::new_key_type! {
     pub struct LocalMediaId;
     pub struct TransportId;
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
 }

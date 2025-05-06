@@ -1,9 +1,9 @@
 use super::events::{MediaAdded, MediaChanged, TransportChange};
 use super::media::Media;
-use super::transport::{Transport, TransportBuilder};
+use super::transport::{Transport, TransportBuilder, TransportCreateError};
 use super::{DirectionBools, Event, PendingChange, SessionState, TransportEntry};
 use crate::codecs::{NegotiatedCodec, NegotiatedDtmf};
-use crate::{Error, MediaId, TransportId, TransportType};
+use crate::{MediaId, TransportId, TransportType};
 use bytesstr::BytesStr;
 use sdp_types::{
     Connection, Direction, Fmtp, Group, IceOptions, IcePassword, IceUsernameFragment,
@@ -25,6 +25,15 @@ enum SdpResponseEntry {
     },
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum SdpError {
+    #[error(transparent)]
+    CreateTransport(#[from] TransportCreateError),
+
+    #[error("Transport bundling is not supported by the peer")]
+    PeerDoesNotSupportBundling,
+}
+
 impl SessionState {
     /// Receive a SDP offer in this session.
     ///
@@ -35,7 +44,7 @@ impl SessionState {
     pub fn receive_sdp_offer(
         &mut self,
         offer: SessionDescription,
-    ) -> Result<SdpAnswerState, Error> {
+    ) -> Result<SdpAnswerState, SdpError> {
         let mut new_state = vec![];
         let mut response = vec![];
 
@@ -75,18 +84,21 @@ impl SessionState {
             };
 
             // Get or create transport for the m-line
-            let transport = self.get_or_create_transport(&new_state, &offer, remote_media_desc)?;
+            let transport =
+                match self.get_or_create_transport(&new_state, &offer, remote_media_desc) {
+                    Ok(tranpsort) => tranpsort,
+                    Err(TransportCreateError::UnknownTransportType) => {
+                        // No transport was found or created, reject media
+                        response.push(SdpResponseEntry::Rejected {
+                            media_type: remote_media_desc.media.media_type,
+                            mid: remote_media_desc.mid.clone(),
+                        });
 
-            let Some(transport) = transport else {
-                // No transport was found or created, reject media
-                response.push(SdpResponseEntry::Rejected {
-                    media_type: remote_media_desc.media.media_type,
-                    mid: remote_media_desc.mid.clone(),
-                });
-
-                log::debug!("Rejecting mline={mline}, no compatible transport found");
-                continue;
-            };
+                        log::debug!("Rejecting mline={mline}, no compatible transport found");
+                        continue;
+                    }
+                    Err(e) => return Err(SdpError::CreateTransport(e)),
+                };
 
             let recv_fmtp = remote_media_desc
                 .fmtp
@@ -201,41 +213,28 @@ impl SessionState {
         new_state: &[Media],
         session_desc: &SessionDescription,
         remote_media_desc: &MediaDescription,
-    ) -> Result<Option<TransportId>, Error> {
+    ) -> Result<TransportId, TransportCreateError> {
         // See if there's a transport to be reused via BUNDLE group
         if let Some(id) = remote_media_desc
             .mid
             .as_ref()
             .and_then(|mid| self.find_bundled_transport(new_state, session_desc, mid))
         {
-            return Ok(Some(id));
+            return Ok(id);
         }
 
         // TODO: this is very messy, create_from_offer return Ok(None) if the transport is not supported
 
-        let maybe_transport_id =
-            self.transports
-                .try_insert_with_key(|id| -> Result<TransportEntry, Option<_>> {
-                    // Returns Ok(Transport) on success
-                    // Returns Err(None) if the transport
-                    // Returns Err(Some(err)) on fatal error (failed )
-                    Transport::create_from_offer(
-                        id,
-                        &mut self.transport_state,
-                        &mut self.transport_changes,
-                        session_desc,
-                        remote_media_desc,
-                    )
-                    .map_err(Some)?
-                    .map(TransportEntry::Transport)
-                    .ok_or(None)
-                });
-
-        match maybe_transport_id {
-            Ok(id) => Ok(Some(id)),
-            Err(Some(err)) => Err(err),
-            Err(None) => Ok(None),
-        }
+        self.transports.try_insert_with_key(|id| {
+            Transport::create_from_offer(
+                id,
+                &mut self.transport_state,
+                &mut self.transport_changes,
+                session_desc,
+                remote_media_desc,
+            )
+            .map(TransportEntry::Transport)
+        })
     }
 
     fn find_bundled_transport(
@@ -264,7 +263,9 @@ impl SessionState {
     ///
     /// # Panics
     ///
-    /// This function will panic if any transport has not been assigned a port.
+    /// This function may panic if any transport has not been assigned a port,
+    /// the given state is from an other Session
+    /// or the current Session has changed since the state has been created.
     pub fn create_sdp_answer(&mut self, state: SdpAnswerState) -> SessionDescription {
         let mut media_descriptions = vec![];
 
@@ -275,7 +276,7 @@ impl SessionState {
                         .state
                         .iter()
                         .find(|media| media.id() == media_id)
-                        .unwrap();
+                        .expect("SdpAnswerState must be valid");
 
                     media_descriptions.push(self.media_description_for_active(media, None));
                 }
@@ -520,7 +521,7 @@ impl SessionState {
     }
 
     /// Receive a SDP answer after sending an offer.
-    pub fn receive_sdp_answer(&mut self, answer: SessionDescription) {
+    pub fn receive_sdp_answer(&mut self, answer: SessionDescription) -> Result<(), SdpError> {
         'next_media_desc: for (mline, remote_media_desc) in
             answer.media_descriptions.iter().enumerate()
         {
@@ -569,8 +570,9 @@ impl SessionState {
                 let transport_id = if is_bundled {
                     pending_media.bundle_transport
                 } else {
-                    // TODO: return an error here instead, we required BUNDLE, but it is not supported
-                    pending_media.standalone_transport.unwrap()
+                    pending_media
+                        .standalone_transport
+                        .ok_or(SdpError::PeerDoesNotSupportBundling)?
                 };
 
                 // Build transport if necessary
@@ -586,7 +588,7 @@ impl SessionState {
                         &mut self.transport_changes,
                         &answer,
                         remote_media_desc,
-                    );
+                    )?;
 
                     self.transports[transport_id] = TransportEntry::Transport(transport);
                 }
@@ -668,6 +670,8 @@ impl SessionState {
         }
 
         self.remove_unused_transports();
+
+        Ok(())
     }
 
     fn media_description_for_active(

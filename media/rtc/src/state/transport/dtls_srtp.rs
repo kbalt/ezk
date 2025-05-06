@@ -6,7 +6,9 @@ use openssl::{
     nid::Nid,
     pkey::{PKey, Private},
     rsa::Rsa,
-    ssl::{ErrorCode, Ssl, SslAcceptor, SslContext, SslMethod, SslStream, SslVerifyMode},
+    ssl::{
+        ErrorCode, Ssl, SslAcceptor, SslContext, SslMethod, SslStream, SslVerifyMode, SslVersion,
+    },
     x509::{X509Name, X509},
 };
 use sdp_types::FingerprintAlgorithm;
@@ -16,6 +18,24 @@ use std::{
     io::{self, Cursor, Read, Write},
     time::Duration,
 };
+
+#[derive(Debug, thiserror::Error)]
+pub enum DtlsSrtpCreateError {
+    #[error("Failed to create Ssl: {0}")]
+    NewSsl(#[source] openssl::error::ErrorStack),
+    #[error("Failed to set MTU: {0}")]
+    SetMtu(#[source] openssl::error::ErrorStack),
+    #[error("Failed to create SslStream: {0}")]
+    NewSslStream(#[source] openssl::error::ErrorStack),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DtlsHandshakeError {
+    #[error("Error during handshake: {0}")]
+    OpenSsl(#[from] openssl::ssl::Error),
+    #[error("Failed to export keying material: {0}")]
+    ExtractingKeyingMaterial(#[from] srtp::openssl::Error),
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum DtlsSetup {
@@ -27,7 +47,7 @@ pub(crate) enum DtlsSetup {
 pub(crate) enum DtlsState {
     Accepting,
     Connecting,
-    Connected,
+    Connected { is_server: bool },
     Failed,
 }
 
@@ -41,10 +61,11 @@ impl DtlsSrtpSession {
         ssl_context: &SslContext,
         fingerprints: Vec<(MessageDigest, Vec<u8>)>,
         setup: DtlsSetup,
-    ) -> io::Result<Self> {
-        let mut ssl = Ssl::new(ssl_context)?;
-        ssl.set_mtu(1200)?;
+    ) -> Result<Self, DtlsSrtpCreateError> {
+        let mut ssl = Ssl::new(ssl_context).map_err(DtlsSrtpCreateError::NewSsl)?;
+        ssl.set_mtu(1200).map_err(DtlsSrtpCreateError::SetMtu)?;
 
+        // Use the openssl verify callback to test the peer certificate against the fingerprints that were sent to us
         ssl.set_verify_callback(
             SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT,
             move |_, x509_store| {
@@ -66,14 +87,17 @@ impl DtlsSrtpSession {
             },
         );
 
+        let stream = SslStream::new(
+            ssl,
+            IoQueue {
+                to_read: None,
+                out: VecDeque::new(),
+            },
+        )
+        .map_err(DtlsSrtpCreateError::NewSslStream)?;
+
         let mut this = Self {
-            stream: SslStream::new(
-                ssl,
-                IoQueue {
-                    to_read: None,
-                    out: VecDeque::new(),
-                },
-            )?,
+            stream,
             state: match setup {
                 DtlsSetup::Accept => DtlsState::Accepting,
                 DtlsSetup::Connect => DtlsState::Connecting,
@@ -81,7 +105,10 @@ impl DtlsSrtpSession {
         };
 
         // Put initial handshake into the IoQueue
-        assert!(this.handshake()?.is_none());
+        assert!(this
+            .handshake()
+            .expect("First call to handshake must not fail")
+            .is_none());
 
         Ok(this)
     }
@@ -90,18 +117,11 @@ impl DtlsSrtpSession {
         self.state
     }
 
-    // TODO: if event_timeout is ever merged, use it
-    // #[cfg(openssl320)]
-    // pub(crate) fn timeout(&self) -> Option<Duration> {
-    //     self.stream.ssl().event_timeout().unwrap()
-    // }
-
-    // #[cfg(not(openssl320))]
     pub(crate) fn timeout(&self) -> Option<Duration> {
         match self.state {
             DtlsState::Accepting => Some(Duration::from_millis(100)),
             DtlsState::Connecting => Some(Duration::from_millis(100)),
-            DtlsState::Connected => None,
+            DtlsState::Connected { .. } => None,
             DtlsState::Failed => None,
         }
     }
@@ -113,22 +133,24 @@ impl DtlsSrtpSession {
 
     pub(crate) fn handshake(
         &mut self,
-    ) -> io::Result<
+    ) -> Result<
         Option<(
             srtp::openssl::InboundSession,
             srtp::openssl::OutboundSession,
         )>,
+        DtlsHandshakeError,
     > {
         let result = match self.state {
             DtlsState::Connecting => self.stream.connect(),
             DtlsState::Accepting => self.stream.accept(),
-            _ => {
-                // TODO: this assert fails when the dtls sesson is closed by a peer
-                assert!(
-                    self.stream.get_mut().to_read.is_none(),
-                    "IoQueue has something to read, but state is None"
-                );
-
+            DtlsState::Connected { is_server } => {
+                if is_server {
+                    self.stream.accept()
+                } else {
+                    self.stream.connect()
+                }
+            }
+            DtlsState::Failed => {
                 return Ok(None);
             }
         };
@@ -138,16 +160,21 @@ impl DtlsSrtpSession {
                 return Ok(None);
             } else {
                 self.state = DtlsState::Failed;
-                return Err(io::Error::other(e));
+                return Err(DtlsHandshakeError::OpenSsl(e));
             }
         }
 
-        self.state = DtlsState::Connected;
+        if matches!(self.state, DtlsState::Connected { .. }) {
+            Ok(None)
+        } else {
+            let is_server = matches!(self.state, DtlsState::Accepting);
+            self.state = DtlsState::Connected { is_server };
 
-        let (inbound, outbound) =
-            srtp::openssl::session_pair(self.stream.ssl(), Config::default()).unwrap();
+            let (inbound, outbound) =
+                srtp::openssl::session_pair(self.stream.ssl(), Config::default())?;
 
-        Ok(Some((inbound, outbound)))
+            Ok(Some((inbound, outbound)))
+        }
     }
 
     pub(crate) fn pop_to_send(&mut self) -> Option<Vec<u8>> {
@@ -168,7 +195,9 @@ impl Read for IoQueue {
 
         let result = to_read.read(buf)?;
 
-        if to_read.position() == u64::try_from(to_read.get_ref().len()).unwrap() {
+        let position = usize::try_from(to_read.position()).expect("position must fit into usize");
+
+        if position == to_read.get_ref().len() {
             self.to_read = None;
         }
 
@@ -200,16 +229,17 @@ pub(super) fn to_openssl_digest(algo: &FingerprintAlgorithm) -> Option<MessageDi
     }
 }
 
-pub(super) fn make_ssl_context() -> SslContext {
-    let (cert, pkey) = make_ca_cert().unwrap();
+pub(super) fn make_ssl_context() -> Result<SslContext, openssl::error::ErrorStack> {
+    let (cert, pkey) = make_ca_cert()?;
 
-    let mut ctx = SslAcceptor::mozilla_modern(SslMethod::dtls()).unwrap();
-    ctx.set_tlsext_use_srtp(srtp::openssl::SRTP_PROFILE_NAMES)
-        .unwrap();
-    ctx.set_private_key(&pkey).unwrap();
-    ctx.set_certificate(&cert).unwrap();
-    ctx.check_private_key().unwrap();
-    ctx.build().into_context()
+    let mut ctx = SslAcceptor::mozilla_modern(SslMethod::dtls())?;
+    ctx.set_tlsext_use_srtp(srtp::openssl::SRTP_PROFILE_NAMES)?;
+    ctx.set_min_proto_version(Some(SslVersion::DTLS1_2))?;
+    ctx.set_private_key(&pkey)?;
+    ctx.set_certificate(&cert)?;
+    ctx.check_private_key()?;
+
+    Ok(ctx.build().into_context())
 }
 
 fn make_ca_cert() -> Result<(X509, PKey<Private>), ErrorStack> {
@@ -230,7 +260,7 @@ fn make_ca_cert() -> Result<(X509, PKey<Private>), ErrorStack> {
 
     cert_builder.set_pubkey(&pkey)?;
     cert_builder.set_not_before(Asn1Time::days_from_now(0)?.as_ref())?;
-    cert_builder.set_not_after(Asn1Time::days_from_now(365)?.as_ref())?;
+    cert_builder.set_not_after(Asn1Time::days_from_now(7)?.as_ref())?;
 
     let mut x509_name = X509Name::builder()?;
     x509_name.append_entry_by_nid_with_type(Nid::COMMONNAME, "ezk", Asn1Type::UTF8STRING)?;

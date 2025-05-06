@@ -1,9 +1,9 @@
 use crate::{
     state::{
-        Event, IceConnectionStateChanged, MediaAdded, MediaChanged, SessionState, TransportChange,
-        TransportConnectionStateChanged,
+        Event, IceConnectionStateChanged, MediaAdded, MediaChanged, SdpError, SessionState,
+        TransportChange, TransportConnectionStateChanged,
     },
-    Codecs, Error, LocalMediaId, MediaId, Options, ReceivedPkt, TransportId,
+    Codecs, LocalMediaId, MediaId, Options, ReceivedPkt, TransportId,
 };
 use ice::{Component, IceGatheringState};
 use rtp::RtpPacket;
@@ -55,6 +55,14 @@ pub struct TokioSessionState {
     events: VecDeque<TokioEvent>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error(transparent)]
+    Sdp(#[from] SdpError),
+    #[error(transparent)]
+    Io(#[from] io::Error),
+}
+
 impl TokioSessionState {
     pub fn new(address: IpAddr, options: Options) -> Self {
         Self {
@@ -102,7 +110,7 @@ impl TokioSessionState {
         self.state.add_media(local_media_id, direction)
     }
 
-    pub async fn create_sdp_offer(&mut self) -> Result<SessionDescription, crate::Error> {
+    pub async fn create_sdp_offer(&mut self) -> Result<SessionDescription, Error> {
         self.handle_transport_changes().await?;
         self.run_until_all_candidates_are_gathered().await?;
         Ok(self.state.create_sdp_offer())
@@ -121,8 +129,7 @@ impl TokioSessionState {
     }
 
     pub async fn receive_sdp_answer(&mut self, answer: SessionDescription) -> Result<(), Error> {
-        self.state.receive_sdp_answer(answer);
-
+        self.state.receive_sdp_answer(answer)?;
         self.handle_transport_changes().await?;
 
         Ok(())
@@ -142,7 +149,7 @@ impl TokioSessionState {
                     );
 
                     self.sockets
-                        .insert((transport_id, Component::Rtp), Socket::new(socket));
+                        .insert((transport_id, Component::Rtp), Socket::new(socket)?);
                 }
                 TransportChange::CreateSocketPair(transport_id) => {
                     let rtp_socket = UdpSocket::bind("0.0.0.0:0").await?;
@@ -156,9 +163,9 @@ impl TokioSessionState {
                     );
 
                     self.sockets
-                        .insert((transport_id, Component::Rtp), Socket::new(rtp_socket));
+                        .insert((transport_id, Component::Rtp), Socket::new(rtp_socket)?);
                     self.sockets
-                        .insert((transport_id, Component::Rtcp), Socket::new(rtcp_socket));
+                        .insert((transport_id, Component::Rtcp), Socket::new(rtcp_socket)?);
                 }
                 TransportChange::Remove(transport_id) => {
                     self.sockets.remove(&(transport_id, Component::Rtp));
@@ -210,7 +217,7 @@ impl TokioSessionState {
         Ok(())
     }
 
-    pub async fn run_until_all_candidates_are_gathered(&mut self) -> Result<(), crate::Error> {
+    pub async fn run_until_all_candidates_are_gathered(&mut self) -> Result<(), Error> {
         while !matches!(
             self.state.ice_gathering_state(),
             None | Some(IceGatheringState::Complete)

@@ -18,14 +18,15 @@ pub(crate) struct Socket {
 }
 
 impl Socket {
-    pub(crate) fn new(socket: UdpSocket) -> Self {
-        let local_addr = socket.local_addr().unwrap();
-        Self {
-            state: UdpSocketState::new((&socket).into()).unwrap(),
+    pub(crate) fn new(socket: UdpSocket) -> io::Result<Self> {
+        let local_addr = socket.local_addr()?;
+
+        Ok(Self {
+            state: UdpSocketState::new((&socket).into())?,
             socket,
             local_addr,
             to_send: VecDeque::new(),
-        }
+        })
     }
 
     pub(crate) fn enqueue(&mut self, data: Vec<u8>, source: Option<IpAddr>, target: SocketAddr) {

@@ -1,22 +1,22 @@
 use super::{
     opt_min, rtp::extensions::RtpExtensionIdsExt, TransportChange, TransportConnectionState,
 };
-use crate::{Error, TransportId, TransportType};
-use dtls_srtp::{make_ssl_context, DtlsSetup, DtlsSrtpSession, DtlsState};
+use crate::{TransportId, TransportType};
+use dtls_srtp::{make_ssl_context, DtlsSetup, DtlsSrtpCreateError, DtlsSrtpSession, DtlsState};
 use ice::{
     Component, IceAgent, IceConnectionState, IceCredentials, IceEvent, IceGatheringState,
     ReceivedPkt,
 };
 use openssl::{hash::MessageDigest, ssl::SslContext};
 use rtp::{RtpExtensionIds, RtpPacket};
+use sdes_srtp::SdesSrtpNegotiationError;
 use sdp_types::{
     Connection, Fingerprint, FingerprintAlgorithm, MediaDescription, SessionDescription, Setup,
     SrtpCrypto, TaggedAddress, TransportProtocol,
 };
 use std::{
     collections::VecDeque,
-    io,
-    net::{IpAddr, SocketAddr, ToSocketAddrs},
+    net::{IpAddr, SocketAddr},
     time::{Duration, Instant},
 };
 
@@ -42,7 +42,10 @@ impl SessionTransportState {
     }
 
     fn ssl_context(&mut self) -> &mut SslContext {
-        self.ssl_context.get_or_insert_with(make_ssl_context)
+        self.ssl_context.get_or_insert_with(|| {
+            // TODO: remove expect
+            make_ssl_context().expect("OpenSSL context creation must not fail")
+        })
     }
 
     pub(crate) fn dtls_fingerprint(&mut self) -> Fingerprint {
@@ -51,14 +54,16 @@ impl SessionTransportState {
         } else {
             let ctx = self.ssl_context();
 
+            // TODO: remove expect
+            let digest = ctx
+                .certificate()
+                .expect("SSL context always contains a certificate")
+                .digest(MessageDigest::sha256())
+                .expect("Creating digest of certificate should not fail");
+
             let dtls_fingerprint = Fingerprint {
                 algorithm: FingerprintAlgorithm::SHA256,
-                fingerprint: ctx
-                    .certificate()
-                    .unwrap()
-                    .digest(MessageDigest::sha256())
-                    .unwrap()
-                    .to_vec(),
+                fingerprint: digest.to_vec(),
             };
 
             self.dtls_fingerprint = Some(dtls_fingerprint.clone());
@@ -72,6 +77,20 @@ impl SessionTransportState {
             .get_or_insert_with(IceCredentials::random)
             .clone()
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum TransportCreateError {
+    #[error("Failed to create DTLS-SRTP transport: {0}")]
+    CreateDtlsSrtp(#[from] DtlsSrtpCreateError),
+    #[error("Failed to negotiate SDES-SRTP session: {0}")]
+    FailedSdesSrtp(#[from] SdesSrtpNegotiationError),
+    #[error("Invalid or missing setup attribute in SDP")]
+    InvalidSetupAttribute,
+    #[error(transparent)]
+    Resolve(#[from] ResolveError),
+    #[error("Unknown transport type")]
+    UnknownTransportType,
 }
 
 pub(crate) enum TransportEvent {
@@ -138,7 +157,7 @@ impl Transport {
         changes: &mut Vec<TransportChange>,
         session_desc: &SessionDescription,
         remote_media_desc: &MediaDescription,
-    ) -> Result<Option<Self>, Error> {
+    ) -> Result<Self, TransportCreateError> {
         if remote_media_desc.rtcp_mux {
             changes.push(TransportChange::CreateSocket(id));
         } else {
@@ -229,7 +248,7 @@ impl Transport {
                     receive_extension_ids,
                 )?
             }
-            _ => return Ok(None),
+            _ => return Err(TransportCreateError::UnknownTransportType),
         };
 
         // RTP & SDES-SRTP transport are instantly set to the connected state if ICE is not used
@@ -241,7 +260,7 @@ impl Transport {
             transport.set_connection_state(TransportConnectionState::Connected);
         }
 
-        Ok(Some(transport))
+        Ok(transport)
     }
 
     pub(crate) fn dtls_srtp_from_offer(
@@ -252,7 +271,7 @@ impl Transport {
         remote_rtcp_address: SocketAddr,
         ice_agent: Option<IceAgent>,
         receive_extension_ids: RtpExtensionIds,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, TransportCreateError> {
         let setup = match remote_media_desc.setup {
             Some(Setup::Active) => DtlsSetup::Accept,
             Some(Setup::Passive) => DtlsSetup::Connect,
@@ -262,7 +281,7 @@ impl Transport {
                 DtlsSetup::Accept
             }
             Some(Setup::HoldConn) | None => {
-                return Err(io::Error::other("missing or invalid setup attribute").into());
+                return Err(TransportCreateError::InvalidSetupAttribute);
             }
         };
 
@@ -444,7 +463,7 @@ impl Transport {
                 DtlsState::Accepting | DtlsState::Connecting => {
                     self.set_connection_state(TransportConnectionState::Connecting);
                 }
-                DtlsState::Connected => {
+                DtlsState::Connected { .. } => {
                     assert!(
                         srtp.is_some(),
                         "SRTP session must exist if DTLS transport is connected"
@@ -626,15 +645,23 @@ pub(crate) enum ReceivedPacket {
     Ignore,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ResolveError {
+    #[error("Missing connection attribute")]
+    MissingConnectionAttribute,
+    #[error("FQDN in connection attribute which is unsupported")]
+    FqdnInConnectionAttribute,
+}
+
 fn resolve_rtp_and_rtcp_address(
     remote_session_description: &SessionDescription,
     remote_media_description: &MediaDescription,
-) -> Result<(SocketAddr, SocketAddr), Error> {
+) -> Result<(SocketAddr, SocketAddr), ResolveError> {
     let connection = remote_media_description
         .connection
         .as_ref()
         .or(remote_session_description.connection.as_ref())
-        .unwrap();
+        .ok_or(ResolveError::MissingConnectionAttribute)?;
 
     let remote_rtp_address = connection.address.clone();
     let remote_rtp_port = remote_media_description.media.port;
@@ -674,22 +701,11 @@ fn rtcp_address_and_port(
     )
 }
 
-fn resolve_tagged_address(address: &TaggedAddress, port: u16) -> io::Result<SocketAddr> {
-    // TODO: do not resolve here directly
+fn resolve_tagged_address(address: &TaggedAddress, port: u16) -> Result<SocketAddr, ResolveError> {
     match address {
         TaggedAddress::IP4(ipv4_addr) => Ok(SocketAddr::from((*ipv4_addr, port))),
-        TaggedAddress::IP4FQDN(bytes_str) => (bytes_str.as_str(), port)
-            .to_socket_addrs()?
-            .find(SocketAddr::is_ipv4)
-            .ok_or_else(|| {
-                io::Error::other(format!("Failed to find IPv4 address for {bytes_str}"))
-            }),
+        TaggedAddress::IP4FQDN(..) => Err(ResolveError::FqdnInConnectionAttribute),
         TaggedAddress::IP6(ipv6_addr) => Ok(SocketAddr::from((*ipv6_addr, port))),
-        TaggedAddress::IP6FQDN(bytes_str) => (bytes_str.as_str(), port)
-            .to_socket_addrs()?
-            .find(SocketAddr::is_ipv6)
-            .ok_or_else(|| {
-                io::Error::other(format!("Failed to find IPv6 address for {bytes_str}"))
-            }),
+        TaggedAddress::IP6FQDN(..) => Err(ResolveError::FqdnInConnectionAttribute),
     }
 }

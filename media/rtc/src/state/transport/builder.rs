@@ -2,7 +2,8 @@ use super::{
     dtls_srtp::{to_openssl_digest, DtlsSetup, DtlsSrtpSession},
     resolve_rtp_and_rtcp_address,
     sdes_srtp::{self, SdesSrtpOffer},
-    IceAgent, ReceivedPacket, SessionTransportState, Transport, TransportEvent, TransportKind,
+    IceAgent, ReceivedPacket, SessionTransportState, Transport, TransportCreateError,
+    TransportEvent, TransportKind,
 };
 use crate::{
     state::{rtp::extensions::RtpExtensionIdsExt, TransportChange, TransportConnectionState},
@@ -190,9 +191,9 @@ impl TransportBuilder {
         changes: &mut Vec<TransportChange>,
         session_desc: &SessionDescription,
         remote_media_desc: &MediaDescription,
-    ) -> Transport {
+    ) -> Result<Transport, TransportCreateError> {
         let (remote_rtp_address, remote_rtcp_address) =
-            resolve_rtp_and_rtcp_address(session_desc, remote_media_desc).unwrap();
+            resolve_rtp_and_rtcp_address(session_desc, remote_media_desc)?;
 
         // Remove RTCP socket if the answer has rtcp-mux set
         if remote_media_desc.rtcp_mux && self.local_rtcp_port.is_some() {
@@ -243,7 +244,8 @@ impl TransportBuilder {
                 events: VecDeque::new(),
             },
             TransportBuilderKind::SdesSrtp(offer) => {
-                let (crypto, inbound, outbound) = offer.receive_answer(&remote_media_desc.crypto);
+                let (crypto, inbound, outbound) =
+                    offer.receive_answer(&remote_media_desc.crypto).unwrap();
 
                 Transport {
                     local_rtp_port: self.local_rtp_port,
@@ -321,6 +323,6 @@ impl TransportBuilder {
             };
         }
 
-        transport
+        Ok(transport)
     }
 }
