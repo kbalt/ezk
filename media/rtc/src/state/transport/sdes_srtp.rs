@@ -1,4 +1,4 @@
-use base64::{prelude::BASE64_STANDARD, Engine};
+use base64::{Engine, prelude::BASE64_STANDARD};
 use rand::RngCore;
 use sdp_types::{
     SrtpCrypto, SrtpKeyingMaterial,
@@ -115,41 +115,42 @@ impl SdesSrtpOffer {
         for (index, (suite, send_key)) in self.keys.into_iter().enumerate() {
             let tag = index as u32 + 1;
 
-            for crypto in remote_crypto {
-                if crypto.tag != tag || crypto.suite != suite {
-                    continue;
-                }
+            let Some(crypto) = remote_crypto
+                .iter()
+                .find(|c| c.tag == tag && c.suite == suite)
+            else {
+                continue;
+            };
 
-                let recv_key = BASE64_STANDARD.decode(&crypto.keys[0].key_and_salt)?;
+            let recv_key = BASE64_STANDARD.decode(&crypto.keys[0].key_and_salt)?;
 
-                let crypto_attr = SrtpCrypto {
-                    tag,
-                    suite: suite.clone(),
-                    keys: vec![SrtpKeyingMaterial {
-                        key_and_salt: BASE64_STANDARD.encode(&send_key).into(),
-                        lifetime: None,
-                        mki: None,
-                    }],
-                    params: vec![],
-                };
+            let crypto_attr = SrtpCrypto {
+                tag,
+                suite: suite.clone(),
+                keys: vec![SrtpKeyingMaterial {
+                    key_and_salt: BASE64_STANDARD.encode(&send_key).into(),
+                    lifetime: None,
+                    mki: None,
+                }],
+                params: vec![],
+            };
 
-                let suite = srtp_suite_to_policy(&suite).expect("suite is one we offered");
-                let inbound = srtp::Session::with_inbound_template(srtp::StreamPolicy {
-                    rtp: suite,
-                    rtcp: suite,
-                    key: &recv_key,
-                    ..Default::default()
-                })?;
+            let suite = srtp_suite_to_policy(&suite).expect("suite is one we offered");
+            let inbound = srtp::Session::with_inbound_template(srtp::StreamPolicy {
+                rtp: suite,
+                rtcp: suite,
+                key: &recv_key,
+                ..Default::default()
+            })?;
 
-                let outbound = srtp::Session::with_outbound_template(srtp::StreamPolicy {
-                    rtp: suite,
-                    rtcp: suite,
-                    key: &send_key,
-                    ..Default::default()
-                })?;
+            let outbound = srtp::Session::with_outbound_template(srtp::StreamPolicy {
+                rtp: suite,
+                rtcp: suite,
+                key: &send_key,
+                ..Default::default()
+            })?;
 
-                return Ok((crypto_attr, inbound, outbound));
-            }
+            return Ok((crypto_attr, inbound, outbound));
         }
 
         Err(SdesSrtpNegotiationError::NoCompatibleSrtpSuite)

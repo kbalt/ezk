@@ -1,4 +1,4 @@
-use crate::{codecs::NegotiatedCodec, LocalMediaId, MediaId, TransportId};
+use crate::{LocalMediaId, MediaId, TransportId, codecs::NegotiatedCodec};
 use ice::{Component, IceConnectionState, IceGatheringState};
 use rtp::RtpPacket;
 use sdp_types::Direction;

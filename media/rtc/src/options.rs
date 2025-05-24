@@ -12,6 +12,7 @@ pub struct Options {
     pub rtcp_mux_policy: RtcpMuxPolicy,
     /// Policy to use when offering bundled media over a single transport
     pub bundle_policy: BundlePolicy,
+    // TODO: add MTU
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

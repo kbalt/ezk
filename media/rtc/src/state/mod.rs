@@ -1,7 +1,7 @@
 use crate::{BundlePolicy, Codecs, LocalMediaId, MediaId, Options, TransportId, TransportType};
 use ::rtp::{
-    rtcp_types::{Compound, Packet as RtcpPacket},
     RtpPacket,
+    rtcp_types::{Compound, Packet as RtcpPacket},
 };
 use ice::{Component, IceAgent, IceConnectionState, IceGatheringState, ReceivedPkt};
 use local_media::LocalMedia;
@@ -21,6 +21,7 @@ mod events;
 mod local_media;
 mod media;
 mod rtp;
+pub mod rtp_session;
 mod sdp;
 mod transport;
 
@@ -29,6 +30,7 @@ pub use events::{
     TransportChange, TransportConnectionState, TransportConnectionStateChanged,
 };
 pub use sdp::{SdpAnswerState, SdpError};
+pub use transport::{DtlsHandshakeError, DtlsSrtpCreateError};
 
 /// State of a SDP/RTP based media session
 pub struct SessionState {
@@ -466,14 +468,14 @@ impl SessionState {
                         transport_id,
                         old,
                         new,
-                    }))
+                    }));
                 }
                 TransportEvent::IceGatheringState { old, new } => {
                     return Some(Event::IceGatheringState(IceGatheringStateChanged {
                         transport_id,
                         old,
                         new,
-                    }))
+                    }));
                 }
                 TransportEvent::TransportConnectionState { old, new } => {
                     return Some(Event::TransportConnectionState(
@@ -482,7 +484,7 @@ impl SessionState {
                             old,
                             new,
                         },
-                    ))
+                    ));
                 }
                 TransportEvent::SendData {
                     component,
@@ -496,7 +498,7 @@ impl SessionState {
                         data,
                         source,
                         target,
-                    })
+                    });
                 }
             }
         }
@@ -533,7 +535,7 @@ impl SessionState {
                     self.state
                         .iter_mut()
                         .filter(|media| media.transport_id() == transport_id)
-                        .find(|media| media.remote_payload_types().contains(&packet.pt))
+                        .find(|media| media.remote_payload_types().any(|pt| pt == packet.pt))
                 };
 
                 if let Some(media) = entry {
@@ -615,7 +617,7 @@ impl SessionState {
         let media = self.state.iter_mut().find(|m| m.id() == media_id).unwrap();
         let transport = self.transports[media.transport_id()].unwrap_mut();
 
-        media.send_rtp(transport, packet);
+        // media.send_rtp(transport, packet);
     }
 
     /// Returns the cumulative gathering state of all ice agents

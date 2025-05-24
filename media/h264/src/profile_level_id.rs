@@ -42,43 +42,36 @@ impl ProfileLevelId {
         profile_iop: u8,
         level_idc: u8,
     ) -> Result<Self, ProfileLevelIdFromBytesError> {
-        const fn bitpattern(ignore: u8, pattern: u8) -> impl Fn(u8) -> bool {
-            move |input| {
-                let input = input & !ignore;
-                pattern == input
-            }
-        }
-
         #[rustfmt::skip]
-        let table = [
+        let table = const { [
             // Constrained baseline
-            (0x42, bitpattern(0b1011_0000, 0b0100_0000), Profile::ConstrainedBaseline),
-            (0x4D, bitpattern(0b0111_0000, 0b1000_0000), Profile::ConstrainedBaseline),
-            (0x58, bitpattern(0b0011_0000, 0b1100_0000), Profile::ConstrainedBaseline),
+            (0x42, const { bitpattern("?1??_0000") }, Profile::ConstrainedBaseline),
+            (0x4D, const { bitpattern("1???_0000") }, Profile::ConstrainedBaseline),
+            (0x58, const { bitpattern("11??_0000") }, Profile::ConstrainedBaseline),
             // Baseline
-            (0x42, bitpattern(0b1011_0000, 0b0000_0000), Profile::Baseline),
-            (0x58, bitpattern(0b0011_0000, 0b1000_0000), Profile::Baseline),
+            (0x42, const { bitpattern("?0??_0000") }, Profile::Baseline),
+            (0x58, const { bitpattern("10??_0000") }, Profile::Baseline),
             // Main
-            (0x4D, bitpattern(0b0101_0000, 0b0000_0000), Profile::Main),
+            (0x4D, const { bitpattern("0?0?_0000") }, Profile::Main),
             // Extended
-            (0x58, bitpattern(0b0011_0000, 0b0000_0000), Profile::Extended),
+            (0x58, const { bitpattern("00??_0000") }, Profile::Extended),
             // High
-            (0x64, bitpattern(0, 0), Profile::High),
+            (0x64, const { bitpattern("0000_0000") }, Profile::High),
             // High10
-            (0x6E, bitpattern(0, 0), Profile::High10),
+            (0x6E, const { bitpattern("0000_0000") }, Profile::High10),
             // High422
-            (0x7A, bitpattern(0, 0), Profile::High422),
+            (0x7A, const { bitpattern("0000_0000") }, Profile::High422),
             // High444Predictive
-            (0xF4, bitpattern(0, 0), Profile::High444Predictive),
+            (0xF4, const { bitpattern("0000_0000") }, Profile::High444Predictive),
             // High10 Intra
-            (0x6E, bitpattern(0, 0b001_0000), Profile::High10Intra),
+            (0x6E, const { bitpattern("0001_0000") }, Profile::High10Intra),
             // High422 Intra
-            (0x7A, bitpattern(0, 0b001_0000), Profile::High422Intra),
+            (0x7A, const { bitpattern("0001_0000") }, Profile::High422Intra),
             // High444 Intra
-            (0xF4, bitpattern(0, 0b001_0000), Profile::High444Intra),
+            (0xF4, const { bitpattern("0001_0000") }, Profile::High444Intra),
             // CAVLC444 Intra
-            (0x2C, bitpattern(0, 0b001_0000), Profile::CAVLC444Intra),
-        ];
+            (0x2C, const { bitpattern("0001_0000") }, Profile::CAVLC444Intra),
+        ] };
 
         let profile = table
             .iter()
@@ -167,4 +160,54 @@ impl fmt::Display for ProfileLevelId {
             self.level.level_idc(),
         )
     }
+}
+
+const fn bitpattern(pattern: &'static str) -> impl Fn(u8) -> bool {
+    let pattern_bytes = pattern.as_bytes();
+
+    let mut ignore = 0u8;
+    let mut pattern = 0u8;
+
+    let mut index = 0;
+    let mut str_index = 0;
+    while index < 8 {
+        match pattern_bytes[str_index] {
+            b'?' => {
+                ignore |= 1 << (7 - index);
+                str_index += 1;
+                index += 1;
+            }
+            b'1' => {
+                pattern |= 1 << (7 - index);
+                str_index += 1;
+                index += 1;
+            }
+            b'0' => {
+                str_index += 1;
+                index += 1;
+            }
+            b'_' => {
+                str_index += 1;
+            }
+            _ => panic!("Invalid character in bitpattern"),
+        }
+    }
+
+    let mask = !ignore;
+
+    move |input: u8| {
+        let masked_input = input & mask;
+        pattern == masked_input
+    }
+}
+#[test]
+fn test() {
+    let pattern = const { bitpattern("0000_0?01") };
+
+    assert!(pattern(1));
+    assert!(!pattern(2));
+    assert!(!pattern(3));
+    assert!(!pattern(4));
+    assert!(pattern(5));
+    assert!(!pattern(6));
 }

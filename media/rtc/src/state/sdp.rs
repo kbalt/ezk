@@ -84,21 +84,7 @@ impl SessionState {
             };
 
             // Get or create transport for the m-line
-            let transport =
-                match self.get_or_create_transport(&new_state, &offer, remote_media_desc) {
-                    Ok(tranpsort) => tranpsort,
-                    Err(TransportCreateError::UnknownTransportType) => {
-                        // No transport was found or created, reject media
-                        response.push(SdpResponseEntry::Rejected {
-                            media_type: remote_media_desc.media.media_type,
-                            mid: remote_media_desc.mid.clone(),
-                        });
-
-                        log::debug!("Rejecting mline={mline}, no compatible transport found");
-                        continue;
-                    }
-                    Err(e) => return Err(SdpError::CreateTransport(e)),
-                };
+            let transport = self.get_or_create_transport(&new_state, &offer, remote_media_desc)?;
 
             let recv_fmtp = remote_media_desc
                 .fmtp
@@ -206,8 +192,6 @@ impl SessionState {
     }
 
     /// Get or create a transport for the given media description
-    ///
-    /// If the transport type is unknown or cannot be created Ok(None) is returned. The media section must then be declined.
     fn get_or_create_transport(
         &mut self,
         new_state: &[Media],
@@ -222,8 +206,6 @@ impl SessionState {
         {
             return Ok(id);
         }
-
-        // TODO: this is very messy, create_from_offer return Ok(None) if the transport is not supported
 
         self.transports.try_insert_with_key(|id| {
             Transport::create_from_offer(

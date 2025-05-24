@@ -3,7 +3,7 @@ use std::{
     collections::VecDeque,
     io::{self, IoSliceMut},
     net::{IpAddr, SocketAddr},
-    task::{ready, Context, Poll},
+    task::{Context, Poll, ready},
 };
 use tokio::{
     io::{Interest, ReadBuf},

@@ -1,7 +1,7 @@
 use crate::{Codec, LocalMediaId, MediaId, TransportId};
 use bytes::Bytes;
 use bytesstr::BytesStr;
-use rtp::{RtpSession, Ssrc};
+use rtp::{RtpPacket, Ssrc};
 use sdp_types::{Direction, MediaDescription, MediaType};
 use slotmap::SlotMap;
 use std::{
@@ -10,7 +10,7 @@ use std::{
 };
 
 use super::{
-    opt_min, transport::Transport, DirectionBools, Event, TransportConnectionState, TransportEntry,
+    DirectionBools, Event, TransportConnectionState, TransportEntry, opt_min, transport::Transport,
 };
 
 pub(crate) struct Media {
@@ -20,7 +20,7 @@ pub(crate) struct Media {
     media_type: MediaType,
 
     /// The RTP session for this media
-    rtp_session: RtpSession,
+    // rtp_session: RtpSession,
     avpf: bool,
 
     /// When to send the next RTCP report
@@ -41,6 +41,7 @@ pub(crate) struct Media {
     codec_pt: u8,
     codec: Codec,
 
+    /// Payload type of DTMF, clock-rate is the same as the codec
     dtmf_pt: Option<u8>,
 }
 
@@ -62,7 +63,7 @@ impl Media {
             id,
             local_media_id,
             media_type,
-            rtp_session: RtpSession::new(Ssrc(rand::random()), codec.clock_rate),
+            // rtp_session: RtpSession::new(Ssrc(rand::random()), codec.clock_rate),
             avpf,
             next_rtcp: Instant::now() + Duration::from_secs(5),
             rtcp_interval: rtcp_interval(media_type),
@@ -100,11 +101,12 @@ impl Media {
     }
 
     pub(crate) fn remote_ssrc(&self) -> impl Iterator<Item = Ssrc> + '_ {
-        self.rtp_session.remote_ssrc()
+        // self.rtp_session.remote_ssrc()
+        [].into_iter()
     }
 
-    pub(crate) fn remote_payload_types(&self) -> &[u8] {
-        std::slice::from_ref(&self.codec_pt)
+    pub(crate) fn remote_payload_types(&self) -> impl Iterator<Item = u8> {
+        [self.codec_pt].into_iter().chain(self.dtmf_pt)
     }
 
     pub(crate) fn codec_with_pt(&self) -> (&Codec, u8) {
@@ -120,14 +122,15 @@ impl Media {
     }
 
     pub(crate) fn timeout(&self, now: Instant) -> Option<Duration> {
-        let jt = self.rtp_session.pop_rtp_after(now, None);
+        // let q = opt_min(self.tx_queue.timeout(now), self.rx_queue.timeout(now));
 
         let rtcp_send_timeout = self
             .next_rtcp
             .checked_duration_since(now)
             .unwrap_or_default();
 
-        opt_min(jt, Some(rtcp_send_timeout))
+        // opt_min(q, Some(rtcp_send_timeout))
+        None
     }
 
     pub(crate) fn poll(
@@ -136,37 +139,41 @@ impl Media {
         transport: &mut Transport,
         events: &mut VecDeque<Event>,
     ) {
-        if let Some(rtp_packet) = self.rtp_session.pop_rtp(None) {
-            events.push_back(Event::ReceiveRTP {
-                media_id: self.id,
-                packet: rtp_packet,
-            });
-        }
+        // if let Some(rtp_packet) = self.tx_queue.pop(now) {
+        //     transport.send_rtp(rtp_packet);
+        // }
 
-        if self.next_rtcp <= now {
-            self.next_rtcp += self.rtcp_interval;
+        // if let Some(rtp_packet) = self.rx_queue.pop(now) {
+        //     events.push_back(Event::ReceiveRTP {
+        //         media_id: self.id,
+        //         packet: rtp_packet,
+        //     });
+        // }
 
-            if transport.connection_state() != TransportConnectionState::Connected {
-                return;
-            }
+        // if self.next_rtcp <= now {
+        //     self.next_rtcp += self.rtcp_interval;
 
-            self.send_rtcp_report(transport);
-        }
+        //     if transport.connection_state() != TransportConnectionState::Connected {
+        //         return;
+        //     }
+
+        //     self.send_rtcp_report(transport);
+        // }
     }
 
     fn send_rtcp_report(&mut self, transport: &mut Transport) {
         let mut encode_buf = vec![0u8; 65535];
 
-        let len = match self.rtp_session.write_rtcp_report(&mut encode_buf) {
-            Ok(len) => len,
-            Err(e) => {
-                log::warn!("Failed to write RTCP packet, {e:?}");
-                return;
-            }
-        };
+        // let len = match self.rtp_session.write_rtcp_report(&mut encode_buf) {
+        //     Ok(len) => len,
+        //     Err(e) => {
+        //         log::warn!("Failed to write RTCP packet, {e:?}");
+        //         return;
+        //     }
+        // };
 
-        encode_buf.truncate(len);
-        transport.send_rtcp(encode_buf);
+        // encode_buf.truncate(len);
+        // transport.send_rtcp(encode_buf);
     }
 
     pub(crate) fn matches(
@@ -190,24 +197,22 @@ impl Media {
     }
 
     pub(crate) fn recv_rtp(&mut self, packet: rtp::RtpPacket) {
-        self.rtp_session.recv_rtp(packet);
+        // self.rtp_session.recv_rtp(packet);
     }
 
     pub(crate) fn recv_rtcp(&mut self, packets: Vec<rtp::rtcp_types::Packet>) {
         for packet in packets {
             // TODO: handle the RTCP packets properly
-            self.rtp_session.recv_rtcp(packet);
+            // self.rtp_session.recv_rtcp(packet);
         }
     }
 
-    pub(crate) fn send_rtp(&mut self, transport: &mut Transport, mut packet: rtp::RtpPacket) {
-        packet.ssrc = self.rtp_session.ssrc();
-        packet.extensions.mid = self.mid.as_ref().map(AsRef::<Bytes>::as_ref).cloned();
+    pub(crate) fn send_rtp(&mut self, now: Instant, mut packet: rtp::RtpPacket) {
+        if let Some(mid) = &self.mid {
+            packet.extensions.mid = Some((mid.as_ref() as &Bytes).clone())
+        }
 
-        // Tell the RTP session that a packet is being sent
-        self.rtp_session.send_rtp(&packet);
-
-        transport.send_rtp(packet);
+        // self.tx_queue.push(now, packet);
     }
 }
 

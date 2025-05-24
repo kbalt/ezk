@@ -1,8 +1,8 @@
 use super::{
-    opt_min, rtp::extensions::RtpExtensionIdsExt, TransportChange, TransportConnectionState,
+    TransportChange, TransportConnectionState, opt_min, rtp::extensions::RtpExtensionIdsExt,
 };
 use crate::{TransportId, TransportType};
-use dtls_srtp::{make_ssl_context, DtlsSetup, DtlsSrtpCreateError, DtlsSrtpSession, DtlsState};
+use dtls_srtp::{DtlsSetup, DtlsSrtpSession, DtlsState, make_ssl_context};
 use ice::{
     Component, IceAgent, IceConnectionState, IceCredentials, IceEvent, IceGatheringState,
     ReceivedPkt,
@@ -27,6 +27,8 @@ mod sdes_srtp;
 
 pub(crate) use builder::TransportBuilder;
 pub(crate) use packet_kind::PacketKind;
+
+pub use dtls_srtp::{DtlsHandshakeError, DtlsSrtpCreateError};
 
 #[derive(Default)]
 pub(crate) struct SessionTransportState {
@@ -156,26 +158,26 @@ impl Transport {
         state: &mut SessionTransportState,
         changes: &mut Vec<TransportChange>,
         session_desc: &SessionDescription,
-        remote_media_desc: &MediaDescription,
+        media_desc: &MediaDescription,
     ) -> Result<Self, TransportCreateError> {
-        if remote_media_desc.rtcp_mux {
+        if media_desc.rtcp_mux {
             changes.push(TransportChange::CreateSocket(id));
         } else {
             changes.push(TransportChange::CreateSocketPair(id));
         }
 
         let (remote_rtp_address, remote_rtcp_address) =
-            resolve_rtp_and_rtcp_address(session_desc, remote_media_desc).unwrap();
+            resolve_rtp_and_rtcp_address(session_desc, media_desc).unwrap();
 
         let ice_ufrag = session_desc
             .ice_ufrag
             .as_ref()
-            .or(remote_media_desc.ice_ufrag.as_ref());
+            .or(media_desc.ice_ufrag.as_ref());
 
         let ice_pwd = session_desc
             .ice_pwd
             .as_ref()
-            .or(remote_media_desc.ice_pwd.as_ref());
+            .or(media_desc.ice_pwd.as_ref());
 
         let ice_agent = if let Some((ufrag, pwd)) = ice_ufrag.zip(ice_pwd) {
             let mut ice_agent = IceAgent::new_from_answer(
@@ -185,14 +187,14 @@ impl Transport {
                     pwd: pwd.pwd.to_string(),
                 },
                 false,
-                remote_media_desc.rtcp_mux,
+                media_desc.rtcp_mux,
             );
 
             for server in &state.stun_servers {
                 ice_agent.add_stun_server(*server);
             }
 
-            for candidate in &remote_media_desc.ice_candidates {
+            for candidate in &media_desc.ice_candidates {
                 ice_agent.add_remote_candidate(candidate);
             }
 
@@ -201,15 +203,15 @@ impl Transport {
             None
         };
 
-        let receive_extension_ids = RtpExtensionIds::from_sdp(session_desc, remote_media_desc);
+        let receive_extension_ids = RtpExtensionIds::from_sdp(session_desc, media_desc);
 
-        let mut transport = match &remote_media_desc.media.proto {
+        let mut transport = match &media_desc.media.proto {
             TransportProtocol::RtpAvp | TransportProtocol::RtpAvpf => Transport {
                 local_rtp_port: None,
                 local_rtcp_port: None,
                 remote_rtp_address,
                 remote_rtcp_address,
-                rtcp_mux: remote_media_desc.rtcp_mux,
+                rtcp_mux: media_desc.rtcp_mux,
                 ice_agent,
                 negotiated_extension_ids: receive_extension_ids,
                 connection_state: TransportConnectionState::New,
@@ -218,14 +220,14 @@ impl Transport {
             },
             TransportProtocol::RtpSavp | TransportProtocol::RtpSavpf => {
                 let (crypto, inbound, outbound) =
-                    sdes_srtp::negotiate_from_offer(&remote_media_desc.crypto)?;
+                    sdes_srtp::negotiate_from_offer(&media_desc.crypto)?;
 
                 Transport {
                     local_rtp_port: None,
                     local_rtcp_port: None,
                     remote_rtp_address,
                     remote_rtcp_address,
-                    rtcp_mux: remote_media_desc.rtcp_mux,
+                    rtcp_mux: media_desc.rtcp_mux,
                     ice_agent,
                     negotiated_extension_ids: receive_extension_ids,
                     connection_state: TransportConnectionState::New,
@@ -241,7 +243,7 @@ impl Transport {
                 Self::dtls_srtp_from_offer(
                     state,
                     session_desc,
-                    remote_media_desc,
+                    media_desc,
                     remote_rtp_address,
                     remote_rtcp_address,
                     ice_agent,
@@ -372,10 +374,10 @@ impl Transport {
         while let Some(ice_event) = self.ice_agent.as_mut().and_then(IceAgent::pop_event) {
             match ice_event {
                 IceEvent::GatheringStateChanged { old, new } => {
-                    return Some(TransportEvent::IceGatheringState { old, new })
+                    return Some(TransportEvent::IceGatheringState { old, new });
                 }
                 IceEvent::ConnectionStateChanged { old, new } => {
-                    return Some(TransportEvent::IceConnectionState { old, new })
+                    return Some(TransportEvent::IceConnectionState { old, new });
                 }
                 IceEvent::UseAddr { component, target } => match component {
                     Component::Rtp => self.remote_rtp_address = target,
@@ -392,7 +394,7 @@ impl Transport {
                         data,
                         source,
                         target,
-                    })
+                    });
                 }
             }
         }
@@ -492,7 +494,9 @@ impl Transport {
                             inbound.unprotect(&mut pkt.data).unwrap();
                         }
                         None => {
-                            log::debug!("Got RTP packet on DTLS/SRTP transport before handshake was complete, discarding");
+                            log::debug!(
+                                "Got RTP packet on DTLS/SRTP transport before handshake was complete, discarding"
+                            );
                             return ReceivedPacket::Ignore;
                         }
                     },
@@ -518,7 +522,9 @@ impl Transport {
                             inbound.unprotect_rtcp(&mut pkt.data).unwrap();
                         }
                         None => {
-                            log::debug!("Got RTCP packet on DTLS/SRTP transport before handshake was complete, discarding");
+                            log::debug!(
+                                "Got RTCP packet on DTLS/SRTP transport before handshake was complete, discarding"
+                            );
                             return ReceivedPacket::Ignore;
                         }
                     },
@@ -570,7 +576,7 @@ impl Transport {
 
         match &mut self.kind {
             TransportKind::DtlsSrtp { srtp: None, .. } => {
-                panic!("Tried to protect RTP on non-ready DTLS-SRTP transport");
+                log::warn!("Tried to protect RTP on non-ready DTLS-SRTP transport");
             }
             TransportKind::SdesSrtp { outbound, .. }
             | TransportKind::DtlsSrtp {
@@ -646,7 +652,7 @@ pub(crate) enum ReceivedPacket {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ResolveError {
+pub enum ResolveError {
     #[error("Missing connection attribute")]
     MissingConnectionAttribute,
     #[error("FQDN in connection attribute which is unsupported")]

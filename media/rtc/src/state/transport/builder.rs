@@ -1,13 +1,13 @@
 use super::{
-    dtls_srtp::{to_openssl_digest, DtlsSetup, DtlsSrtpSession},
-    resolve_rtp_and_rtcp_address,
-    sdes_srtp::{self, SdesSrtpOffer},
     IceAgent, ReceivedPacket, SessionTransportState, Transport, TransportCreateError,
     TransportEvent, TransportKind,
+    dtls_srtp::{DtlsSetup, DtlsSrtpSession, to_openssl_digest},
+    resolve_rtp_and_rtcp_address,
+    sdes_srtp::{self, SdesSrtpOffer},
 };
 use crate::{
-    state::{rtp::extensions::RtpExtensionIdsExt, TransportChange, TransportConnectionState},
     ReceivedPkt, RtcpMuxPolicy, TransportId, TransportType,
+    state::{TransportChange, TransportConnectionState, rtp::extensions::RtpExtensionIdsExt},
 };
 use core::panic;
 use ice::{IceCredentials, IceEvent};
@@ -17,7 +17,7 @@ use std::{
     collections::VecDeque,
     time::{Duration, Instant},
 };
-use stun_types::{is_stun_message, IsStunMessageInfo};
+use stun_types::{IsStunMessageInfo, is_stun_message};
 
 /// Builder for a transport which has yet to be negotiated
 pub(crate) struct TransportBuilder {
@@ -146,7 +146,10 @@ impl TransportBuilder {
             IceEvent::ConnectionStateChanged { old, new } => {
                 Some(TransportEvent::IceConnectionState { old, new })
             }
-            IceEvent::UseAddr { .. } => unreachable!(),
+            IceEvent::UseAddr { .. } => {
+                log::warn!("Got UseAddr event in transport builder");
+                None
+            }
             IceEvent::SendData {
                 component,
                 data,
@@ -310,7 +313,7 @@ impl TransportBuilder {
             TransportKind::Rtp | TransportKind::SdesSrtp { .. }
         ) && transport.ice_agent.is_none()
         {
-            transport.set_connection_state(TransportConnectionState::Connecting);
+            transport.set_connection_state(TransportConnectionState::Connected);
         }
 
         // Feed the already received messages into the transport

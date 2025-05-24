@@ -9,7 +9,7 @@ use openssl::{
     ssl::{
         ErrorCode, Ssl, SslAcceptor, SslContext, SslMethod, SslStream, SslVerifyMode, SslVersion,
     },
-    x509::{X509Name, X509},
+    x509::{X509, X509Name},
 };
 use sdp_types::FingerprintAlgorithm;
 use srtp::openssl::Config;
@@ -105,10 +105,11 @@ impl DtlsSrtpSession {
         };
 
         // Put initial handshake into the IoQueue
-        assert!(this
-            .handshake()
-            .expect("First call to handshake must not fail")
-            .is_none());
+        assert!(
+            this.handshake()
+                .expect("First call to handshake must not fail")
+                .is_none()
+        );
 
         Ok(this)
     }
