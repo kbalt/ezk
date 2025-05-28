@@ -417,7 +417,7 @@ impl Transports {
             }
 
             // Check if the transport security is sufficient
-            if !uri.sips || managed.transport.secure() {
+            if uri.sips && !managed.transport.secure() {
                 continue;
             }
 
@@ -454,7 +454,7 @@ impl Transports {
                 }
             }
 
-            if !uri.sips || factory.secure() {
+            if uri.sips && !factory.secure() {
                 continue;
             }
 
