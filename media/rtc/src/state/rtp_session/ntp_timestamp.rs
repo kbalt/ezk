@@ -55,7 +55,7 @@ impl NtpTimestamp {
         ((self.to_fixed_u64() >> 16) & u64::from(u32::MAX)) as u32
     }
 
-    // Not a fan of commented out code, but I don't know when I might need this
+    // Not a fan of commented out code, but I don't know if or when I might need this
     //pub(crate) fn from_fixed_u64(fixed: u64) -> Self {
     //    let seconds = (fixed >> 32) as i64;
     //    let subseconds = (fixed & u64::from(u32::MAX)) as u32;

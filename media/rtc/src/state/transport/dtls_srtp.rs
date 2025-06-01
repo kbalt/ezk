@@ -11,7 +11,6 @@ use openssl::{
     },
     x509::{X509, X509Name},
 };
-use sdp_types::FingerprintAlgorithm;
 use srtp::openssl::Config;
 use std::{
     collections::VecDeque,
@@ -38,26 +37,29 @@ pub enum DtlsHandshakeError {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum DtlsSetup {
+pub enum DtlsSetup {
     Accept,
     Connect,
 }
 
-#[derive(Debug, Clone, Copy)]
 pub(crate) enum DtlsState {
     Accepting,
     Connecting,
-    Connected { is_server: bool },
+    Connected {
+        inbound: srtp::Session,
+        outbound: srtp::Session,
+    },
     Failed,
 }
 
-pub(crate) struct DtlsSrtpSession {
+pub struct RtpDtlsSrtpTransport {
     stream: SslStream<IoQueue>,
+    setup: DtlsSetup,
     state: DtlsState,
 }
 
-impl DtlsSrtpSession {
-    pub(crate) fn new(
+impl RtpDtlsSrtpTransport {
+    pub fn new(
         ssl_context: &SslContext,
         fingerprints: Vec<(MessageDigest, Vec<u8>)>,
         setup: DtlsSetup,
@@ -96,8 +98,9 @@ impl DtlsSrtpSession {
         )
         .map_err(DtlsSrtpCreateError::NewSslStream)?;
 
-        let mut this = Self {
+        let mut this = RtpDtlsSrtpTransport {
             stream,
+            setup,
             state: match setup {
                 DtlsSetup::Accept => DtlsState::Accepting,
                 DtlsSetup::Connect => DtlsState::Connecting,
@@ -105,17 +108,18 @@ impl DtlsSrtpSession {
         };
 
         // Put initial handshake into the IoQueue
-        assert!(
-            this.handshake()
-                .expect("First call to handshake must not fail")
-                .is_none()
-        );
+        this.handshake()
+            .expect("First call to handshake must not fail");
 
         Ok(this)
     }
 
-    pub(crate) fn state(&self) -> DtlsState {
-        self.state
+    pub fn setup(&self) -> DtlsSetup {
+        self.setup
+    }
+
+    pub(crate) fn state(&mut self) -> &mut DtlsState {
+        &mut self.state
     }
 
     pub(crate) fn timeout(&self) -> Option<Duration> {
@@ -132,33 +136,22 @@ impl DtlsSrtpSession {
         self.stream.get_mut().to_read = Some(Cursor::new(data));
     }
 
-    pub(crate) fn handshake(
-        &mut self,
-    ) -> Result<
-        Option<(
-            srtp::openssl::InboundSession,
-            srtp::openssl::OutboundSession,
-        )>,
-        DtlsHandshakeError,
-    > {
+    pub(crate) fn handshake(&mut self) -> Result<(), DtlsHandshakeError> {
         let result = match self.state {
             DtlsState::Connecting => self.stream.connect(),
             DtlsState::Accepting => self.stream.accept(),
-            DtlsState::Connected { is_server } => {
-                if is_server {
-                    self.stream.accept()
-                } else {
-                    self.stream.connect()
-                }
-            }
+            DtlsState::Connected { .. } => match self.setup {
+                DtlsSetup::Accept => self.stream.accept(),
+                DtlsSetup::Connect => self.stream.connect(),
+            },
             DtlsState::Failed => {
-                return Ok(None);
+                return Ok(());
             }
         };
 
         if let Err(e) = result {
             if e.code() == ErrorCode::WANT_READ {
-                return Ok(None);
+                return Ok(());
             } else {
                 self.state = DtlsState::Failed;
                 return Err(DtlsHandshakeError::OpenSsl(e));
@@ -166,15 +159,17 @@ impl DtlsSrtpSession {
         }
 
         if matches!(self.state, DtlsState::Connected { .. }) {
-            Ok(None)
+            Ok(())
         } else {
-            let is_server = matches!(self.state, DtlsState::Accepting);
-            self.state = DtlsState::Connected { is_server };
-
             let (inbound, outbound) =
                 srtp::openssl::session_pair(self.stream.ssl(), Config::default())?;
 
-            Ok(Some((inbound, outbound)))
+            self.state = DtlsState::Connected {
+                inbound: inbound.into_session(),
+                outbound: outbound.into_session(),
+            };
+
+            Ok(())
         }
     }
 
@@ -217,20 +212,7 @@ impl Write for IoQueue {
     }
 }
 
-pub(super) fn to_openssl_digest(algo: &FingerprintAlgorithm) -> Option<MessageDigest> {
-    match algo {
-        FingerprintAlgorithm::SHA1 => Some(MessageDigest::sha1()),
-        FingerprintAlgorithm::SHA224 => Some(MessageDigest::sha224()),
-        FingerprintAlgorithm::SHA256 => Some(MessageDigest::sha256()),
-        FingerprintAlgorithm::SHA384 => Some(MessageDigest::sha384()),
-        FingerprintAlgorithm::SHA512 => Some(MessageDigest::sha512()),
-        FingerprintAlgorithm::MD5 => Some(MessageDigest::md5()),
-        FingerprintAlgorithm::MD2 => None,
-        FingerprintAlgorithm::Other(..) => None,
-    }
-}
-
-pub(super) fn make_ssl_context() -> Result<SslContext, openssl::error::ErrorStack> {
+pub(crate) fn make_ssl_context() -> Result<SslContext, openssl::error::ErrorStack> {
     let (cert, pkey) = make_ca_cert()?;
 
     let mut ctx = SslAcceptor::mozilla_modern(SslMethod::dtls())?;

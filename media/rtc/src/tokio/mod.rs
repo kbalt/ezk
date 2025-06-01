@@ -1,11 +1,12 @@
-use crate::{
-    Codecs, LocalMediaId, MediaId, Options, ReceivedPkt, TransportId,
-    state::{
-        Event, IceConnectionStateChanged, MediaAdded, MediaChanged, SdpError, SessionState,
-        TransportChange, TransportConnectionStateChanged,
+use crate::state::{
+    sdp::{
+        Codecs, IceConnectionStateChanged, LocalMediaId, MediaAdded, MediaChanged, MediaId,
+        MediaWriter, SdpError, SdpSession, SdpSessionConfig, SdpSessionEvent, TransportChange,
+        TransportConnectionStateChanged, TransportId,
     },
+    transport::RtpTransportPorts,
 };
-use ice::{Component, IceGatheringState};
+use ice::{Component, IceGatheringState, ReceivedPkt};
 use rtp::RtpPacket;
 use sdp_types::{Direction, SessionDescription};
 use socket::Socket;
@@ -24,7 +25,7 @@ mod socket;
 
 /// Session event returned by [`AsyncSdpSession::run`]
 #[derive(Debug)]
-pub enum TokioEvent {
+pub enum TokioSdpSessionEvent {
     /// See [`MediaAdded`]
     MediaAdded(MediaAdded),
     /// See [`MediaChanged`]
@@ -43,16 +44,16 @@ pub enum TokioEvent {
     },
 }
 
-/// Async wrapper around [`SessionState`] using the tokio runtime
-pub struct TokioSessionState {
-    state: SessionState,
+/// Async wrapper around [`SdpSession`] using the tokio runtime
+pub struct TokioSdpSession {
+    state: SdpSession,
     sockets: HashMap<(TransportId, Component), Socket>,
     timeout: Option<Instant>,
     ips: Vec<IpAddr>,
 
     buf: Vec<MaybeUninit<u8>>,
 
-    events: VecDeque<TokioEvent>,
+    events: VecDeque<TokioSdpSessionEvent>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -63,10 +64,10 @@ pub enum Error {
     Io(#[from] io::Error),
 }
 
-impl TokioSessionState {
-    pub fn new(address: IpAddr, options: Options) -> Self {
+impl TokioSdpSession {
+    pub fn new(address: IpAddr, options: SdpSessionConfig) -> Self {
         Self {
-            state: SessionState::new(address, options),
+            state: SdpSession::new(address, options),
             sockets: HashMap::new(),
             timeout: Some(Instant::now()), // poll immediately
             ips: local_ip_address::list_afinet_netifas()
@@ -91,8 +92,8 @@ impl TokioSessionState {
         self.state.has_media()
     }
 
-    pub fn send_rtp(&mut self, media_id: MediaId, packet: RtpPacket) {
-        self.state.send_rtp(media_id, packet);
+    pub fn writer(&mut self, media_id: MediaId) -> Option<MediaWriter<'_>> {
+        self.state.writer(media_id)
     }
 
     /// Register codecs for a media type with a limit of how many media session by can be created
@@ -136,7 +137,7 @@ impl TokioSessionState {
     }
 
     async fn handle_transport_changes(&mut self) -> io::Result<()> {
-        for change in self.state.transport_changes() {
+        while let Some(change) = self.state.pop_transport_change() {
             match change {
                 TransportChange::CreateSocket(transport_id) => {
                     let socket = UdpSocket::bind("0.0.0.0:0").await?;
@@ -144,8 +145,7 @@ impl TokioSessionState {
                     self.state.set_transport_ports(
                         transport_id,
                         &self.ips,
-                        socket.local_addr()?.port(),
-                        None,
+                        RtpTransportPorts::mux(socket.local_addr()?.port()),
                     );
 
                     self.sockets
@@ -158,8 +158,10 @@ impl TokioSessionState {
                     self.state.set_transport_ports(
                         transport_id,
                         &self.ips,
-                        rtp_socket.local_addr()?.port(),
-                        Some(rtcp_socket.local_addr()?.port()),
+                        RtpTransportPorts::new(
+                            rtp_socket.local_addr()?.port(),
+                            rtcp_socket.local_addr()?.port(),
+                        ),
                     );
 
                     self.sockets
@@ -183,19 +185,23 @@ impl TokioSessionState {
     fn handle_events(&mut self) -> Result<(), Error> {
         while let Some(event) = self.state.pop_event() {
             match event {
-                Event::MediaAdded(event) => self.events.push_back(TokioEvent::MediaAdded(event)),
-                Event::MediaChanged(event) => {
-                    self.events.push_back(TokioEvent::MediaChanged(event))
-                }
-                Event::MediaRemoved(id) => self.events.push_back(TokioEvent::MediaRemoved(id)),
-                Event::IceGatheringState(..) => {}
-                Event::IceConnectionState(event) => {
-                    self.events.push_back(TokioEvent::IceConnectionState(event))
-                }
-                Event::TransportConnectionState(event) => self
+                SdpSessionEvent::MediaAdded(event) => self
                     .events
-                    .push_back(TokioEvent::TransportConnectionState(event)),
-                Event::SendData {
+                    .push_back(TokioSdpSessionEvent::MediaAdded(event)),
+                SdpSessionEvent::MediaChanged(event) => self
+                    .events
+                    .push_back(TokioSdpSessionEvent::MediaChanged(event)),
+                SdpSessionEvent::MediaRemoved(id) => self
+                    .events
+                    .push_back(TokioSdpSessionEvent::MediaRemoved(id)),
+                SdpSessionEvent::IceGatheringState(..) => {}
+                SdpSessionEvent::IceConnectionState(event) => self
+                    .events
+                    .push_back(TokioSdpSessionEvent::IceConnectionState(event)),
+                SdpSessionEvent::TransportConnectionState(event) => self
+                    .events
+                    .push_back(TokioSdpSessionEvent::TransportConnectionState(event)),
+                SdpSessionEvent::SendData {
                     transport_id,
                     component,
                     data,
@@ -208,9 +214,12 @@ impl TokioSessionState {
                         log::error!("SdpSession tried to send packet using a non existent socket");
                     }
                 }
-                Event::ReceiveRTP { media_id, packet } => self
+                SdpSessionEvent::ReceiveRTP {
+                    media_id,
+                    rtp_packet: packet,
+                } => self
                     .events
-                    .push_back(TokioEvent::ReceiveRTP { media_id, packet }),
+                    .push_back(TokioSdpSessionEvent::ReceiveRTP { media_id, packet }),
             }
         }
 
@@ -229,7 +238,7 @@ impl TokioSessionState {
         Ok(())
     }
 
-    pub async fn run(&mut self) -> Result<TokioEvent, Error> {
+    pub async fn run(&mut self) -> Result<TokioSdpSessionEvent, Error> {
         loop {
             if let Some(event) = self.events.pop_front() {
                 return Ok(event);
@@ -256,7 +265,7 @@ impl TokioSessionState {
                     component: socket_id.1
                 };
 
-                self.state.receive(socket_id.0, pkt);
+                self.state.receive(now, socket_id.0, pkt);
                 self.timeout = self.state.timeout(now).map(|d| now + d);
 
                 Ok(())

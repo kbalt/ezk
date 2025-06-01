@@ -13,6 +13,7 @@ mod stats;
 
 pub use stats::{RtpOutboundRemoteStats, RtpOutboundStats};
 
+/// RTP send stream
 pub struct RtpOutboundStream {
     ssrc: Ssrc,
     queue: OutboundQueue,

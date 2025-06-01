@@ -69,6 +69,7 @@ impl RtpSession {
 
     /// Create new inbound RTP stream from the given SSRC and parameters
     pub fn new_rx_stream(&mut self, ssrc: Ssrc, clock_rate: u32) -> &mut RtpInboundStream {
+        // TODO: correct RTCP interval
         let stream = RtpInboundStream::new(ssrc, clock_rate, Duration::from_secs(1));
 
         self.rx.entry(ssrc).insert_entry(stream).into_mut()
@@ -82,6 +83,18 @@ impl RtpSession {
     /// Access the RTP receive stream identified by the remote-ssrc
     pub fn rx_stream(&mut self, ssrc: Ssrc) -> Option<&mut RtpInboundStream> {
         self.rx.get_mut(&ssrc)
+    }
+
+    /// Remove the RTP send stream identified by the given SSRC
+    pub fn remove_tx_stream(&mut self, ssrc: Ssrc) {
+        if self.tx.remove(&ssrc).is_some() {
+            self.reports.bye(ssrc);
+        }
+    }
+
+    /// Remove the RTP receive stream identified by the remote-ssrc
+    pub fn remove_rx_stream(&mut self, ssrc: Ssrc) {
+        self.rx.remove(&ssrc);
     }
 
     /// Hand of the RTCP packet to the RTP session
@@ -158,14 +171,16 @@ impl RtpSession {
             .is_none_or(|instant| now > instant + Duration::from_secs(1));
 
         if collect_reports {
-            self.last_reports_collected = Some(now);
-
             for tx in self.tx.values_mut() {
                 tx.collect_reports(now, &mut self.reports);
             }
 
             for rx in self.rx.values_mut() {
                 rx.collect_reports(now, &mut self.reports);
+            }
+
+            if !self.reports.is_empty() {
+                self.last_reports_collected = Some(now);
             }
         }
 

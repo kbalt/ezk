@@ -1,7 +1,7 @@
 use sdp_types::TransportProtocol;
 
 #[derive(Debug, Default, Clone)]
-pub struct Options {
+pub struct SdpSessionConfig {
     /// The default transport to offer the peer
     pub offer_transport: TransportType,
     /// Use ICE when making an offer
@@ -15,6 +15,7 @@ pub struct Options {
     // TODO: add MTU
 }
 
+// TODO: rename to Kind or something
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TransportType {
     /// Unprotected "raw" RTP packets
@@ -27,8 +28,8 @@ pub enum TransportType {
 }
 
 impl TransportType {
-    pub(crate) fn sdp_type(&self, avpf: bool) -> TransportProtocol {
-        if avpf {
+    pub(crate) fn sdp_type(&self, use_avpf: bool) -> TransportProtocol {
+        if use_avpf {
             match self {
                 Self::Rtp => TransportProtocol::RtpAvpf,
                 Self::SdesSrtp => TransportProtocol::RtpSavpf,

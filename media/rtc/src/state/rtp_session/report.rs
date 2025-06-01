@@ -1,7 +1,7 @@
 use rtp::{
     Ssrc,
     rtcp_types::{
-        CompoundBuilder, PacketBuilder, ReceiverReport, ReceiverReportBuilder, ReportBlock,
+        Bye, CompoundBuilder, PacketBuilder, ReceiverReport, ReceiverReportBuilder, ReportBlock,
         ReportBlockBuilder, RtcpPacket, RtcpPacketWriter, SenderReport, SenderReportBuilder,
     },
 };
@@ -12,6 +12,8 @@ use std::collections::VecDeque;
 pub(crate) struct ReportsQueue {
     sender_reports: VecDeque<SenderReportBuilder>,
     report_blocks: VecDeque<ReportBlockBuilder>,
+
+    ssrcs_to_bye: Vec<Ssrc>,
 
     other: VecDeque<PacketBuilder<'static>>,
 }
@@ -29,11 +31,25 @@ impl ReportsQueue {
         self.report_blocks.push_back(rb);
     }
 
+    pub(crate) fn bye(&mut self, ssrc: Ssrc) {
+        self.ssrcs_to_bye.push(ssrc);
+    }
+
     pub(crate) fn make_report(
         &mut self,
         fallback_sender_ssrc: Ssrc,
         mtu: usize,
     ) -> Option<Vec<u8>> {
+        if !self.ssrcs_to_bye.is_empty() {
+            let mut bye = Bye::builder();
+
+            for ssrc in self.ssrcs_to_bye.drain(0..self.ssrcs_to_bye.len().min(31)) {
+                bye = bye.add_source(ssrc.0);
+            }
+
+            self.other.push_back(PacketBuilder::Bye(bye));
+        }
+
         self.make_report_compund(fallback_sender_ssrc, mtu)
             .map(|compound| {
                 let mut buf = vec![0u8; compound.calculate_size().unwrap()];

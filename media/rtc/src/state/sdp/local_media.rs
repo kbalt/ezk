@@ -1,7 +1,9 @@
-use crate::{Codec, Codecs};
+use crate::state::sdp::{Codec, Codecs, DirectionBools};
 use sdp_types::{Direction, MediaDescription};
 
-use super::DirectionBools;
+slotmap::new_key_type! {
+    pub struct LocalMediaId;
+}
 
 pub(super) struct LocalMedia {
     pub(super) codecs: Codecs,

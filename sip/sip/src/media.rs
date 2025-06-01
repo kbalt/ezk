@@ -1,6 +1,6 @@
 use rtc::{
     state::TransportConnectionState,
-    tokio::{TokioEvent, TokioSessionState},
+    tokio::{TokioSdpSession, TokioSdpSessionEvent},
     Direction, MediaId, NegotiatedCodec, SessionDescription, TransportId,
 };
 use rtp::RtpPacket;
@@ -49,9 +49,9 @@ pub trait MediaBackend {
     fn run(&mut self) -> impl Future<Output = Result<Self::Event, Self::Error>> + Send;
 }
 
-impl MediaBackend for TokioSessionState {
+impl MediaBackend for TokioSdpSession {
     type Error = rtc::tokio::Error;
-    type Event = TokioEvent;
+    type Event = TokioSdpSessionEvent;
 
     fn has_media(&self) -> bool {
         self.has_media()
@@ -78,7 +78,7 @@ impl MediaBackend for TokioSessionState {
 }
 
 pub struct MediaSession {
-    inner: TokioSessionState,
+    inner: TokioSdpSession,
 
     /// Channel to receive RTP packets from sender
     rx: mpsc::Receiver<(MediaId, RtpPacket)>,
@@ -118,7 +118,7 @@ struct MediaState {
 }
 
 impl MediaSession {
-    pub fn new(inner: TokioSessionState) -> Self {
+    pub fn new(inner: TokioSdpSession) -> Self {
         let (this_tx, rx) = mpsc::channel(16);
 
         Self {
@@ -131,13 +131,13 @@ impl MediaSession {
         }
     }
 
-    pub fn inner(&mut self) -> &mut TokioSessionState {
+    pub fn inner(&mut self) -> &mut TokioSdpSession {
         &mut self.inner
     }
 }
 
 impl MediaBackend for MediaSession {
-    type Error = <TokioSessionState as MediaBackend>::Error;
+    type Error = <TokioSdpSession as MediaBackend>::Error;
     type Event = MediaEvent;
 
     fn has_media(&self) -> bool {
@@ -175,7 +175,7 @@ impl MediaBackend for MediaSession {
             };
 
             match event {
-                TokioEvent::MediaAdded(event) => {
+                TokioSdpSessionEvent::MediaAdded(event) => {
                     let (send, recv) = direction_bools(event.direction);
                     let transport_state = self
                         .transports
@@ -204,7 +204,7 @@ impl MediaBackend for MediaSession {
 
                     self.media.insert(event.id, media_state);
                 }
-                TokioEvent::MediaChanged(event) => {
+                TokioSdpSessionEvent::MediaChanged(event) => {
                     let (old_send, old_recv) = direction_bools(event.old_direction);
                     let (new_send, new_recv) = direction_bools(event.new_direction);
 
@@ -234,21 +234,21 @@ impl MediaBackend for MediaSession {
                         self.events.push_back(add_receiver(media_state));
                     }
                 }
-                TokioEvent::MediaRemoved(media_id) => {
+                TokioSdpSessionEvent::MediaRemoved(media_id) => {
                     if let Some(sender) = self.media.remove(&media_id).and_then(|m| m.sender) {
                         sender.store(false, Ordering::Relaxed);
                     }
                 }
-                TokioEvent::IceConnectionState(..) => {
+                TokioSdpSessionEvent::IceConnectionState(..) => {
                     // TODO: handle this
                 }
-                TokioEvent::TransportConnectionState(event) => {
+                TokioSdpSessionEvent::TransportConnectionState(event) => {
                     self.transports
                         .entry(event.transport_id)
                         .or_insert_with(|| watch::channel(event.new).0)
                         .send_replace(event.new);
                 }
-                TokioEvent::ReceiveRTP { media_id, packet } => {
+                TokioSdpSessionEvent::ReceiveRTP { media_id, packet } => {
                     if let Some(receiver) =
                         self.media.get(&media_id).and_then(|m| m.receiver.as_ref())
                     {

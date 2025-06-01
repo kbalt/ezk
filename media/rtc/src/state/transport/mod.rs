@@ -1,476 +1,191 @@
-use super::{
-    TransportChange, TransportConnectionState, opt_min, rtp::extensions::RtpExtensionIdsExt,
+use super::opt_min;
+use crate::state::{
+    sdp::TransportType,
+    transport::{dtls_srtp::DtlsState, packet_kind::PacketKind},
 };
-use crate::{TransportId, TransportType};
-use dtls_srtp::{DtlsSetup, DtlsSrtpSession, DtlsState, make_ssl_context};
-use ice::{
-    Component, IceAgent, IceConnectionState, IceCredentials, IceEvent, IceGatheringState,
-    ReceivedPkt,
-};
-use openssl::{hash::MessageDigest, ssl::SslContext};
+use ice::{Component, IceAgent, IceConnectionState, ReceivedPkt};
 use rtp::{RtpExtensionIds, RtpPacket};
-use sdes_srtp::SdesSrtpNegotiationError;
-use sdp_types::{
-    Connection, Fingerprint, FingerprintAlgorithm, MediaDescription, SessionDescription, Setup,
-    SrtpCrypto, TaggedAddress, TransportProtocol,
-};
 use std::{
     collections::VecDeque,
     net::{IpAddr, SocketAddr},
     time::{Duration, Instant},
 };
 
-mod builder;
 mod dtls_srtp;
+mod event;
 mod packet_kind;
 mod sdes_srtp;
 
-pub(crate) use builder::TransportBuilder;
-pub(crate) use packet_kind::PacketKind;
+pub(crate) use dtls_srtp::make_ssl_context;
+pub use dtls_srtp::{DtlsHandshakeError, DtlsSetup, DtlsSrtpCreateError, RtpDtlsSrtpTransport};
+pub use event::{RtpTransportEvent, TransportConnectionState};
+pub use sdes_srtp::RtpSdesSrtpTransport;
 
-pub use dtls_srtp::{DtlsHandshakeError, DtlsSrtpCreateError};
-
-#[derive(Default)]
-pub(crate) struct SessionTransportState {
-    ssl_context: Option<openssl::ssl::SslContext>,
-    dtls_fingerprint: Option<Fingerprint>,
-    ice_credentials: Option<IceCredentials>,
-    stun_servers: Vec<SocketAddr>,
-}
-
-impl SessionTransportState {
-    pub(crate) fn add_stun_server(&mut self, server: SocketAddr) {
-        self.stun_servers.push(server);
-    }
-
-    fn ssl_context(&mut self) -> &mut SslContext {
-        self.ssl_context.get_or_insert_with(|| {
-            // TODO: remove expect
-            make_ssl_context().expect("OpenSSL context creation must not fail")
-        })
-    }
-
-    pub(crate) fn dtls_fingerprint(&mut self) -> Fingerprint {
-        if let Some(dtls_fingerprint) = &self.dtls_fingerprint {
-            dtls_fingerprint.clone()
-        } else {
-            let ctx = self.ssl_context();
-
-            // TODO: remove expect
-            let digest = ctx
-                .certificate()
-                .expect("SSL context always contains a certificate")
-                .digest(MessageDigest::sha256())
-                .expect("Creating digest of certificate should not fail");
-
-            let dtls_fingerprint = Fingerprint {
-                algorithm: FingerprintAlgorithm::SHA256,
-                fingerprint: digest.to_vec(),
-            };
-
-            self.dtls_fingerprint = Some(dtls_fingerprint.clone());
-
-            dtls_fingerprint
-        }
-    }
-
-    fn ice_credentials(&mut self) -> IceCredentials {
-        self.ice_credentials
-            .get_or_insert_with(IceCredentials::random)
-            .clone()
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum TransportCreateError {
-    #[error("Failed to create DTLS-SRTP transport: {0}")]
-    CreateDtlsSrtp(#[from] DtlsSrtpCreateError),
-    #[error("Failed to negotiate SDES-SRTP session: {0}")]
-    FailedSdesSrtp(#[from] SdesSrtpNegotiationError),
-    #[error("Invalid or missing setup attribute in SDP")]
-    InvalidSetupAttribute,
-    #[error(transparent)]
-    Resolve(#[from] ResolveError),
-    #[error("Unknown transport type")]
-    UnknownTransportType,
-}
-
-pub(crate) enum TransportEvent {
-    IceGatheringState {
-        old: IceGatheringState,
-        new: IceGatheringState,
-    },
-    IceConnectionState {
-        old: IceConnectionState,
-        new: IceConnectionState,
-    },
-    TransportConnectionState {
-        old: TransportConnectionState,
-        new: TransportConnectionState,
-    },
-    SendData {
-        component: Component,
-        data: Vec<u8>,
-        source: Option<IpAddr>,
-        target: SocketAddr,
-    },
-}
-
-pub(crate) struct Transport {
-    pub(crate) local_rtp_port: Option<u16>,
-    pub(crate) local_rtcp_port: Option<u16>,
-
-    pub(crate) remote_rtp_address: SocketAddr,
-    pub(crate) remote_rtcp_address: SocketAddr,
-
+pub struct RtpTransport {
+    ports: Option<RtpTransportPorts>,
+    connectivity: Connectivity,
     rtcp_mux: bool,
-
-    pub(crate) ice_agent: Option<IceAgent>,
-
-    /// The receiving extension ids
-    negotiated_extension_ids: RtpExtensionIds,
-
+    extension_ids: RtpExtensionIds,
+    kind: RtpTransportKind,
     connection_state: TransportConnectionState,
-    kind: TransportKind,
-
-    events: VecDeque<TransportEvent>,
+    events: VecDeque<RtpTransportEvent>,
 }
 
-enum TransportKind {
-    Rtp,
-    SdesSrtp {
-        /// Local crypto attribute
-        crypto: Vec<SrtpCrypto>,
-        inbound: srtp::Session,
-        outbound: srtp::Session,
-    },
-    DtlsSrtp {
-        setup: Setup,
-
-        dtls: DtlsSrtpSession,
-        srtp: Option<(srtp::Session, srtp::Session)>,
-    },
-}
-
-impl Transport {
-    pub(crate) fn create_from_offer(
-        id: TransportId,
-        state: &mut SessionTransportState,
-        changes: &mut Vec<TransportChange>,
-        session_desc: &SessionDescription,
-        media_desc: &MediaDescription,
-    ) -> Result<Self, TransportCreateError> {
-        if media_desc.rtcp_mux {
-            changes.push(TransportChange::CreateSocket(id));
-        } else {
-            changes.push(TransportChange::CreateSocketPair(id));
-        }
-
-        let (remote_rtp_address, remote_rtcp_address) =
-            resolve_rtp_and_rtcp_address(session_desc, media_desc).unwrap();
-
-        let ice_ufrag = session_desc
-            .ice_ufrag
-            .as_ref()
-            .or(media_desc.ice_ufrag.as_ref());
-
-        let ice_pwd = session_desc
-            .ice_pwd
-            .as_ref()
-            .or(media_desc.ice_pwd.as_ref());
-
-        let ice_agent = if let Some((ufrag, pwd)) = ice_ufrag.zip(ice_pwd) {
-            let mut ice_agent = IceAgent::new_from_answer(
-                state.ice_credentials(),
-                IceCredentials {
-                    ufrag: ufrag.ufrag.to_string(),
-                    pwd: pwd.pwd.to_string(),
-                },
-                false,
-                media_desc.rtcp_mux,
-            );
-
-            for server in &state.stun_servers {
-                ice_agent.add_stun_server(*server);
-            }
-
-            for candidate in &media_desc.ice_candidates {
-                ice_agent.add_remote_candidate(candidate);
-            }
-
-            Some(ice_agent)
-        } else {
-            None
-        };
-
-        let receive_extension_ids = RtpExtensionIds::from_sdp(session_desc, media_desc);
-
-        let mut transport = match &media_desc.media.proto {
-            TransportProtocol::RtpAvp | TransportProtocol::RtpAvpf => Transport {
-                local_rtp_port: None,
-                local_rtcp_port: None,
-                remote_rtp_address,
-                remote_rtcp_address,
-                rtcp_mux: media_desc.rtcp_mux,
-                ice_agent,
-                negotiated_extension_ids: receive_extension_ids,
-                connection_state: TransportConnectionState::New,
-                kind: TransportKind::Rtp,
-                events: VecDeque::new(),
-            },
-            TransportProtocol::RtpSavp | TransportProtocol::RtpSavpf => {
-                let (crypto, inbound, outbound) =
-                    sdes_srtp::negotiate_from_offer(&media_desc.crypto)?;
-
-                Transport {
-                    local_rtp_port: None,
-                    local_rtcp_port: None,
-                    remote_rtp_address,
-                    remote_rtcp_address,
-                    rtcp_mux: media_desc.rtcp_mux,
-                    ice_agent,
-                    negotiated_extension_ids: receive_extension_ids,
-                    connection_state: TransportConnectionState::New,
-                    kind: TransportKind::SdesSrtp {
-                        crypto,
-                        inbound,
-                        outbound,
-                    },
-                    events: VecDeque::new(),
-                }
-            }
-            TransportProtocol::UdpTlsRtpSavp | TransportProtocol::UdpTlsRtpSavpf => {
-                Self::dtls_srtp_from_offer(
-                    state,
-                    session_desc,
-                    media_desc,
-                    remote_rtp_address,
-                    remote_rtcp_address,
-                    ice_agent,
-                    receive_extension_ids,
-                )?
-            }
-            _ => return Err(TransportCreateError::UnknownTransportType),
-        };
-
-        // RTP & SDES-SRTP transport are instantly set to the connected state if ICE is not used
-        if matches!(
-            transport.kind,
-            TransportKind::Rtp | TransportKind::SdesSrtp { .. }
-        ) && transport.ice_agent.is_none()
-        {
-            transport.set_connection_state(TransportConnectionState::Connected);
-        }
-
-        Ok(transport)
-    }
-
-    pub(crate) fn dtls_srtp_from_offer(
-        state: &mut SessionTransportState,
-        session_desc: &SessionDescription,
-        remote_media_desc: &MediaDescription,
+#[allow(clippy::large_enum_variant)]
+pub enum Connectivity {
+    Static {
         remote_rtp_address: SocketAddr,
         remote_rtcp_address: SocketAddr,
-        ice_agent: Option<IceAgent>,
-        receive_extension_ids: RtpExtensionIds,
-    ) -> Result<Self, TransportCreateError> {
-        let setup = match remote_media_desc.setup {
-            Some(Setup::Active) => DtlsSetup::Accept,
-            Some(Setup::Passive) => DtlsSetup::Connect,
-            Some(Setup::ActPass) => {
-                // Use passive when accepting an offer so both sides will have the DTLS fingerprint
-                // before any request is sent
-                DtlsSetup::Accept
-            }
-            Some(Setup::HoldConn) | None => {
-                return Err(TransportCreateError::InvalidSetupAttribute);
-            }
-        };
+    },
+    Ice(IceAgent),
+}
 
-        let remote_fingerprints: Vec<_> = session_desc
-            .fingerprint
-            .iter()
-            .chain(remote_media_desc.fingerprint.iter())
-            .filter_map(|e| {
-                Some((
-                    dtls_srtp::to_openssl_digest(&e.algorithm)?,
-                    e.fingerprint.clone(),
-                ))
-            })
-            .collect();
+pub enum RtpTransportKind {
+    Unencrypted,
+    SdesSrtp(RtpSdesSrtpTransport),
+    DtlsSrtp(RtpDtlsSrtpTransport),
+}
 
-        let dtls = DtlsSrtpSession::new(state.ssl_context(), remote_fingerprints.clone(), setup)?;
-
-        Ok(Transport {
-            local_rtp_port: None,
-            local_rtcp_port: None,
-            remote_rtp_address,
-            remote_rtcp_address,
-            rtcp_mux: remote_media_desc.rtcp_mux,
-            ice_agent,
-            negotiated_extension_ids: receive_extension_ids,
+impl RtpTransport {
+    pub fn new(
+        connectivity: Connectivity,
+        rtcp_mux: bool,
+        extension_ids: RtpExtensionIds,
+        kind: RtpTransportKind,
+    ) -> Self {
+        RtpTransport {
+            ports: None,
+            connectivity,
+            rtcp_mux,
+            extension_ids,
+            kind,
             connection_state: TransportConnectionState::New,
-            kind: TransportKind::DtlsSrtp {
-                setup: match setup {
-                    DtlsSetup::Accept => Setup::Passive,
-                    DtlsSetup::Connect => Setup::Active,
-                },
-                dtls,
-                srtp: None,
-            },
             events: VecDeque::new(),
-        })
-    }
-
-    pub(crate) fn type_(&self) -> TransportType {
-        match self.kind {
-            TransportKind::Rtp => TransportType::Rtp,
-            TransportKind::SdesSrtp { .. } => TransportType::SdesSrtp,
-            TransportKind::DtlsSrtp { .. } => TransportType::DtlsSrtp,
         }
     }
 
-    pub(crate) fn populate_desc(&self, desc: &mut MediaDescription) {
-        desc.extmap
-            .extend(self.negotiated_extension_ids.to_extmap());
+    pub fn set_ports(&mut self, ports: RtpTransportPorts) {
+        self.ports = Some(ports)
+    }
+
+    #[track_caller]
+    pub(crate) fn require_ports(&self) -> &RtpTransportPorts {
+        self.ports
+            .as_ref()
+            .expect("RtpTransports::require_ports called before set_ports")
+    }
+
+    pub fn connectivity(&self) -> &Connectivity {
+        &self.connectivity
+    }
+
+    pub fn connectivity_mut(&mut self) -> &mut Connectivity {
+        &mut self.connectivity
+    }
+
+    pub fn kind(&self) -> &RtpTransportKind {
+        &self.kind
+    }
+
+    pub fn kind_mut(&mut self) -> &mut RtpTransportKind {
+        &mut self.kind
+    }
+
+    pub fn type_(&self) -> TransportType {
+        match &self.kind {
+            RtpTransportKind::Unencrypted => TransportType::Rtp,
+            RtpTransportKind::SdesSrtp(..) => TransportType::SdesSrtp,
+            RtpTransportKind::DtlsSrtp(..) => TransportType::DtlsSrtp,
+        }
+    }
+
+    pub fn extension_ids(&self) -> RtpExtensionIds {
+        self.extension_ids
+    }
+
+    pub fn timeout(&self, now: Instant) -> Option<Duration> {
+        let mut timeout = None;
 
         match &self.kind {
-            TransportKind::Rtp => {}
-            TransportKind::SdesSrtp { crypto, .. } => {
-                desc.crypto.extend_from_slice(crypto);
-            }
-            TransportKind::DtlsSrtp { setup, .. } => {
-                desc.setup = Some(*setup);
-                // we're not setting the fingerprint attribute on the media level
+            RtpTransportKind::Unencrypted => {}
+            RtpTransportKind::SdesSrtp(..) => {}
+            RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) => {
+                timeout = opt_min(timeout, rtp_dtls_srtp_transport.timeout());
             }
         }
 
-        if let Some(ice_agent) = &self.ice_agent {
-            desc.ice_candidates.extend(ice_agent.ice_candidates());
-            desc.ice_ufrag = Some(sdp_types::IceUsernameFragment {
-                ufrag: ice_agent.credentials().ufrag.clone().into(),
-            });
-            desc.ice_pwd = Some(sdp_types::IcePassword {
-                pwd: ice_agent.credentials().pwd.clone().into(),
-            });
+        match &self.connectivity {
+            Connectivity::Static { .. } => {}
+            Connectivity::Ice(ice_agent) => timeout = opt_min(timeout, ice_agent.timeout(now)),
         }
+
+        timeout
     }
 
-    pub(crate) fn timeout(&self, now: Instant) -> Option<Duration> {
-        let timeout = match &self.kind {
-            TransportKind::Rtp => None,
-            TransportKind::SdesSrtp { .. } => None,
-            TransportKind::DtlsSrtp { dtls, .. } => dtls.timeout(),
-        };
-
-        if let Some(ice_agent) = &self.ice_agent {
-            opt_min(ice_agent.timeout(now), timeout)
-        } else {
-            timeout
-        }
-    }
-
-    pub(crate) fn pop_event(&mut self) -> Option<TransportEvent> {
-        while let Some(ice_event) = self.ice_agent.as_mut().and_then(IceAgent::pop_event) {
-            match ice_event {
-                IceEvent::GatheringStateChanged { old, new } => {
-                    return Some(TransportEvent::IceGatheringState { old, new });
-                }
-                IceEvent::ConnectionStateChanged { old, new } => {
-                    return Some(TransportEvent::IceConnectionState { old, new });
-                }
-                IceEvent::UseAddr { component, target } => match component {
-                    Component::Rtp => self.remote_rtp_address = target,
-                    Component::Rtcp => self.remote_rtcp_address = target,
-                },
-                IceEvent::SendData {
-                    component,
-                    data,
-                    source,
-                    target,
-                } => {
-                    return Some(TransportEvent::SendData {
-                        component,
-                        data,
-                        source,
-                        target,
-                    });
-                }
-            }
-        }
-
-        if matches!(
-            self.connection_state,
-            TransportConnectionState::Connecting | TransportConnectionState::Connected
-        ) {
-            if let TransportKind::DtlsSrtp { dtls, .. } = &mut self.kind {
-                if let Some(data) = dtls.pop_to_send() {
-                    return Some(TransportEvent::SendData {
-                        component: Component::Rtp,
-                        data,
-                        source: None,
-                        target: self.remote_rtp_address,
-                    });
-                }
-            }
-        }
-
-        self.events.pop_front()
-    }
-
-    pub(crate) fn poll(&mut self, now: Instant) {
-        match &mut self.kind {
-            TransportKind::Rtp => {}
-            TransportKind::SdesSrtp { .. } => {}
-            TransportKind::DtlsSrtp { dtls, .. } => {
-                assert!(dtls.handshake().unwrap().is_none());
-
-                while let Some(data) = dtls.pop_to_send() {
-                    self.events.push_back(TransportEvent::SendData {
-                        component: Component::Rtp,
-                        data,
-                        source: None, // TODO: set this
-                        target: self.remote_rtp_address,
-                    });
-                }
-            }
-        }
-
-        // update state
-        if let Some(ice_agent) = &mut self.ice_agent {
+    pub fn poll(&mut self, now: Instant) {
+        // Poll ICE
+        if let Connectivity::Ice(ice_agent) = &mut self.connectivity {
             ice_agent.poll(now);
 
-            match ice_agent.connection_state() {
-                IceConnectionState::New => {}
-                IceConnectionState::Checking => {}
-                IceConnectionState::Connected => self.update_connection_state_on_ice_connected(),
-                IceConnectionState::Failed => {
-                    self.set_connection_state(TransportConnectionState::Failed);
-                }
-                IceConnectionState::Disconnected => {
-                    // unclear if the transport state should change here, since this state may be temporary
+            if let Some(event) = ice_agent.pop_event().and_then(ice_to_transport_event) {
+                self.events.push_back(event);
+
+                match ice_agent.connection_state() {
+                    IceConnectionState::New => {}
+                    IceConnectionState::Checking => {}
+                    IceConnectionState::Connected => {
+                        self.update_connection_state_on_ice_connected()
+                    }
+                    IceConnectionState::Failed => {
+                        self.set_connection_state(TransportConnectionState::Failed);
+                    }
+                    IceConnectionState::Disconnected => {
+                        // unclear if the transport state should change here, since this state may be temporary
+                    }
                 }
             }
         } else {
             self.update_connection_state_on_ice_connected();
         }
+
+        // Poll DTLS if RTP addr is known
+        let (local_rtp_addr, remote_rtp_addr) = match &self.connectivity {
+            Connectivity::Static {
+                remote_rtp_address, ..
+            } => (None, *remote_rtp_address),
+            Connectivity::Ice(ice_agent) => {
+                let Some((local, remote)) = ice_agent.discovered_addr(Component::Rtp) else {
+                    return;
+                };
+
+                (Some(local.ip()), remote)
+            }
+        };
+
+        if let RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) = &mut self.kind {
+            rtp_dtls_srtp_transport.handshake().unwrap(); // TODO: handle error
+
+            if let Some(data) = rtp_dtls_srtp_transport.pop_to_send() {
+                self.events.push_back(RtpTransportEvent::SendData {
+                    component: Component::Rtp,
+                    data,
+                    source: local_rtp_addr,
+                    target: remote_rtp_addr,
+                });
+            }
+        }
     }
 
     fn update_connection_state_on_ice_connected(&mut self) {
-        match &self.kind {
-            TransportKind::Rtp | TransportKind::SdesSrtp { .. } => {
+        match &mut self.kind {
+            RtpTransportKind::Unencrypted | RtpTransportKind::SdesSrtp(..) => {
                 self.set_connection_state(TransportConnectionState::Connected);
             }
-            TransportKind::DtlsSrtp { dtls, srtp, .. } => match dtls.state() {
+            RtpTransportKind::DtlsSrtp(transport) => match transport.state() {
                 DtlsState::Accepting | DtlsState::Connecting => {
                     self.set_connection_state(TransportConnectionState::Connecting);
                 }
                 DtlsState::Connected { .. } => {
-                    assert!(
-                        srtp.is_some(),
-                        "SRTP session must exist if DTLS transport is connected"
-                    );
-
                     self.set_connection_state(TransportConnectionState::Connected);
                 }
                 DtlsState::Failed => {
@@ -480,156 +195,11 @@ impl Transport {
         }
     }
 
-    pub(crate) fn receive(&mut self, mut pkt: ReceivedPkt) -> ReceivedPacket {
-        match PacketKind::identify(&pkt.data) {
-            PacketKind::Rtp => {
-                // Handle incoming RTP packet
-                match &mut self.kind {
-                    TransportKind::Rtp => {}
-                    TransportKind::SdesSrtp { inbound, .. } => {
-                        inbound.unprotect(&mut pkt.data).unwrap();
-                    }
-                    TransportKind::DtlsSrtp { srtp, .. } => match srtp {
-                        Some((inbound, _)) => {
-                            inbound.unprotect(&mut pkt.data).unwrap();
-                        }
-                        None => {
-                            log::debug!(
-                                "Got RTP packet on DTLS/SRTP transport before handshake was complete, discarding"
-                            );
-                            return ReceivedPacket::Ignore;
-                        }
-                    },
-                }
-
-                match RtpPacket::parse(self.negotiated_extension_ids, pkt.data) {
-                    Ok(packet) => ReceivedPacket::Rtp(packet),
-                    Err(e) => {
-                        log::warn!("Failed to parse RTP packet, {e}");
-                        ReceivedPacket::Ignore
-                    }
-                }
-            }
-            PacketKind::Rtcp => {
-                // Handle incoming RTCP packet
-                match &mut self.kind {
-                    TransportKind::Rtp => {}
-                    TransportKind::SdesSrtp { inbound, .. } => {
-                        inbound.unprotect_rtcp(&mut pkt.data).unwrap();
-                    }
-                    TransportKind::DtlsSrtp { srtp, .. } => match srtp {
-                        Some((inbound, _)) => {
-                            inbound.unprotect_rtcp(&mut pkt.data).unwrap();
-                        }
-                        None => {
-                            log::debug!(
-                                "Got RTCP packet on DTLS/SRTP transport before handshake was complete, discarding"
-                            );
-                            return ReceivedPacket::Ignore;
-                        }
-                    },
-                }
-
-                ReceivedPacket::Rtcp(pkt.data)
-            }
-            PacketKind::Stun => {
-                if let Some(ice_agent) = &mut self.ice_agent {
-                    ice_agent.receive(pkt);
-                }
-
-                ReceivedPacket::Ignore
-            }
-            PacketKind::Dtls => {
-                // We only expect DTLS traffic on the rtp socket
-                if pkt.component != Component::Rtp {
-                    return ReceivedPacket::Ignore;
-                }
-
-                if let TransportKind::DtlsSrtp { dtls, srtp, .. } = &mut self.kind {
-                    dtls.receive(pkt.data.clone());
-
-                    if let Some((inbound, outbound)) = dtls.handshake().unwrap() {
-                        *srtp = Some((inbound.into_session(), outbound.into_session()));
-                    }
-
-                    while let Some(data) = dtls.pop_to_send() {
-                        self.events.push_back(TransportEvent::SendData {
-                            component: Component::Rtp,
-                            data,
-                            source: None, // TODO: set this
-                            target: self.remote_rtp_address,
-                        });
-                    }
-                }
-
-                ReceivedPacket::Ignore
-            }
-            PacketKind::Unknown => {
-                // Discard
-                ReceivedPacket::Ignore
-            }
-        }
-    }
-
-    pub(crate) fn send_rtp(&mut self, packet: RtpPacket) {
-        let mut packet = packet.to_vec(self.negotiated_extension_ids);
-
-        match &mut self.kind {
-            TransportKind::DtlsSrtp { srtp: None, .. } => {
-                log::warn!("Tried to protect RTP on non-ready DTLS-SRTP transport");
-            }
-            TransportKind::SdesSrtp { outbound, .. }
-            | TransportKind::DtlsSrtp {
-                srtp: Some((_, outbound)),
-                ..
-            } => {
-                outbound.protect(&mut packet).unwrap();
-            }
-            _ => (),
-        }
-
-        self.events.push_back(TransportEvent::SendData {
-            component: Component::Rtp,
-            data: packet,
-            source: None,
-            target: self.remote_rtp_address,
-        });
-    }
-
-    pub(crate) fn send_rtcp(&mut self, mut packet: Vec<u8>) {
-        match &mut self.kind {
-            TransportKind::DtlsSrtp { srtp: None, .. } => {
-                panic!("Tried to protect RTCP on non-ready DTLS-SRTP transport");
-            }
-            TransportKind::SdesSrtp { outbound, .. }
-            | TransportKind::DtlsSrtp {
-                srtp: Some((_, outbound)),
-                ..
-            } => {
-                outbound.protect_rtcp(&mut packet).unwrap();
-            }
-            _ => (),
-        }
-
-        let component = if self.rtcp_mux {
-            Component::Rtp
-        } else {
-            Component::Rtcp
-        };
-
-        self.events.push_back(TransportEvent::SendData {
-            component,
-            data: packet,
-            source: None, // TODO: set this according to the transport
-            target: self.remote_rtcp_address,
-        });
-    }
-
     // Set the a new connection state and emit an event if the state differs from the old one
     fn set_connection_state(&mut self, new: TransportConnectionState) {
         if self.connection_state != new {
             self.events
-                .push_back(TransportEvent::TransportConnectionState {
+                .push_back(RtpTransportEvent::TransportConnectionState {
                     old: self.connection_state,
                     new,
                 });
@@ -638,80 +208,287 @@ impl Transport {
         }
     }
 
-    pub(crate) fn connection_state(&self) -> TransportConnectionState {
-        self.connection_state
+    pub fn pop_event(&mut self) -> Option<RtpTransportEvent> {
+        self.events.pop_front()
+    }
+
+    pub fn receive(&mut self, mut pkt: ReceivedPkt) -> Option<RtpOrRtcp> {
+        match PacketKind::identify(&pkt.data) {
+            PacketKind::Rtp => {
+                match &mut self.kind {
+                    RtpTransportKind::Unencrypted => {}
+                    RtpTransportKind::SdesSrtp(rtp_sdes_srtp_transport) => {
+                        if let Err(e) = rtp_sdes_srtp_transport.inbound.unprotect(&mut pkt.data) {
+                            log::warn!("Failed to unprotect incoming RTP packet, {e}");
+                            return None;
+                        }
+                    }
+                    RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) => {
+                        if let DtlsState::Connected { inbound, .. } =
+                            rtp_dtls_srtp_transport.state()
+                        {
+                            if let Err(e) = inbound.unprotect(&mut pkt.data) {
+                                log::warn!("Failed to unprotect incoming RTP packet, {e}");
+                                return None;
+                            }
+                        } else {
+                            log::warn!("Got RTP packet before DTLS connection is complete");
+                            return None;
+                        }
+                    }
+                }
+
+                let rtp_packet = match RtpPacket::parse(self.extension_ids, pkt.data) {
+                    Ok(rtp_packet) => rtp_packet,
+                    Err(e) => {
+                        log::warn!("Failed to parse incoming RTP packet, {e}");
+                        return None;
+                    }
+                };
+
+                Some(RtpOrRtcp::Rtp(rtp_packet))
+            }
+            PacketKind::Rtcp => {
+                match &mut self.kind {
+                    RtpTransportKind::Unencrypted => {}
+                    RtpTransportKind::SdesSrtp(rtp_sdes_srtp_transport) => {
+                        if let Err(e) = rtp_sdes_srtp_transport
+                            .inbound
+                            .unprotect_rtcp(&mut pkt.data)
+                        {
+                            log::warn!("Failed to unprotect incoming RTCP packet, {e}");
+                            return None;
+                        }
+                    }
+                    RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) => {
+                        if let DtlsState::Connected { inbound, .. } =
+                            rtp_dtls_srtp_transport.state()
+                        {
+                            if let Err(e) = inbound.unprotect_rtcp(&mut pkt.data) {
+                                log::warn!("Failed to unprotect incoming RTCP packet, {e}");
+                                return None;
+                            }
+                        } else {
+                            log::warn!("Got RTCP packet before DTLS connection is complete");
+                            return None;
+                        }
+                    }
+                }
+
+                Some(RtpOrRtcp::Rtcp(pkt.data))
+            }
+            PacketKind::Stun => {
+                if let Connectivity::Ice(ice_agent) = &mut self.connectivity {
+                    ice_agent.receive(pkt);
+                }
+
+                None
+            }
+            PacketKind::Dtls => {
+                // We only expect DTLS traffic on the rtp socket
+                if pkt.component != Component::Rtp {
+                    return None;
+                }
+
+                let RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) = &mut self.kind else {
+                    log::warn!("Ignoring DTLS packet on non-DTLS transport");
+                    return None;
+                };
+
+                rtp_dtls_srtp_transport.receive(pkt.data.clone());
+                rtp_dtls_srtp_transport.handshake().unwrap();
+
+                // Only try to send data if we know the remote's RTP address
+                let (local_rtp_addr, remote_rtp_addr) = match &self.connectivity {
+                    Connectivity::Static {
+                        remote_rtp_address, ..
+                    } => (None, *remote_rtp_address),
+                    Connectivity::Ice(ice_agent) => {
+                        match ice_agent.discovered_addr(Component::Rtp) {
+                            Some((local_rtp_addr, remote_rtp_addr)) => {
+                                (Some(local_rtp_addr.ip()), remote_rtp_addr)
+                            }
+                            None => return None,
+                        }
+                    }
+                };
+
+                while let Some(data) = rtp_dtls_srtp_transport.pop_to_send() {
+                    self.events.push_back(RtpTransportEvent::SendData {
+                        component: Component::Rtp,
+                        data,
+                        source: local_rtp_addr,
+                        target: remote_rtp_addr,
+                    });
+                }
+
+                None
+            }
+            PacketKind::Unknown => {
+                // ignore
+                None
+            }
+        }
+    }
+
+    pub fn writer(&mut self) -> Option<RtpTransportWriter<'_>> {
+        // Check that all addresses are known
+        let (local_rtp_addr, local_rtcp_addr, remote_rtp_addr, remote_rtcp_addr) =
+            match &self.connectivity {
+                Connectivity::Static {
+                    remote_rtp_address,
+                    remote_rtcp_address,
+                } => (None, None, *remote_rtp_address, *remote_rtcp_address),
+                Connectivity::Ice(ice_agent) => {
+                    let (local_rtp_address, remote_rtp_address) = ice_agent
+                        .discovered_addr(Component::Rtp)
+                        .map(|(local, remote)| (Some(local), remote))?;
+
+                    if self.rtcp_mux {
+                        (
+                            local_rtp_address,
+                            local_rtp_address,
+                            remote_rtp_address,
+                            remote_rtp_address,
+                        )
+                    } else {
+                        let (local_rtcp_address, remote_rtcp_address) = ice_agent
+                            .discovered_addr(Component::Rtcp)
+                            .map(|(local, remote)| (Some(local), remote))?;
+
+                        (
+                            local_rtp_address,
+                            local_rtcp_address,
+                            remote_rtp_address,
+                            remote_rtcp_address,
+                        )
+                    }
+                }
+            };
+
+        Some(RtpTransportWriter {
+            transport: self,
+            local_rtp_addr: local_rtp_addr.map(|addr| addr.ip()),
+            local_rtcp_addr: local_rtcp_addr.map(|addr| addr.ip()),
+            remote_rtp_addr,
+            remote_rtcp_addr,
+        })
     }
 }
 
-#[derive(Debug)]
-#[must_use]
-pub(crate) enum ReceivedPacket {
+pub enum RtpOrRtcp {
     Rtp(RtpPacket),
     Rtcp(Vec<u8>),
-    Ignore,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum ResolveError {
-    #[error("Missing connection attribute")]
-    MissingConnectionAttribute,
-    #[error("FQDN in connection attribute which is unsupported")]
-    FqdnInConnectionAttribute,
+/// Local UDP port of an RtpTransport
+#[derive(Debug, Clone, Copy)]
+pub struct RtpTransportPorts {
+    pub(crate) rtp: u16,
+    pub(crate) rtcp: Option<u16>,
 }
 
-fn resolve_rtp_and_rtcp_address(
-    remote_session_description: &SessionDescription,
-    remote_media_description: &MediaDescription,
-) -> Result<(SocketAddr, SocketAddr), ResolveError> {
-    let connection = remote_media_description
-        .connection
-        .as_ref()
-        .or(remote_session_description.connection.as_ref())
-        .ok_or(ResolveError::MissingConnectionAttribute)?;
-
-    let remote_rtp_address = connection.address.clone();
-    let remote_rtp_port = remote_media_description.media.port;
-
-    let (remote_rtcp_address, remote_rtcp_port) =
-        rtcp_address_and_port(remote_media_description, connection);
-
-    let remote_rtp_address = resolve_tagged_address(&remote_rtp_address, remote_rtp_port)?;
-    let remote_rtcp_address = resolve_tagged_address(&remote_rtcp_address, remote_rtcp_port)?;
-
-    Ok((remote_rtp_address, remote_rtcp_address))
-}
-
-fn rtcp_address_and_port(
-    remote_media_description: &MediaDescription,
-    connection: &Connection,
-) -> (TaggedAddress, u16) {
-    if remote_media_description.rtcp_mux {
-        return (
-            connection.address.clone(),
-            remote_media_description.media.port,
-        );
+impl RtpTransportPorts {
+    pub fn new(rtp: u16, rtcp: u16) -> Self {
+        Self {
+            rtp,
+            rtcp: Some(rtcp),
+        }
     }
 
-    if let Some(rtcp_addr) = &remote_media_description.rtcp {
-        let address = rtcp_addr
-            .address
-            .clone()
-            .unwrap_or_else(|| connection.address.clone());
-
-        return (address, rtcp_addr.port);
+    pub fn mux(port: u16) -> Self {
+        Self {
+            rtp: port,
+            rtcp: None,
+        }
     }
-
-    (
-        connection.address.clone(),
-        remote_media_description.media.port + 1,
-    )
 }
 
-fn resolve_tagged_address(address: &TaggedAddress, port: u16) -> Result<SocketAddr, ResolveError> {
-    match address {
-        TaggedAddress::IP4(ipv4_addr) => Ok(SocketAddr::from((*ipv4_addr, port))),
-        TaggedAddress::IP4FQDN(..) => Err(ResolveError::FqdnInConnectionAttribute),
-        TaggedAddress::IP6(ipv6_addr) => Ok(SocketAddr::from((*ipv6_addr, port))),
-        TaggedAddress::IP6FQDN(..) => Err(ResolveError::FqdnInConnectionAttribute),
+pub(crate) fn ice_to_transport_event(event: ice::IceEvent) -> Option<RtpTransportEvent> {
+    match event {
+        ice::IceEvent::GatheringStateChanged { old, new } => {
+            Some(RtpTransportEvent::IceGatheringState { old, new })
+        }
+        ice::IceEvent::ConnectionStateChanged { old, new } => {
+            Some(RtpTransportEvent::IceConnectionState { old, new })
+        }
+        ice::IceEvent::DiscoveredAddr { .. } => {
+            // TODO: currently not using this event
+            None
+        }
+        ice::IceEvent::SendData {
+            component,
+            data,
+            source,
+            target,
+        } => Some(RtpTransportEvent::SendData {
+            component,
+            data,
+            source,
+            target,
+        }),
+    }
+}
+
+pub struct RtpTransportWriter<'a> {
+    transport: &'a mut RtpTransport,
+    local_rtp_addr: Option<IpAddr>,
+    local_rtcp_addr: Option<IpAddr>,
+    remote_rtp_addr: SocketAddr,
+    remote_rtcp_addr: SocketAddr,
+}
+
+impl RtpTransportWriter<'_> {
+    pub fn send_rtp(&mut self, rtp_packet: RtpPacket) {
+        let mut data = rtp_packet.to_vec(self.transport.extension_ids);
+
+        match &mut self.transport.kind {
+            RtpTransportKind::Unencrypted => {}
+            RtpTransportKind::SdesSrtp(rtp_sdes_srtp_transport) => {
+                rtp_sdes_srtp_transport.outbound.protect(&mut data).unwrap()
+            }
+            RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) => {
+                let DtlsState::Connected { outbound, .. } = rtp_dtls_srtp_transport.state() else {
+                    return; // unreachable
+                };
+
+                outbound.protect(&mut data).unwrap()
+            }
+        }
+
+        self.transport
+            .events
+            .push_back(RtpTransportEvent::SendData {
+                component: Component::Rtp,
+                data,
+                source: self.local_rtp_addr,
+                target: self.remote_rtp_addr,
+            });
+    }
+
+    pub fn send_rctp(&mut self, mut rtcp_packet: Vec<u8>) {
+        match &mut self.transport.kind {
+            RtpTransportKind::Unencrypted => {}
+            RtpTransportKind::SdesSrtp(rtp_sdes_srtp_transport) => rtp_sdes_srtp_transport
+                .outbound
+                .protect(&mut rtcp_packet)
+                .unwrap(),
+            RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) => {
+                let DtlsState::Connected { outbound, .. } = rtp_dtls_srtp_transport.state() else {
+                    return; // unreachable
+                };
+
+                outbound.protect_rtcp(&mut rtcp_packet).unwrap()
+            }
+        }
+
+        self.transport
+            .events
+            .push_back(RtpTransportEvent::SendData {
+                component: Component::Rtp,
+                data: rtcp_packet,
+                source: self.local_rtcp_addr,
+                target: self.remote_rtcp_addr,
+            });
     }
 }

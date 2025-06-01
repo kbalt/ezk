@@ -1,8 +1,12 @@
-use crate::{LocalMediaId, MediaId, TransportId, codecs::NegotiatedCodec};
+use std::net::{IpAddr, SocketAddr};
+
+use crate::state::{
+    sdp::{NegotiatedCodec, TransportId, local_media::LocalMediaId, media::MediaId},
+    transport::TransportConnectionState,
+};
 use ice::{Component, IceConnectionState, IceGatheringState};
 use rtp::RtpPacket;
 use sdp_types::Direction;
-use std::net::{IpAddr, SocketAddr};
 
 /// New media line was added to the session
 #[derive(Debug)]
@@ -52,9 +56,9 @@ pub struct TransportConnectionStateChanged {
     pub new: TransportConnectionState,
 }
 
-/// Session event returned by [`SessionState::pop_event`](super::SessionState::pop_event)
+/// Session event returned by [`SdpSession::pop_event`](crate::SdpSession::pop_event)
 #[derive(Debug)]
-pub enum Event {
+pub enum SdpSessionEvent {
     /// See [`MediaAdded`]
     MediaAdded(MediaAdded),
     /// See [`MediaChanged`]
@@ -81,34 +85,8 @@ pub enum Event {
     /// Receive RTP on a track
     ReceiveRTP {
         media_id: MediaId,
-        packet: RtpPacket,
+        rtp_packet: RtpPacket,
     },
-}
-
-/// Connection state of a transport
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TransportConnectionState {
-    /// The transport has just been created
-    New,
-
-    /// # DTLS-SRTP
-    ///
-    /// DTLS is in the process of negotiating a secure connection and verifying the remote fingerprint.
-    Connecting,
-
-    /// # DTLS-SRTP
-    ///
-    /// DTLS has completed negotiation of a secure connection and verified the remote fingerprint.
-    ///
-    /// # RTP or SDES-SRTP
-    ///
-    /// This state is reached as soon as the SDP exchange has concluded or (if used) the ICE agent has established a connection.
-    Connected,
-
-    /// # DTLS-SRTP
-    ///
-    /// The transport has failed as the result of an error (such as receipt of an error alert or failure to validate the remote fingerprint).
-    Failed,
 }
 
 /// Transport changes that have to be made before continuing with SDP negotiation.
