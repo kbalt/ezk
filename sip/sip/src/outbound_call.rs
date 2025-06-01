@@ -1,6 +1,6 @@
 use crate::{call::Call, MediaBackend, CONTENT_TYPE_SDP};
 use bytesstr::BytesStr;
-use rtc::SessionDescription;
+use rtc::state::sdp::SessionDescription;
 use sip_auth::ClientAuthenticator;
 use sip_core::{transaction::TsxResponse, Endpoint, Request};
 use sip_types::{

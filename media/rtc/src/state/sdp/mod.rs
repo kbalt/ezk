@@ -34,20 +34,20 @@ use std::{
 use transport::{OfferedTransport, TransportCreateError};
 
 mod codecs;
+mod config;
 mod event;
 mod local_media;
 mod media;
-mod options;
 mod transport;
 
 pub use codecs::{Codec, Codecs, NegotiatedCodec};
+pub use config::{BundlePolicy, RtcpMuxPolicy, SdpSessionConfig, TransportType};
 pub use event::{
     IceConnectionStateChanged, IceGatheringStateChanged, MediaAdded, MediaChanged, SdpSessionEvent,
     TransportChange, TransportConnectionStateChanged,
 };
 pub use local_media::LocalMediaId;
 pub use media::MediaId;
-pub use options::{BundlePolicy, RtcpMuxPolicy, SdpSessionConfig, TransportType};
 pub use sdp_types::{Direction, MediaType, ParseSessionDescriptionError, SessionDescription};
 pub use transport::ResolveError;
 

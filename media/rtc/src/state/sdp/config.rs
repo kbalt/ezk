@@ -15,7 +15,6 @@ pub struct SdpSessionConfig {
     // TODO: add MTU
 }
 
-// TODO: rename to Kind or something
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TransportType {
     /// Unprotected "raw" RTP packets

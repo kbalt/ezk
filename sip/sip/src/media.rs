@@ -1,7 +1,9 @@
 use rtc::{
-    state::TransportConnectionState,
+    state::{
+        sdp::{Direction, MediaId, NegotiatedCodec, SessionDescription, TransportId},
+        transport::TransportConnectionState,
+    },
     tokio::{TokioSdpSession, TokioSdpSessionEvent},
-    Direction, MediaId, NegotiatedCodec, SessionDescription, TransportId,
 };
 use rtp::RtpPacket;
 use std::{
@@ -17,6 +19,7 @@ use std::{
         Arc,
     },
     task::{ready, Context, Poll},
+    time::Instant,
 };
 use tokio::sync::{
     mpsc::{self},
@@ -168,7 +171,7 @@ impl MediaBackend for MediaSession {
             let event = tokio::select! {
                 Some((media_id, packet)) = self.rx.recv() => {
                     // TODO: check if media has a sender
-                    self.inner.send_rtp(media_id, packet);
+                    self.inner.writer(media_id).unwrap().send_rtp(packet.pt, Instant::now(), packet.payload);
                     continue;
                 }
                 event = self.inner.run() => event?,
