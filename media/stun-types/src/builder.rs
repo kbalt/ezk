@@ -79,7 +79,7 @@ impl MessageBuilder {
 
         attr.encode(ctx, self);
 
-        let padding_bytes = std::iter::repeat(0).take(padding_usize(usize::from(enc_len)));
+        let padding_bytes = std::iter::repeat_n(0, padding_usize(usize::from(enc_len)));
         self.buffer.extend(padding_bytes);
     }
 
