@@ -22,7 +22,7 @@ impl StreamingFactory for TlsConnector {
     ) -> io::Result<Self::Transport> {
         let server_name = match uri_info.host_port.host {
             Host::Name(ref name) => ServerName::try_from(name.as_str())
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
+                .map_err(io::Error::other)?
                 .to_owned(),
             Host::IP4(ip) => ServerName::IpAddress(IpAddr::V4(ip.into())),
             Host::IP6(ip) => ServerName::IpAddress(IpAddr::V6(ip.into())),

@@ -53,6 +53,7 @@ impl AuthParam {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum AuthChallenge {
     Digest(DigestChallenge),
     Other(Auth),

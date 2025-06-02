@@ -103,10 +103,9 @@ pub(super) async fn resolve_host(
     }
 
     if entries.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("No DNS records for host '{name}' found"),
-        ));
+        return Err(io::Error::other(format!(
+            "No DNS records for host '{name}' found"
+        )));
     }
 
     Ok(entries)

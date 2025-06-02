@@ -174,10 +174,7 @@ impl Endpoint {
                 message.msg.line.print_ctx(ctx),
                 message.msg.headers
             )
-            .map_err(|e| {
-                // wrap
-                io::Error::new(io::ErrorKind::Other, e)
-            })?;
+            .map_err(io::Error::other)?;
 
             buffer.extend_from_slice(&message.msg.body);
 
@@ -218,10 +215,7 @@ impl Endpoint {
                 message.msg.line.print_ctx(ctx),
                 message.msg.headers
             )
-            .map_err(|e| {
-                // wrap
-                io::Error::new(io::ErrorKind::Other, e)
-            })?;
+            .map_err(io::Error::other)?;
 
             buffer.extend_from_slice(&message.msg.body);
 

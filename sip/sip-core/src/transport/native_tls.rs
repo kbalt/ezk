@@ -5,7 +5,7 @@ use sip_types::uri::SipUri;
 use std::io;
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
-use tokio_native_tls::{native_tls, TlsAcceptor, TlsConnector, TlsStream};
+use tokio_native_tls::{TlsAcceptor, TlsConnector, TlsStream};
 
 // ==== Connector
 
@@ -27,7 +27,7 @@ impl StreamingFactory for TlsConnector {
         let stream = self
             .connect(&domain, stream)
             .await
-            .map_err(native_tls_err_to_io_err)?;
+            .map_err(io::Error::other)?;
 
         Ok(stream)
     }
@@ -72,7 +72,7 @@ impl StreamingListener for TlsAcceptStream {
             .acceptor
             .accept(stream)
             .await
-            .map_err(native_tls_err_to_io_err)?;
+            .map_err(io::Error::other)?;
         Ok((stream, remote))
     }
 }
@@ -94,8 +94,4 @@ impl StreamingTransport for TlsStream<TcpStream> {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
         self.get_ref().get_ref().get_ref().peer_addr()
     }
-}
-
-fn native_tls_err_to_io_err(e: native_tls::Error) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, e)
 }

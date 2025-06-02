@@ -30,6 +30,7 @@ impl From<io::Error> for Error {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum Item {
     DecodedMessage(DecodedMessage),
     KeepAliveRequest,

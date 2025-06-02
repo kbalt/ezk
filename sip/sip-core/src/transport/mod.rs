@@ -356,11 +356,7 @@ impl Transports {
             }
         }
 
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("Failed to select transport for {uri:?}"),
-        )
-        .into())
+        Err(io::Error::other(format!("Failed to select transport for {uri:?}")).into())
     }
 
     fn find_matching_unmanaged_transport(
