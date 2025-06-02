@@ -57,7 +57,7 @@ pub enum IceEvent {
         old: IceConnectionState,
         new: IceConnectionState,
     },
-    UseAddr {
+    DiscoveredAddr {
         component: Component,
         target: SocketAddr,
     },
@@ -325,7 +325,7 @@ impl IceAgent {
 
     /// Add a STUN server which the ICE agent should use to gather additional (server-reflexive) candidates.
     pub fn add_stun_server(&mut self, server: SocketAddr) {
-        // TODO: ideally we create a stun server binding for every local interface
+        // TODO: ideally create a stun server binding for every local interface
         self.stun_server
             .push(StunServerBinding::new(server, Component::Rtp));
 
@@ -343,6 +343,27 @@ impl IceAgent {
     /// Returns the current ICE connection state
     pub fn connection_state(&self) -> IceConnectionState {
         self.connection_state
+    }
+
+    /// Returns the discovered local & remote address for the given component
+    pub fn discovered_addr(&self, mut component: Component) -> Option<(SocketAddr, SocketAddr)> {
+        if self.rtcp_mux {
+            component = Component::Rtp;
+        }
+
+        self.pairs
+            .iter()
+            .find(|pair| {
+                pair.component == component
+                    && pair.state == CandidatePairState::Succeeded
+                    && pair.nominated
+            })
+            .map(|pair| {
+                (
+                    self.local_candidates[pair.local].addr,
+                    self.remote_candidates[pair.remote].addr,
+                )
+            })
     }
 
     fn add_local_candidate(
@@ -410,6 +431,11 @@ impl IceAgent {
             return;
         }
 
+        let Ok(priority) = u32::try_from(candidate.priority) else {
+            log::warn!("Candidate has priority larger than u32::MAX");
+            return;
+        };
+
         let component = match candidate.component {
             1 => Component::Rtp,
             // Discard candidates for rtcp if rtcp-mux is enabled
@@ -430,7 +456,7 @@ impl IceAgent {
         self.remote_candidates.insert(Candidate {
             addr: SocketAddr::new(ip, candidate.port),
             kind,
-            priority: u32::try_from(candidate.priority).unwrap(),
+            priority,
             foundation: candidate.foundation.to_string(),
             component,
             base: SocketAddr::new(ip, candidate.port), // TODO: do I even need this?
@@ -550,6 +576,7 @@ impl IceAgent {
                 .pairs
                 .pop()
                 .expect("just checked that self.pairs.len() > self.max_pairs");
+
             log::debug!(
                 "Pruned pair {}",
                 DisplayPair(
@@ -670,7 +697,7 @@ impl IceAgent {
                 let local_candidate = &self.local_candidates[pair.local];
                 let remote_candidate = &self.remote_candidates[pair.remote];
 
-                self.events.push_back(IceEvent::UseAddr {
+                self.events.push_back(IceEvent::DiscoveredAddr {
                     component: local_candidate.component,
                     target: remote_candidate.addr,
                 });
@@ -775,7 +802,11 @@ impl IceAgent {
             return;
         }
 
-        let priority = pkt.data.attribute::<Priority>().unwrap().unwrap();
+        let Some(Ok(priority)) = pkt.data.attribute::<Priority>() else {
+            log::debug!("Incoming stun request did not contain PRIORITY attribute");
+            return;
+        };
+
         let use_candidate = pkt.data.attribute::<UseCandidate>().is_some();
 
         // Detect and handle role conflict
@@ -785,7 +816,7 @@ impl IceAgent {
                     let response = stun::make_role_error(
                         pkt.data.transaction_id(),
                         &self.local_credentials,
-                        self.remote_credentials.as_ref().unwrap(),
+                        remote_credentials,
                         pkt.source,
                         true,
                         self.control_tie_breaker,
@@ -810,7 +841,7 @@ impl IceAgent {
                     let response = stun::make_role_error(
                         pkt.data.transaction_id(),
                         &self.local_credentials,
-                        self.remote_credentials.as_ref().unwrap(),
+                        remote_credentials,
                         pkt.source,
                         false,
                         self.control_tie_breaker,
@@ -1223,7 +1254,7 @@ impl IceAgent {
 
             pair.nominated = true;
 
-            self.events.push_back(IceEvent::UseAddr {
+            self.events.push_back(IceEvent::DiscoveredAddr {
                 component,
                 target: self.remote_candidates[pair.remote].addr,
             });
