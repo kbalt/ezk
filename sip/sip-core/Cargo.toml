@@ -40,7 +40,6 @@ bytesstr = "1"
 downcast-rs = "2"
 hickory-resolver = "0.25.0"
 multimap = "0.10"
-nom = "7"
 
 tokio-rustls = { workspace = true, optional = true }
 rustls-pki-types = { workspace = true, optional = true }

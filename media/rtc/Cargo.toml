@@ -21,7 +21,6 @@ stun-types.workspace = true
 base64 = "0.22"
 bytes = "1"
 bytesstr = "1.0.2"
-futures-util = "0.3"
 openssl = "0.10"
 rand = "0.9"
 slotmap = "1.0.7"
