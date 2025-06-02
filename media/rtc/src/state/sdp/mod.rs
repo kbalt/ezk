@@ -77,7 +77,7 @@ enum AnyTransportId {
 }
 
 pub struct SdpSession {
-    options: SdpSessionConfig,
+    config: SdpSessionConfig,
 
     id: u64,
     // TODO: actually increment the version
@@ -202,7 +202,7 @@ enum SdpResponseEntry {
 }
 
 impl SdpSession {
-    pub fn new(address: IpAddr, options: SdpSessionConfig) -> Self {
+    pub fn new(address: IpAddr, config: SdpSessionConfig) -> Self {
         // TODO: wrap this in a nice API
         let ssl = make_ssl_context().unwrap();
 
@@ -218,7 +218,7 @@ impl SdpSession {
         };
 
         SdpSession {
-            options,
+            config,
             id: u64::from(rand::random::<u16>()),
             version: u64::from(rand::random::<u16>()),
             address,
@@ -316,7 +316,7 @@ impl SdpSession {
             .values()
             .map(|e| e.transport.type_())
             .max()
-            .unwrap_or(self.options.offer_transport);
+            .unwrap_or(self.config.offer_transport);
 
         // Find a transport of the previously found type to bundle
         let bundle_transport_id = self
@@ -325,7 +325,7 @@ impl SdpSession {
             .find(|(_, e)| e.transport.type_() == transport_kind)
             .map(|(id, _)| id);
 
-        let (standalone_transport, bundle_transport) = match self.options.bundle_policy {
+        let (standalone_transport, bundle_transport) = match self.config.bundle_policy {
             BundlePolicy::MaxCompat => {
                 let ice_agent = self.make_ice_agent();
 
@@ -337,7 +337,7 @@ impl SdpSession {
                         public_transport_id,
                         transport_kind,
                         ice_agent,
-                        matches!(self.options.rtcp_mux_policy, RtcpMuxPolicy::Negotiate),
+                        matches!(self.config.rtcp_mux_policy, RtcpMuxPolicy::Negotiate),
                     ));
 
                 (
@@ -361,7 +361,7 @@ impl SdpSession {
                         public_transport_id,
                         transport_kind,
                         ice_agent,
-                        matches!(self.options.rtcp_mux_policy, RtcpMuxPolicy::Negotiate),
+                        matches!(self.config.rtcp_mux_policy, RtcpMuxPolicy::Negotiate),
                     ));
 
                     AnyTransportId::Offered(id)
@@ -378,7 +378,7 @@ impl SdpSession {
                 media_type: self.local_media[local_media_id].codecs.media_type,
                 mid: media_id.0.to_string().into(),
                 direction,
-                use_avpf: self.options.offer_avpf,
+                use_avpf: self.config.offer_avpf,
                 standalone_transport_id: standalone_transport,
                 bundle_transport_id: bundle_transport,
             }));
@@ -387,14 +387,14 @@ impl SdpSession {
     }
 
     fn make_ice_agent(&mut self) -> Option<IceAgent> {
-        if !self.options.offer_ice {
+        if !self.config.offer_ice {
             return None;
         }
 
         let mut ice_agent = IceAgent::new_for_offer(
             self.ice_credentials.clone(),
             true,
-            matches!(self.options.rtcp_mux_policy, RtcpMuxPolicy::Require),
+            matches!(self.config.rtcp_mux_policy, RtcpMuxPolicy::Require),
         );
 
         for server in &self.stun_servers {
@@ -1308,7 +1308,7 @@ impl SdpSession {
                         let media = self
                             .media
                             .iter()
-                            .find(|m| m.streams.tx == Some(rtp_packet.ssrc));
+                            .find(|m| m.streams.rx == Some(rtp_packet.ssrc));
 
                         if let Some(media) = media {
                             self.events.push_back(SdpSessionEvent::ReceiveRTP {
@@ -1408,24 +1408,37 @@ impl SdpSession {
             .find(|t| t.public_id == transport_id)
         {
             transport.receive(pkt);
+
+            while let Some(event) = transport.pop_event() {
+                self.events
+                    .extend(Self::map_transport_event(transport.public_id, event));
+            }
         } else if let Some((
             transport_id,
             EstablishedTransport {
+                public_id,
                 transport,
                 rtp_session,
-                ..
             },
         )) = self
             .transports
             .iter_mut()
             .find(|(_, t)| t.public_id == transport_id)
         {
+            let public_id = *public_id;
+
             match transport.receive(pkt) {
                 Some(RtpOrRtcp::Rtp(rtp_packet)) => {
                     if let Some(rx_stream) = rtp_session.rx_stream(rtp_packet.ssrc) {
                         rx_stream.receive_rtp(now, rtp_packet);
                     } else {
-                        self.handle_new_ssrc(now, transport_id, rtp_packet);
+                        Self::handle_new_ssrc(
+                            &mut self.media,
+                            rtp_session,
+                            now,
+                            transport_id,
+                            rtp_packet,
+                        );
                     }
                 }
                 Some(RtpOrRtcp::Rtcp(rtcp_packet)) => {
@@ -1441,19 +1454,25 @@ impl SdpSession {
                 }
                 None => {}
             }
+
+            while let Some(event) = transport.pop_event() {
+                self.events
+                    .extend(Self::map_transport_event(public_id, event));
+            }
         } else {
             log::warn!("SdpSession::receive with unknown TransportId called");
         }
     }
 
     fn handle_new_ssrc(
-        &mut self,
+        media: &mut [Media],
+        rtp_session: &mut RtpSession,
         now: Instant,
         transport_id: EstablishedTransportId,
         rtp_packet: RtpPacket,
     ) {
         // Find media that matches the incoming RTP packet
-        let media = self.media.iter_mut().find(|media| {
+        let media = media.iter_mut().find(|media| {
             // media must use the same transport and be negotiated to receive data
             if media.transport_id != transport_id || !media.direction.recv {
                 return false;
@@ -1477,11 +1496,7 @@ impl SdpSession {
             return;
         };
 
-        let transport = &mut self.transports[transport_id];
-
-        let rx_stream = transport
-            .rtp_session
-            .new_rx_stream(rtp_packet.ssrc, media.codec.clock_rate);
+        let rx_stream = rtp_session.new_rx_stream(rtp_packet.ssrc, media.codec.clock_rate);
 
         media.streams.rx = Some(rtp_packet.ssrc);
 

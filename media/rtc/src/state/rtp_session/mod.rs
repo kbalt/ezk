@@ -88,7 +88,7 @@ impl RtpSession {
     /// Remove the RTP send stream identified by the given SSRC
     pub fn remove_tx_stream(&mut self, ssrc: Ssrc) {
         if self.tx.remove(&ssrc).is_some() {
-            self.reports.bye(ssrc);
+            self.reports.add_bye(ssrc);
         }
     }
 

@@ -65,9 +65,9 @@ pub enum Error {
 }
 
 impl TokioSdpSession {
-    pub fn new(address: IpAddr, options: SdpSessionConfig) -> Self {
+    pub fn new(address: IpAddr, config: SdpSessionConfig) -> Self {
         Self {
-            state: SdpSession::new(address, options),
+            state: SdpSession::new(address, config),
             sockets: HashMap::new(),
             timeout: Some(Instant::now()), // poll immediately
             ips: local_ip_address::list_afinet_netifas()
@@ -245,7 +245,7 @@ impl TokioSdpSession {
             }
 
             self.step().await?;
-            self.handle_events().unwrap();
+            self.handle_events()?;
         }
     }
 

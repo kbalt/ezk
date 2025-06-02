@@ -1,11 +1,13 @@
 use rtp::{
     Ssrc,
     rtcp_types::{
-        Bye, CompoundBuilder, PacketBuilder, ReceiverReport, ReceiverReportBuilder, ReportBlock,
+        Bye, CompoundBuilder, ReceiverReport, ReceiverReportBuilder, ReportBlock,
         ReportBlockBuilder, RtcpPacket, RtcpPacketWriter, SenderReport, SenderReportBuilder,
     },
 };
 use std::collections::VecDeque;
+
+const BYE_BYTES_PER_SOURCE: usize = 4;
 
 /// Collection of RTCP packets to be sent out
 #[derive(Default)]
@@ -13,14 +15,18 @@ pub(crate) struct ReportsQueue {
     sender_reports: VecDeque<SenderReportBuilder>,
     report_blocks: VecDeque<ReportBlockBuilder>,
 
-    ssrcs_to_bye: Vec<Ssrc>,
-
-    other: VecDeque<PacketBuilder<'static>>,
+    sources_to_bye: Vec<Ssrc>,
 }
 
 impl ReportsQueue {
     pub(crate) fn is_empty(&self) -> bool {
-        self.sender_reports.is_empty() && self.report_blocks.is_empty() && self.other.is_empty()
+        let Self {
+            sender_reports,
+            report_blocks,
+            sources_to_bye,
+        } = self;
+
+        sender_reports.is_empty() && report_blocks.is_empty() && sources_to_bye.is_empty()
     }
 
     pub(crate) fn add_sender_report(&mut self, sr: SenderReportBuilder) {
@@ -31,8 +37,8 @@ impl ReportsQueue {
         self.report_blocks.push_back(rb);
     }
 
-    pub(crate) fn bye(&mut self, ssrc: Ssrc) {
-        self.ssrcs_to_bye.push(ssrc);
+    pub(crate) fn add_bye(&mut self, ssrc: Ssrc) {
+        self.sources_to_bye.push(ssrc);
     }
 
     pub(crate) fn make_report(
@@ -40,16 +46,6 @@ impl ReportsQueue {
         fallback_sender_ssrc: Ssrc,
         mtu: usize,
     ) -> Option<Vec<u8>> {
-        if !self.ssrcs_to_bye.is_empty() {
-            let mut bye = Bye::builder();
-
-            for ssrc in self.ssrcs_to_bye.drain(0..self.ssrcs_to_bye.len().min(31)) {
-                bye = bye.add_source(ssrc.0);
-            }
-
-            self.other.push_back(PacketBuilder::Bye(bye));
-        }
-
         self.make_report_compund(fallback_sender_ssrc, mtu)
             .map(|compound| {
                 let mut buf = vec![0u8; compound.calculate_size().unwrap()];
@@ -76,6 +72,8 @@ impl ReportsQueue {
             let compound_has_size_for_sr = compound_size + SenderReport::MIN_PACKET_LEN <= mtu;
             let compound_has_size_for_rr =
                 compound_size + ReceiverReport::MIN_PACKET_LEN + ReportBlock::EXPECTED_SIZE <= mtu;
+            let compound_has_size_for_bye =
+                compound_size + (Bye::MIN_PACKET_LEN + BYE_BYTES_PER_SOURCE) <= mtu;
 
             if !self.sender_reports.is_empty() && compound_has_size_for_sr {
                 // If there's a sender report, fill it with report blocks and add it to the compound
@@ -91,17 +89,35 @@ impl ReportsQueue {
                 // If there's no sender reports left, put the remaining report blocks in a receiver report
                 let receiver_report = ReceiverReport::builder(fallback_sender_ssrc.0);
                 compound = self.extend_and_add_report(mtu, compound, receiver_report);
-            } else if let Some(pos) = self
-                .other
-                .iter()
-                .position(|other| compound_size + other.calculate_size().unwrap() <= mtu)
-            {
-                // Find a packet in the `other` list that fits in the compound packet
-                compound = compound.add_packet(self.other.remove(pos).expect("other is not empty"));
+            } else if !self.sources_to_bye.is_empty() && compound_has_size_for_bye {
+                compound = self.add_bye_to_compound(mtu, compound, compound_size);
             } else {
                 return Some(compound);
             }
         }
+    }
+
+    fn add_bye_to_compound(
+        &mut self,
+        mtu: usize,
+        compound: CompoundBuilder<'static>,
+        compound_size: usize,
+    ) -> CompoundBuilder<'static> {
+        let mut bye = Bye::builder();
+
+        let mut sources_added = 0;
+        while sources_added < 31
+            && compound_size + bye.calculate_size().unwrap() + BYE_BYTES_PER_SOURCE <= mtu
+        {
+            let Some(ssrc) = self.sources_to_bye.pop() else {
+                break;
+            };
+
+            bye = bye.add_source(ssrc.0);
+            sources_added += 1;
+        }
+
+        compound.add_packet(bye)
     }
 
     fn extend_and_add_report(

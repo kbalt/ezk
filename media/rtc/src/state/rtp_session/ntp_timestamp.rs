@@ -22,13 +22,13 @@ const NTP_EPOCH: OffsetDateTime = const {
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct NtpTimestamp {
+pub(super) struct NtpTimestamp {
     // Duration since 01.01.1900
     inner: SignedDuration,
 }
 
 impl NtpTimestamp {
-    pub(crate) fn from_instant(now: Instant) -> Self {
+    pub(super) fn from_instant(now: Instant) -> Self {
         let (ref_time, ref_instant) = &*SYSTEM_TIME_TO_INSTANT;
         let system_time = *ref_time + now.signed_duration_since(*ref_instant);
 
@@ -37,11 +37,11 @@ impl NtpTimestamp {
         }
     }
 
-    pub(crate) fn as_seconds_f64(self) -> f64 {
+    pub(super) fn as_seconds_f64(self) -> f64 {
         self.inner.as_seconds_f64()
     }
 
-    pub(crate) fn to_fixed_u64(self) -> u64 {
+    pub(super) fn to_fixed_u64(self) -> u64 {
         let seconds = self.inner.whole_seconds() as u64;
 
         let subseconds = self.inner.as_seconds_f64().fract() * u32::MAX as f64;
@@ -51,12 +51,12 @@ impl NtpTimestamp {
     }
 
     /// Returns the middle 32 bits of [`to_fixed_u64`](Self::to_fixed_u64)
-    pub(crate) fn to_fixed_u32(self) -> u32 {
+    pub(super) fn to_fixed_u32(self) -> u32 {
         ((self.to_fixed_u64() >> 16) & u64::from(u32::MAX)) as u32
     }
 
     // Not a fan of commented out code, but I don't know if or when I might need this
-    //pub(crate) fn from_fixed_u64(fixed: u64) -> Self {
+    //pub(super) fn from_fixed_u64(fixed: u64) -> Self {
     //    let seconds = (fixed >> 32) as i64;
     //    let subseconds = (fixed & u64::from(u32::MAX)) as u32;
     //    let subseconds = subseconds as f64 / (u32::MAX as f64);
@@ -65,7 +65,7 @@ impl NtpTimestamp {
     //    }
     //}
 
-    pub(crate) fn from_fixed_u32(fixed: u32) -> Self {
+    pub(super) fn from_fixed_u32(fixed: u32) -> Self {
         let seconds = (fixed >> 16) as i64;
 
         let subseconds = (fixed & u32::from(u16::MAX)) as u16;
@@ -76,7 +76,7 @@ impl NtpTimestamp {
         }
     }
 
-    pub(crate) fn to_std_duration(self) -> Option<Duration> {
+    pub(super) fn to_std_duration(self) -> Option<Duration> {
         self.inner.try_into().ok()
     }
 }
