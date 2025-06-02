@@ -74,7 +74,7 @@ impl Attribute<'_> for MessageIntegritySha256 {
     }
 
     fn encode_len(&self) -> Result<u16, Error> {
-        Ok(u16::try_from(dbg!(Sha256::output_size()))?)
+        Ok(u16::try_from(Sha256::output_size())?)
     }
 }
 
