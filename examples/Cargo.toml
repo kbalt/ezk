@@ -3,6 +3,7 @@ name = "examples"
 version = "0.0.0"
 edition = "2021"
 publish = false
+license.workspace = true
 
 [dev-dependencies]
 sip-types.workspace = true
