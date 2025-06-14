@@ -1,6 +1,6 @@
 use crate::{
-    sdp::{TransportId, local_media::LocalMediaId, media::MediaId},
     rtp_transport::TransportConnectionState,
+    sdp::{TransportId, local_media::LocalMediaId, media::MediaId},
 };
 use ice::{Component, IceConnectionState, IceGatheringState};
 use rtp::RtpPacket;

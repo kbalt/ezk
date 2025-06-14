@@ -1,6 +1,6 @@
 use crate::{
-    sdp::{Codec, DirectionBools, EstablishedTransport, EstablishedTransportId, LocalMediaId},
     rtp_transport::Connectivity,
+    sdp::{Codec, DirectionBools, EstablishedTransport, EstablishedTransportId, LocalMediaId},
 };
 use bytesstr::BytesStr;
 use rtp::Ssrc;
