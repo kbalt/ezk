@@ -1,19 +1,28 @@
-use crate::{Codec, Codecs, DirectionBools};
+use crate::sdp::{Codec, Codecs, DirectionBools};
 use sdp_types::{Direction, MediaDescription};
+
+slotmap::new_key_type! {
+    pub struct LocalMediaId;
+}
 
 pub(super) struct LocalMedia {
     pub(super) codecs: Codecs,
-    pub(super) limit: u32,
     pub(super) direction: DirectionBools,
-    pub(super) use_count: u32,
+
+    /// DTMF payload type to clockrate mapping for this media
+    pub(super) dtmf: Vec<(u8, u32)>,
+}
+
+pub(super) struct ChosenCodec {
+    pub(super) codec: Codec,
+    pub(super) remote_pt: u8,
+    pub(super) direction: DirectionBools,
+    pub(super) dtmf: Option<u8>,
 }
 
 impl LocalMedia {
-    pub(super) fn maybe_use_for_offer(
-        &mut self,
-        desc: &MediaDescription,
-    ) -> Option<(Codec, u8, DirectionBools)> {
-        if self.limit == self.use_count || self.codecs.media_type != desc.media.media_type {
+    pub(super) fn maybe_use_for_offer(&mut self, desc: &MediaDescription) -> Option<ChosenCodec> {
+        if self.codecs.media_type != desc.media.media_type {
             return None;
         }
 
@@ -23,7 +32,7 @@ impl LocalMedia {
     pub(super) fn choose_codec_from_answer(
         &mut self,
         desc: &MediaDescription,
-    ) -> Option<(Codec, u8, DirectionBools)> {
+    ) -> Option<ChosenCodec> {
         if self.codecs.media_type != desc.media.media_type {
             return None;
         }
@@ -31,8 +40,7 @@ impl LocalMedia {
         self.choose_codec(desc)
     }
 
-    fn choose_codec(&mut self, desc: &MediaDescription) -> Option<(Codec, u8, DirectionBools)> {
-        // Try choosing a codec
+    fn choose_codec(&mut self, desc: &MediaDescription) -> Option<ChosenCodec> {
         for codec in &mut self.codecs.codecs {
             let pt = codec.pt.expect("pt is set when added to session");
 
@@ -68,16 +76,24 @@ impl LocalMedia {
                 return None;
             }
 
-            self.use_count += 1;
+            let dtmf = desc
+                .rtpmap
+                .iter()
+                .find(|rtpmap| {
+                    rtpmap.encoding.eq_ignore_ascii_case("telephone-event")
+                        && rtpmap.clock_rate == codec.clock_rate
+                })
+                .map(|rtpmap| rtpmap.payload);
 
-            return Some((
-                codec.clone(),
-                codec_pt,
-                DirectionBools {
+            return Some(ChosenCodec {
+                codec: codec.clone(),
+                remote_pt: codec_pt,
+                direction: DirectionBools {
                     send: do_send,
                     recv: do_receive,
                 },
-            ));
+                dtmf,
+            });
         }
 
         None

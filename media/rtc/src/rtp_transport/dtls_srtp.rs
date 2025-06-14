@@ -1,0 +1,259 @@
+use openssl::{
+    asn1::{Asn1Time, Asn1Type},
+    bn::{BigNum, MsbOption},
+    error::ErrorStack,
+    hash::MessageDigest,
+    nid::Nid,
+    pkey::{PKey, Private},
+    rsa::Rsa,
+    ssl::{
+        ErrorCode, Ssl, SslAcceptor, SslContext, SslMethod, SslStream, SslVerifyMode, SslVersion,
+    },
+    x509::{X509, X509Name},
+};
+use srtp::openssl::Config;
+use std::{
+    collections::VecDeque,
+    io::{self, Cursor, Read, Write},
+    time::Duration,
+};
+
+#[derive(Debug, thiserror::Error)]
+pub enum DtlsSrtpCreateError {
+    #[error("Failed to create Ssl: {0}")]
+    NewSsl(#[source] openssl::error::ErrorStack),
+    #[error("Failed to set MTU: {0}")]
+    SetMtu(#[source] openssl::error::ErrorStack),
+    #[error("Failed to create SslStream: {0}")]
+    NewSslStream(#[source] openssl::error::ErrorStack),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DtlsHandshakeError {
+    #[error("Error during handshake: {0}")]
+    OpenSsl(#[from] openssl::ssl::Error),
+    #[error("Failed to export keying material: {0}")]
+    ExtractingKeyingMaterial(#[from] srtp::openssl::Error),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum DtlsSetup {
+    Accept,
+    Connect,
+}
+
+pub(crate) enum DtlsState {
+    Accepting,
+    Connecting,
+    Connected {
+        inbound: srtp::Session,
+        outbound: srtp::Session,
+    },
+    Failed,
+}
+
+pub struct RtpDtlsSrtpTransport {
+    stream: SslStream<IoQueue>,
+    setup: DtlsSetup,
+    state: DtlsState,
+}
+
+impl RtpDtlsSrtpTransport {
+    pub fn new(
+        ssl_context: &SslContext,
+        fingerprints: Vec<(MessageDigest, Vec<u8>)>,
+        setup: DtlsSetup,
+    ) -> Result<Self, DtlsSrtpCreateError> {
+        let mut ssl = Ssl::new(ssl_context).map_err(DtlsSrtpCreateError::NewSsl)?;
+        ssl.set_mtu(1200).map_err(DtlsSrtpCreateError::SetMtu)?;
+
+        // Use the openssl verify callback to test the peer certificate against the fingerprints that were sent to us
+        ssl.set_verify_callback(
+            SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT,
+            move |_, x509_store| {
+                let Some(certificate) = x509_store.current_cert() else {
+                    return false;
+                };
+
+                for (digest, fingerprint) in &fingerprints {
+                    let Ok(peer_fingerprint) = certificate.digest(*digest) else {
+                        continue;
+                    };
+
+                    if peer_fingerprint.as_ref() == fingerprint {
+                        return true;
+                    }
+                }
+
+                false
+            },
+        );
+
+        let stream = SslStream::new(
+            ssl,
+            IoQueue {
+                to_read: None,
+                out: VecDeque::new(),
+            },
+        )
+        .map_err(DtlsSrtpCreateError::NewSslStream)?;
+
+        let mut this = RtpDtlsSrtpTransport {
+            stream,
+            setup,
+            state: match setup {
+                DtlsSetup::Accept => DtlsState::Accepting,
+                DtlsSetup::Connect => DtlsState::Connecting,
+            },
+        };
+
+        // Put initial handshake into the IoQueue
+        this.handshake()
+            .expect("First call to handshake must not fail");
+
+        Ok(this)
+    }
+
+    pub fn setup(&self) -> DtlsSetup {
+        self.setup
+    }
+
+    pub(crate) fn state(&mut self) -> &mut DtlsState {
+        &mut self.state
+    }
+
+    pub(crate) fn timeout(&self) -> Option<Duration> {
+        match self.state {
+            DtlsState::Accepting => Some(Duration::from_millis(100)),
+            DtlsState::Connecting => Some(Duration::from_millis(100)),
+            DtlsState::Connected { .. } => None,
+            DtlsState::Failed => None,
+        }
+    }
+
+    pub(crate) fn receive(&mut self, data: Vec<u8>) {
+        assert!(self.stream.get_mut().to_read.is_none());
+        self.stream.get_mut().to_read = Some(Cursor::new(data));
+    }
+
+    pub(crate) fn handshake(&mut self) -> Result<(), DtlsHandshakeError> {
+        let result = match self.state {
+            DtlsState::Connecting => self.stream.connect(),
+            DtlsState::Accepting => self.stream.accept(),
+            DtlsState::Connected { .. } => match self.setup {
+                DtlsSetup::Accept => self.stream.accept(),
+                DtlsSetup::Connect => self.stream.connect(),
+            },
+            DtlsState::Failed => {
+                return Ok(());
+            }
+        };
+
+        if let Err(e) = result {
+            if e.code() == ErrorCode::WANT_READ {
+                return Ok(());
+            } else {
+                self.state = DtlsState::Failed;
+                return Err(DtlsHandshakeError::OpenSsl(e));
+            }
+        }
+
+        if matches!(self.state, DtlsState::Connected { .. }) {
+            Ok(())
+        } else {
+            let (inbound, outbound) =
+                srtp::openssl::session_pair(self.stream.ssl(), Config::default())?;
+
+            self.state = DtlsState::Connected {
+                inbound: inbound.into_session(),
+                outbound: outbound.into_session(),
+            };
+
+            Ok(())
+        }
+    }
+
+    pub(crate) fn pop_to_send(&mut self) -> Option<Vec<u8>> {
+        self.stream.get_mut().out.pop_front()
+    }
+}
+
+struct IoQueue {
+    to_read: Option<Cursor<Vec<u8>>>,
+    out: VecDeque<Vec<u8>>,
+}
+
+impl Read for IoQueue {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let Some(to_read) = &mut self.to_read else {
+            return Err(io::ErrorKind::WouldBlock.into());
+        };
+
+        let result = to_read.read(buf)?;
+
+        let position = usize::try_from(to_read.position()).expect("position must fit into usize");
+
+        if position == to_read.get_ref().len() {
+            self.to_read = None;
+        }
+
+        Ok(result)
+    }
+}
+
+impl Write for IoQueue {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.out.push_back(buf.to_vec());
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+pub(crate) fn make_ssl_context() -> Result<SslContext, openssl::error::ErrorStack> {
+    let (cert, pkey) = make_ca_cert()?;
+
+    let mut ctx = SslAcceptor::mozilla_modern(SslMethod::dtls())?;
+    ctx.set_tlsext_use_srtp(srtp::openssl::SRTP_PROFILE_NAMES)?;
+    ctx.set_min_proto_version(Some(SslVersion::DTLS1_2))?;
+    ctx.set_private_key(&pkey)?;
+    ctx.set_certificate(&cert)?;
+    ctx.check_private_key()?;
+
+    Ok(ctx.build().into_context())
+}
+
+fn make_ca_cert() -> Result<(X509, PKey<Private>), ErrorStack> {
+    openssl::init();
+
+    let rsa = Rsa::generate(2048)?;
+    let pkey = PKey::from_rsa(rsa)?;
+
+    let mut cert_builder = X509::builder()?;
+    cert_builder.set_version(2)?;
+
+    let serial_number = {
+        let mut serial = BigNum::new()?;
+        serial.rand(159, MsbOption::MAYBE_ZERO, false)?;
+        serial.to_asn1_integer()?
+    };
+    cert_builder.set_serial_number(&serial_number)?;
+
+    cert_builder.set_pubkey(&pkey)?;
+    cert_builder.set_not_before(Asn1Time::days_from_now(0)?.as_ref())?;
+    cert_builder.set_not_after(Asn1Time::days_from_now(7)?.as_ref())?;
+
+    let mut x509_name = X509Name::builder()?;
+    x509_name.append_entry_by_nid_with_type(Nid::COMMONNAME, "ezk", Asn1Type::UTF8STRING)?;
+    let x509_name = x509_name.build();
+
+    cert_builder.set_subject_name(&x509_name)?;
+    cert_builder.set_issuer_name(&x509_name)?;
+
+    cert_builder.sign(&pkey, MessageDigest::sha256())?;
+    let cert = cert_builder.build();
+
+    Ok((cert, pkey))
+}

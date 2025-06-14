@@ -14,4 +14,3 @@ workspace = true
 bytes = "1"
 rtcp-types = "0.1"
 rtp-types = "0.1"
-time = "0.3"

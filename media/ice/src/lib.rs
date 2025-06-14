@@ -39,6 +39,7 @@ pub struct ReceivedPkt<D = Vec<u8>> {
 
 /// Component of the data stream
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
 pub enum Component {
     /// The RTP component of the data stream. This will also contain RTCP if rtcp-mux is enabled.
     Rtp = 1,

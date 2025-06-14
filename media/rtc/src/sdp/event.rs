@@ -1,17 +1,62 @@
-use crate::{codecs::NegotiatedCodec, LocalMediaId, MediaId, TransportId};
+use crate::{
+    sdp::{TransportId, local_media::LocalMediaId, media::MediaId},
+    rtp_transport::TransportConnectionState,
+};
 use ice::{Component, IceConnectionState, IceGatheringState};
 use rtp::RtpPacket;
 use sdp_types::Direction;
-use std::net::{IpAddr, SocketAddr};
+use std::{
+    borrow::Cow,
+    net::{IpAddr, SocketAddr},
+};
 
-/// New media line was added to the session
+/// New media stream was added to the session
 #[derive(Debug)]
 pub struct MediaAdded {
+    /// Internal opaque id to reference the newly added media. Used in the [`SdpSession`](super::SdpSession)'s API.
+    ///
+    /// May or may not reflect the `mid` of the media.
     pub id: MediaId,
+    /// Opaque id of the transport used for the media
     pub transport_id: TransportId,
+    /// ID of the local media-type configuration
     pub local_media_id: LocalMediaId,
+    /// Local SDP direction used for the media, should be used to find out if theres a receiver or sender.
     pub direction: Direction,
+    /// The negotiated codec configuration
     pub codec: NegotiatedCodec,
+}
+
+/// Part of the [`MediaAdded`] event.
+///
+/// Contains the send & receive Codec information of the media stream
+#[derive(Debug, Clone)]
+pub struct NegotiatedCodec {
+    /// Payload type which must be used when sending media with this codec
+    pub send_pt: u8,
+    /// Payload type expected in the received RTP packets
+    pub recv_pt: u8,
+    /// Encoding name of the codec
+    pub name: Cow<'static, str>,
+    /// Clock-rate of the codec
+    pub clock_rate: u32,
+    /// Number of channels of the codec (usually only used for audio)
+    pub channels: Option<u32>,
+    /// FMTP line set in the local SDP. Sets expectations for the data that is received from the peer.
+    pub send_fmtp: Option<String>,
+    /// FMTP line set in the remote SDP. Should be used to configure the local encoder.
+    pub recv_fmtp: Option<String>,
+    /// Optional DTMF configuration if configured and then successfully negotiated.
+    pub dtmf: Option<NegotiatedDtmf>,
+}
+
+/// Part of [`MediaAdded`] & [`NegotiatedCodec`]. Contains the configuration for DTMF in a media stream.
+#[derive(Debug, Clone)]
+pub struct NegotiatedDtmf {
+    /// Payload type used for DTMF RTP packets
+    pub pt: u8,
+    /// FMTP line for telephone-event
+    pub fmtp: Option<String>,
 }
 
 /// Existing media has changed
@@ -52,9 +97,9 @@ pub struct TransportConnectionStateChanged {
     pub new: TransportConnectionState,
 }
 
-/// Session event returned by [`SdpSession::pop_event`](crate::SdpSession::pop_event)
+/// Session event returned by [`SdpSession::pop_event`](super::SdpSession::pop_event)
 #[derive(Debug)]
-pub enum Event {
+pub enum SdpSessionEvent {
     /// See [`MediaAdded`]
     MediaAdded(MediaAdded),
     /// See [`MediaChanged`]
@@ -81,34 +126,8 @@ pub enum Event {
     /// Receive RTP on a track
     ReceiveRTP {
         media_id: MediaId,
-        packet: RtpPacket,
+        rtp_packet: RtpPacket,
     },
-}
-
-/// Connection state of a transport
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TransportConnectionState {
-    /// The transport has just been created
-    New,
-
-    /// # DTLS-SRTP
-    ///
-    /// DTLS is in the process of negotiating a secure connection and verifying the remote fingerprint.
-    Connecting,
-
-    /// # DTLS-SRTP
-    ///
-    /// DTLS has completed negotiation of a secure connection and verified the remote fingerprint.
-    ///
-    /// # RTP or SDES-SRTP
-    ///
-    /// This state is reached as soon as the SDP exchange has concluded or (if used) the ICE agent has established a connection.
-    Connected,
-
-    /// # DTLS-SRTP
-    ///
-    /// The transport has failed as the result of an error (such as receipt of an error alert or failure to validate the remote fingerprint).
-    Failed,
 }
 
 /// Transport changes that have to be made before continuing with SDP negotiation.
@@ -127,30 +146,4 @@ pub enum TransportChange {
     Remove(TransportId),
     /// Remove the RTCP socket of the given transport.
     RemoveRtcpSocket(TransportId),
-}
-
-// TODO; can this be removed because it too complex for something so simple
-pub(crate) struct TransportRequiredChanges<'a> {
-    pub(crate) id: TransportId,
-    pub(crate) changes: &'a mut Vec<TransportChange>,
-}
-
-impl<'a> TransportRequiredChanges<'a> {
-    pub(crate) fn new(id: TransportId, changes: &'a mut Vec<TransportChange>) -> Self {
-        Self { id, changes }
-    }
-
-    pub(crate) fn require_socket(&mut self) {
-        self.changes.push(TransportChange::CreateSocket(self.id))
-    }
-
-    pub(crate) fn require_socket_pair(&mut self) {
-        self.changes
-            .push(TransportChange::CreateSocketPair(self.id))
-    }
-
-    pub(crate) fn remove_rtcp_socket(&mut self) {
-        self.changes
-            .push(TransportChange::RemoveRtcpSocket(self.id));
-    }
 }

@@ -1,14 +1,10 @@
 use bytes::Bytes;
 
 mod extensions;
-mod ntp_timestamp;
 mod rtp_packet;
-mod session;
 
 pub use extensions::{parse_extensions, RtpExtensionsWriter};
-pub use ntp_timestamp::NtpTimestamp;
 pub use rtp_packet::{RtpExtensionIds, RtpExtensions, RtpPacket};
-pub use session::RtpSession;
 
 pub use rtcp_types;
 pub use rtp_types;

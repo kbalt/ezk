@@ -1,17 +1,16 @@
-use futures_util::ready;
 use quinn_udp::{RecvMeta, Transmit, UdpSockRef, UdpSocketState};
 use std::{
     collections::VecDeque,
     io::{self, IoSliceMut},
     net::{IpAddr, SocketAddr},
-    task::{Context, Poll},
+    task::{Context, Poll, ready},
 };
 use tokio::{
     io::{Interest, ReadBuf},
     net::UdpSocket,
 };
 
-pub(crate) struct Socket {
+pub(super) struct Socket {
     state: UdpSocketState,
     socket: UdpSocket,
     local_addr: SocketAddr,
@@ -19,17 +18,18 @@ pub(crate) struct Socket {
 }
 
 impl Socket {
-    pub(crate) fn new(socket: UdpSocket) -> Self {
-        let local_addr = socket.local_addr().unwrap();
-        Self {
-            state: UdpSocketState::new((&socket).into()).unwrap(),
+    pub(super) fn new(socket: UdpSocket) -> io::Result<Self> {
+        let local_addr = socket.local_addr()?;
+
+        Ok(Self {
+            state: UdpSocketState::new((&socket).into())?,
             socket,
             local_addr,
             to_send: VecDeque::new(),
-        }
+        })
     }
 
-    pub(crate) fn enqueue(&mut self, data: Vec<u8>, source: Option<IpAddr>, target: SocketAddr) {
+    pub(super) fn enqueue(&mut self, data: Vec<u8>, source: Option<IpAddr>, target: SocketAddr) {
         self.to_send.push_back((data, source, target));
 
         if self.to_send.len() > 100 {
@@ -39,8 +39,8 @@ impl Socket {
         }
     }
 
-    pub(crate) fn send_pending(&mut self, cx: &mut Context<'_>) {
-        'outer: while let Some((data, source, target)) = self.to_send.front() {
+    pub(super) fn send_pending(&mut self, cx: &mut Context<'_>) {
+        'outer: while let Some((data, source, destination)) = self.to_send.front() {
             // Loop makes sure that the waker is registered with the runtime,
             // if poll_send_ready returns Ready but send returns WouldBlock
             loop {
@@ -54,7 +54,7 @@ impl Socket {
                     self.state.send(
                         udp_ref,
                         &Transmit {
-                            destination: *target,
+                            destination: *destination,
                             ecn: None,
                             contents: data,
                             segment_size: None,
@@ -72,7 +72,7 @@ impl Socket {
         }
     }
 
-    pub(crate) fn poll_recv_from(
+    pub(super) fn poll_recv_from(
         &mut self,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,

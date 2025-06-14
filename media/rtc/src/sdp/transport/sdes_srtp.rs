@@ -1,39 +1,44 @@
-use base64::{prelude::BASE64_STANDARD, Engine};
+use crate::rtp_transport::RtpSdesSrtpTransport;
+use base64::{Engine, prelude::BASE64_STANDARD};
 use rand::RngCore;
 use sdp_types::{
     SrtpCrypto, SrtpKeyingMaterial,
     SrtpSuite::{self, *},
 };
 use srtp::CryptoPolicy;
-use std::io;
+
+const SUITES: [SrtpSuite; 4] = [
+    AES_256_CM_HMAC_SHA1_80,
+    AES_256_CM_HMAC_SHA1_32,
+    AES_CM_128_HMAC_SHA1_80,
+    AES_CM_128_HMAC_SHA1_32,
+];
+
+#[derive(Debug, thiserror::Error)]
+pub enum SdesSrtpNegotiationError {
+    #[error("Offer does not contain any compatible crypto suite")]
+    NoCompatibleSrtpSuite,
+    #[error("Failed to decode base64 key in crypto attribute")]
+    InvalidBas64(#[from] base64::DecodeError),
+    #[error("Failed to create SRTP session")]
+    CreateSrtpSession(#[from] srtp::Error),
+}
 
 pub(super) fn negotiate_from_offer(
     remote_crypto: &[SrtpCrypto],
-) -> io::Result<(Vec<SrtpCrypto>, srtp::Session, srtp::Session)> {
-    let choice1 = remote_crypto
+) -> Result<RtpSdesSrtpTransport, SdesSrtpNegotiationError> {
+    let crypto = SUITES
         .iter()
-        .find(|c| c.suite == AES_256_CM_HMAC_SHA1_80 && !c.keys.is_empty());
-    let choice2 = remote_crypto
-        .iter()
-        .find(|c| c.suite == AES_256_CM_HMAC_SHA1_32 && !c.keys.is_empty());
-    let choice3 = remote_crypto
-        .iter()
-        .find(|c| c.suite == AES_CM_128_HMAC_SHA1_80 && !c.keys.is_empty());
-    let choice4 = remote_crypto
-        .iter()
-        .find(|c| c.suite == AES_CM_128_HMAC_SHA1_32 && !c.keys.is_empty());
+        .find_map(|suite| {
+            remote_crypto
+                .iter()
+                .find(|c| c.suite == *suite && !c.keys.is_empty())
+        })
+        .ok_or(SdesSrtpNegotiationError::NoCompatibleSrtpSuite)?;
 
-    let crypto = choice1
-        .or(choice2)
-        .or(choice3)
-        .or(choice4)
-        .ok_or_else(|| io::Error::other("No compatible srtp suite found"))?;
+    let recv_key = BASE64_STANDARD.decode(&crypto.keys[0].key_and_salt)?;
 
-    let recv_key = BASE64_STANDARD
-        .decode(&crypto.keys[0].key_and_salt)
-        .map_err(io::Error::other)?;
-
-    let suite = srtp_suite_to_policy(&crypto.suite).unwrap();
+    let suite = srtp_suite_to_policy(&crypto.suite).expect("Previously checked the suite");
 
     let mut send_key = vec![0u8; suite.key_len()];
     rand::rng().fill_bytes(&mut send_key);
@@ -43,19 +48,16 @@ pub(super) fn negotiate_from_offer(
         rtcp: suite,
         key: &recv_key,
         ..Default::default()
-    })
-    .unwrap();
-
+    })?;
     let outbound = srtp::Session::with_outbound_template(srtp::StreamPolicy {
         rtp: suite,
         rtcp: suite,
         key: &send_key,
         ..Default::default()
-    })
-    .unwrap();
+    })?;
 
-    Ok((
-        vec![SrtpCrypto {
+    Ok(RtpSdesSrtpTransport::new(
+        SrtpCrypto {
             tag: crypto.tag,
             suite: crypto.suite.clone(),
             keys: vec![SrtpKeyingMaterial {
@@ -64,10 +66,10 @@ pub(super) fn negotiate_from_offer(
                 mki: None,
             }],
             params: vec![],
-        }],
+        },
         inbound,
         outbound,
-    ))
+    )?)
 }
 
 pub(super) struct SdesSrtpOffer {
@@ -78,12 +80,7 @@ impl SdesSrtpOffer {
     pub(super) fn new() -> Self {
         let mut keys = vec![];
 
-        for suite in [
-            AES_256_CM_HMAC_SHA1_80,
-            AES_256_CM_HMAC_SHA1_32,
-            AES_CM_128_HMAC_SHA1_80,
-            AES_CM_128_HMAC_SHA1_32,
-        ] {
+        for suite in SUITES {
             let policy = srtp_suite_to_policy(&suite).expect("only using known working suites");
 
             let mut send_key = vec![0u8; policy.key_len()];
@@ -115,55 +112,53 @@ impl SdesSrtpOffer {
     pub(super) fn receive_answer(
         self,
         remote_crypto: &[SrtpCrypto],
-    ) -> (SrtpCrypto, srtp::Session, srtp::Session) {
-        for (tag, (suite, send_key)) in self.keys.into_iter().enumerate() {
-            let tag = tag as u32 + 1;
+    ) -> Result<RtpSdesSrtpTransport, SdesSrtpNegotiationError> {
+        for (index, (suite, send_key)) in self.keys.into_iter().enumerate() {
+            let tag = index as u32 + 1;
 
-            for crypto in remote_crypto {
-                if crypto.tag != tag {
-                    continue;
-                }
+            let Some(crypto) = remote_crypto
+                .iter()
+                .find(|c| c.tag == tag && c.suite == suite)
+            else {
+                continue;
+            };
 
-                if crypto.suite != suite {
-                    continue;
-                }
+            let recv_key = BASE64_STANDARD.decode(&crypto.keys[0].key_and_salt)?;
 
-                let recv_key = BASE64_STANDARD
-                    .decode(&crypto.keys[0].key_and_salt)
-                    .unwrap();
+            let local_sdp_crypto = SrtpCrypto {
+                tag,
+                suite: suite.clone(),
+                keys: vec![SrtpKeyingMaterial {
+                    key_and_salt: BASE64_STANDARD.encode(&send_key).into(),
+                    lifetime: None,
+                    mki: None,
+                }],
+                params: vec![],
+            };
 
-                let crypto_attr = SrtpCrypto {
-                    tag,
-                    suite: suite.clone(),
-                    keys: vec![SrtpKeyingMaterial {
-                        key_and_salt: BASE64_STANDARD.encode(&send_key).into(),
-                        lifetime: None,
-                        mki: None,
-                    }],
-                    params: vec![],
-                };
+            let crypto_policy = srtp_suite_to_policy(&suite).expect("suite is one we offered");
+            let inbound = srtp::Session::with_inbound_template(srtp::StreamPolicy {
+                rtp: crypto_policy,
+                rtcp: crypto_policy,
+                key: &recv_key,
+                ..Default::default()
+            })?;
 
-                let suite = srtp_suite_to_policy(&suite).unwrap();
-                let inbound = srtp::Session::with_inbound_template(srtp::StreamPolicy {
-                    rtp: suite,
-                    rtcp: suite,
-                    key: &recv_key,
-                    ..Default::default()
-                })
-                .unwrap();
-                let outbound = srtp::Session::with_outbound_template(srtp::StreamPolicy {
-                    rtp: suite,
-                    rtcp: suite,
-                    key: &send_key,
-                    ..Default::default()
-                })
-                .unwrap();
+            let outbound = srtp::Session::with_outbound_template(srtp::StreamPolicy {
+                rtp: crypto_policy,
+                rtcp: crypto_policy,
+                key: &send_key,
+                ..Default::default()
+            })?;
 
-                return (crypto_attr, inbound, outbound);
-            }
+            return Ok(RtpSdesSrtpTransport::new(
+                local_sdp_crypto,
+                inbound,
+                outbound,
+            )?);
         }
 
-        todo!("error, no suitable crypto attribute in response")
+        Err(SdesSrtpNegotiationError::NoCompatibleSrtpSuite)
     }
 }
 

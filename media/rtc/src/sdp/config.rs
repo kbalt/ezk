@@ -1,7 +1,8 @@
+use crate::Mtu;
 use sdp_types::TransportProtocol;
 
 #[derive(Debug, Default, Clone)]
-pub struct Options {
+pub struct SdpSessionConfig {
     /// The default transport to offer the peer
     pub offer_transport: TransportType,
     /// Use ICE when making an offer
@@ -12,6 +13,8 @@ pub struct Options {
     pub rtcp_mux_policy: RtcpMuxPolicy,
     /// Policy to use when offering bundled media over a single transport
     pub bundle_policy: BundlePolicy,
+    /// Maximum allowed UDP payload size
+    pub mtu: Mtu,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -26,8 +29,8 @@ pub enum TransportType {
 }
 
 impl TransportType {
-    pub(crate) fn sdp_type(&self, avpf: bool) -> TransportProtocol {
-        if avpf {
+    pub(crate) fn sdp_type(&self, use_avpf: bool) -> TransportProtocol {
+        if use_avpf {
             match self {
                 Self::Rtp => TransportProtocol::RtpAvpf,
                 Self::SdesSrtp => TransportProtocol::RtpSavpf,
@@ -55,8 +58,6 @@ pub enum RtcpMuxPolicy {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum BundlePolicy {
-    // TODO: does Balanced really need to be a thing?
-    // Balanced,
     /// Offer media bundling, but have a fallback transport ready if the peer does not support bundling
     #[default]
     MaxCompat,

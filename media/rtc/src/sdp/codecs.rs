@@ -1,17 +1,6 @@
 use sdp_types::MediaType;
 use std::borrow::Cow;
 
-#[derive(Debug, Clone)]
-pub struct NegotiatedCodec {
-    pub send_pt: u8,
-    pub recv_pt: u8,
-    pub name: Cow<'static, str>,
-    pub clock_rate: u32,
-    pub channels: Option<u32>,
-    pub send_fmtp: Option<String>,
-    pub recv_fmtp: Option<String>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Codec {
     /// Either set by the codec itself if it's static, or assigned later when added to a session
@@ -73,8 +62,9 @@ impl Codec {
         self
     }
 
-    pub fn with_fmtp(mut self, fmtp: String) {
+    pub fn with_fmtp(mut self, fmtp: String) -> Self {
         self.fmtp = Some(fmtp);
+        self
     }
 
     pub fn name(&self) -> &str {
@@ -98,8 +88,8 @@ impl Codecs {
         }
     }
 
-    pub fn allow_dtmf(mut self, dtmf: bool) -> Self {
-        self.allow_dtmf = dtmf;
+    pub fn with_dtmf(mut self) -> Self {
+        self.allow_dtmf = true;
         self
     }
 
