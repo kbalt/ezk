@@ -177,7 +177,7 @@ impl InviteSession {
         }
     }
 
-    pub async fn terminate(&mut self) -> Result<TsxResponse> {
+    pub async fn terminate(&mut self) -> Result<TsxResponse, sip_core::Error> {
         let mut state = self.inner.state.lock().await;
         state.set_terminated();
 

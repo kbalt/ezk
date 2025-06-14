@@ -15,4 +15,4 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-nom = { version = "7", default-features = false, features = ["alloc"] }
+nom = "7"

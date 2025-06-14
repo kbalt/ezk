@@ -133,7 +133,7 @@ impl IncomingRequest {
 /// Layers are extensions to the endpoint.
 ///
 /// They can be added to the endpoint in the building stage bay calling
-/// [`EndpointBuilder::add_layer`], and later be accessed via [`Endpoint::layer`]s.
+/// [`EndpointBuilder::add_layer`], and later be accessed via [`Endpoint::layer`]
 #[async_trait::async_trait]
 pub trait Layer: Downcast + Send + Sync + 'static {
     /// Return a descriptive and unique name of the layer

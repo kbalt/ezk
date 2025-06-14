@@ -23,4 +23,4 @@ percent-encoding = "2"
 bytes = "1"
 anyhow = "1"
 lazy_static = "1"
-nom = { version = "7", default-features = false, features = ["alloc"] }
+nom = "7"

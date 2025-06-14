@@ -9,6 +9,7 @@ use internal::IResult;
 use nom::branch::alt;
 use nom::bytes::complete::{tag, tag_no_case, take_while};
 use nom::combinator::{map, map_res, opt};
+use nom::error::context;
 use nom::sequence::{preceded, terminated, tuple};
 use percent_encoding::{percent_decode_str, percent_encode, AsciiSet};
 use std::borrow::Cow;
@@ -153,6 +154,7 @@ fn password(c: char) -> bool {
 impl Parse for SipUri {
     fn parse(src: &Bytes) -> impl Fn(&str) -> IResult<&str, Self> + '_ {
         move |i| {
+            context("parsing sip uri",
             map_res(
                 tuple((
                     parse_scheme,
@@ -172,7 +174,7 @@ impl Parse for SipUri {
                         header_params,
                     })
                 },
-            )(i)
+            ))(i)
         }
     }
 }
