@@ -1,11 +1,11 @@
+use crate::Name;
 use crate::header::headers::OneOrMore;
 use crate::header::{ConstNamed, ExtendValues, HeaderParse};
 use crate::method::Method;
 use crate::parse::Parse;
 use crate::print::PrintCtx;
-use crate::Name;
 use bytes::Bytes;
-use internal::{ws, IResult};
+use internal::{IResult, ws};
 use nom::character::complete::digit1;
 use nom::combinator::{map, map_res};
 use std::fmt;

@@ -5,7 +5,7 @@ members = ["sip/*", "media/*", "examples"]
 
 [workspace.package]
 authors = ["kbalt"]
-edition = "2021"
+edition = "2024"
 license = "MIT"
 repository = "https://github.com/kbalt/ezk"
 

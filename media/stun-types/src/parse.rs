@@ -1,6 +1,6 @@
 use crate::attributes::{Attribute, Fingerprint, MessageIntegrity, MessageIntegritySha256};
 use crate::header::{Class, MessageHead, Method};
-use crate::{padding_usize, Error, TransactionId, COOKIE, NE};
+use crate::{COOKIE, Error, NE, TransactionId, padding_usize};
 use byteorder::ReadBytesExt;
 use bytes::Buf;
 use std::convert::TryFrom;

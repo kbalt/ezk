@@ -3,8 +3,8 @@
 use crate::{ice_char, not_whitespace, probe_host6};
 use bytes::Bytes;
 use bytesstr::BytesStr;
-use internal::{ws, IResult};
-use nom::bytes::complete::{tag, take_while, take_while1, take_while_m_n};
+use internal::{IResult, ws};
+use nom::bytes::complete::{tag, take_while, take_while_m_n, take_while1};
 use nom::character::complete::digit1;
 use nom::combinator::{map, map_res};
 use nom::error::context;

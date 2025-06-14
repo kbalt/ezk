@@ -2,7 +2,7 @@ use crate::host::HostPort;
 use crate::method::Method;
 use crate::parse::Parse;
 use crate::print::{AppendCtx, Print, PrintCtx, UriContext};
-use crate::uri::params::{Params, CPS, HPS};
+use crate::uri::params::{CPS, HPS, Params};
 use bytes::Bytes;
 use bytesstr::BytesStr;
 use internal::IResult;
@@ -11,7 +11,7 @@ use nom::bytes::complete::{tag, tag_no_case, take_while};
 use nom::combinator::{map, map_res, opt};
 use nom::error::context;
 use nom::sequence::{preceded, terminated, tuple};
-use percent_encoding::{percent_decode_str, percent_encode, AsciiSet};
+use percent_encoding::{AsciiSet, percent_decode_str, percent_encode};
 use std::borrow::Cow;
 use std::fmt;
 use std::str::Utf8Error;
@@ -120,7 +120,7 @@ impl Print for SipUri {
                 .uri_params
                 .filtered_print(|name| !matches!(name, "maddr" | "ttl" | "transport" | "lr"))
                 .fmt(f),
-            (Some(UriContext::Contact), Some(&Method::REGISTER /* TODO: METHOD::REDIRECT */)) => {
+            (Some(UriContext::Contact), &Some(&Method::REGISTER /* TODO: METHOD::REDIRECT */)) => {
                 self.uri_params
                     .filtered_print(|name| !matches!(name, "lr"))
                     .fmt(f)?;

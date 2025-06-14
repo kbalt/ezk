@@ -1,8 +1,8 @@
-use super::{Attribute, ATTRIBUTE_HEADER_LEN};
+use super::{ATTRIBUTE_HEADER_LEN, Attribute};
+use crate::Error;
 use crate::builder::MessageBuilder;
 use crate::header::STUN_HEADER_LENGTH;
 use crate::parse::{AttrSpan, Message};
-use crate::Error;
 use hmac::digest::core_api::BlockSizeUser;
 use hmac::digest::{Digest, Update};
 use hmac::{Mac, SimpleHmac};
@@ -143,11 +143,11 @@ mod test {
     use super::{
         MessageIntegrity, MessageIntegrityKey, MessageIntegritySha256, MessageIntegritySha256Key,
     };
+    use crate::TransactionId;
     use crate::attributes::Software;
     use crate::builder::MessageBuilder;
     use crate::header::{Class, Method};
     use crate::parse::Message;
-    use crate::TransactionId;
 
     #[test]
     fn selftest_sha1() {

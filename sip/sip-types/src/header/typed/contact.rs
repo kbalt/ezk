@@ -2,8 +2,8 @@ use crate::header::headers::OneOrMore;
 use crate::header::name::Name;
 use crate::header::{ConstNamed, ExtendValues, HeaderParse};
 use crate::print::{AppendCtx, Print, PrintCtx, UriContext};
-use crate::uri::params::{Params, CPS};
 use crate::uri::NameAddr;
+use crate::uri::params::{CPS, Params};
 use bytes::Bytes;
 use internal::IResult;
 use nom::combinator::map;
@@ -68,8 +68,8 @@ impl Print for Contact {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::uri::SipUri;
     use crate::Headers;
+    use crate::uri::SipUri;
 
     fn test_contact() -> Contact {
         let uri: SipUri = "sip:example.org".parse().unwrap();

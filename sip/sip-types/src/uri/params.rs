@@ -1,13 +1,13 @@
 use crate::parse::parse_quoted;
 use bytes::Bytes;
 use bytesstr::BytesStr;
-use internal::ws;
 use internal::IResult;
+use internal::ws;
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_while};
 use nom::combinator::{map, map_res, opt};
 use nom::multi::many0;
-use percent_encoding::{percent_decode, percent_encode, AsciiSet};
+use percent_encoding::{AsciiSet, percent_decode, percent_encode};
 use std::borrow::Cow;
 use std::fmt;
 use std::marker::PhantomData;

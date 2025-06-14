@@ -1,4 +1,4 @@
-use super::{Attribute, ATTRIBUTE_HEADER_LEN};
+use super::{ATTRIBUTE_HEADER_LEN, Attribute};
 use crate::builder::MessageBuilder;
 use crate::header::STUN_HEADER_LENGTH;
 use crate::parse::{AttrSpan, Message};

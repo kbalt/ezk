@@ -1,10 +1,10 @@
 use crate::connection::Connection;
 use crate::media::Media;
-use crate::{bandwidth::Bandwidth, Rtcp};
 use crate::{
     Direction, ExtMap, Fingerprint, Fmtp, IceCandidate, IcePassword, IceUsernameFragment,
     MediaType, RtpMap, Setup, SrtpCrypto, Ssrc, TransportProtocol, UnknownAttribute,
 };
+use crate::{Rtcp, bandwidth::Bandwidth};
 use bytesstr::BytesStr;
 use std::fmt::{self, Debug};
 

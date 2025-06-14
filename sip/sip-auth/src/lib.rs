@@ -1,5 +1,5 @@
-use sip_types::msg::{RequestLine, StatusLine};
 use sip_types::Headers;
+use sip_types::msg::{RequestLine, StatusLine};
 use std::error::Error;
 use std::fmt::Debug;
 

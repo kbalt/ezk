@@ -1,8 +1,8 @@
 //! Utility functions for openh264
 
 use crate::{
-    profile_level_id::ProfileLevelId, FmtpOptions, H264EncoderConfig, Level, PacketizationMode,
-    Profile,
+    FmtpOptions, H264EncoderConfig, Level, PacketizationMode, Profile,
+    profile_level_id::ProfileLevelId,
 };
 use openh264::encoder::{BitRate, IntraFramePeriod, QpRange};
 use openh264_sys2::API as _;

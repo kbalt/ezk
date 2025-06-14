@@ -1,4 +1,4 @@
-use crate::transport::parse::{parse_complete, CompleteItem};
+use crate::transport::parse::{CompleteItem, parse_complete};
 use crate::transport::{Direction, ReceivedMessage, TpHandle, Transport};
 use crate::{Endpoint, EndpointBuilder, Result};
 use std::net::SocketAddr;

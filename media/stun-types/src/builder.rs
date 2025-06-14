@@ -1,6 +1,6 @@
 use crate::attributes::Attribute;
 use crate::header::{Class, MessageHead, Method, STUN_HEADER_LENGTH};
-use crate::{padding_u16, padding_usize, TransactionId, COOKIE};
+use crate::{COOKIE, TransactionId, padding_u16, padding_usize};
 use bytes::BufMut;
 
 /// Builder for a STUN message

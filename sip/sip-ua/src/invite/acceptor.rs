@@ -1,7 +1,7 @@
 use super::session::InviteSession;
 use super::timer::{AcceptorTimerConfig, SessionTimer};
 use super::{AwaitedAck, AwaitedPrack, Inner, InviteLayer};
-use crate::dialog::{register_usage, Dialog, UsageGuard};
+use crate::dialog::{Dialog, UsageGuard, register_usage};
 use crate::invite::session::Role;
 use crate::invite::{InviteSessionState, InviteUsage};
 use crate::util::random_sequence_number;
@@ -13,7 +13,7 @@ use sip_core::{Endpoint, IncomingRequest, Result};
 use sip_types::header::typed::{RSeq, Require, Supported};
 use sip_types::{Method, StatusCode};
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot, Mutex, Notify};
+use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 use tokio::time::timeout;
 
 #[derive(Debug, thiserror::Error)]

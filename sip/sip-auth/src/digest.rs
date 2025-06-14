@@ -1,11 +1,11 @@
 use crate::{ClientAuthenticator, RequestParts, ResponseParts};
 use bytesstr::BytesStr;
 use sha2::Digest;
+use sip_types::header::HeaderError;
 use sip_types::header::typed::{
     Algorithm, AlgorithmValue, AuthChallenge, DigestChallenge, DigestResponse, QopOption,
     QopResponse, Username,
 };
-use sip_types::header::HeaderError;
 use sip_types::print::{AppendCtx, PrintCtx, UriContext};
 use sip_types::{Headers, Name};
 use std::collections::HashMap;
@@ -544,10 +544,10 @@ type HashFn = fn(&[u8]) -> String;
 mod test {
     use super::*;
     use sip_types::{
+        Headers, Method, Name, StatusCode,
         header::typed::AuthResponse,
         msg::{RequestLine, StatusLine},
         uri::SipUri,
-        Headers, Method, Name, StatusCode,
     };
 
     fn test_authenticator() -> DigestAuthenticator {

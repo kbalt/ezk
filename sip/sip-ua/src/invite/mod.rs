@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::mem::replace;
 use std::sync::Arc;
 use tokio::sync::mpsc::error::SendError;
-use tokio::sync::{mpsc, oneshot, Mutex, Notify};
+use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 use tokio::time::timeout;
 
 pub mod acceptor;

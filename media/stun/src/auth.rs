@@ -1,7 +1,7 @@
 use stun_types::attributes::{
-    long_term_password_md5, long_term_password_sha256, MessageIntegrity, MessageIntegrityKey,
-    MessageIntegritySha256, MessageIntegritySha256Key, Nonce, PasswordAlgorithm, Realm, Username,
-    ALGORITHM_MD5, ALGORITHM_SHA256,
+    ALGORITHM_MD5, ALGORITHM_SHA256, MessageIntegrity, MessageIntegrityKey, MessageIntegritySha256,
+    MessageIntegritySha256Key, Nonce, PasswordAlgorithm, Realm, Username, long_term_password_md5,
+    long_term_password_sha256,
 };
 use stun_types::{Message, MessageBuilder};
 

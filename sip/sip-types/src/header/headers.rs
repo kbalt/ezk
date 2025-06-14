@@ -4,7 +4,7 @@ use crate::print::{AppendCtx, Print, PrintCtx};
 use bytesstr::BytesStr;
 use internal::verbose_error_to_owned;
 use nom::Finish;
-use std::iter::{once, FromIterator};
+use std::iter::{FromIterator, once};
 use std::mem::take;
 use std::{fmt, slice};
 

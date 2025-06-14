@@ -1,10 +1,10 @@
+use crate::Name;
 use crate::header::headers::OneOrMore;
 use crate::header::{ConstNamed, ExtendValues, HeaderParse};
 use crate::print::PrintCtx;
-use crate::Name;
 use bytes::Bytes;
 use bytesstr::BytesStr;
-use internal::{identity, IResult};
+use internal::{IResult, identity};
 use nom::combinator::map;
 
 /// `Call-ID`header

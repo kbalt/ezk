@@ -104,7 +104,9 @@ mod test {
 
     #[test]
     fn fingerprint() {
-        let input = BytesStr::from_static("SHA-256 D7:87:8B:B1:29:F2:19:E4:D3:06:C9:66:32:58:2C:65:4E:3E:81:3B:EC:CE:26:8C:4D:71:8A:B5:49:E0:8E:94");
+        let input = BytesStr::from_static(
+            "SHA-256 D7:87:8B:B1:29:F2:19:E4:D3:06:C9:66:32:58:2C:65:4E:3E:81:3B:EC:CE:26:8C:4D:71:8A:B5:49:E0:8E:94",
+        );
 
         let (rem, fingerprint) = Fingerprint::parse(input.as_ref(), &input).unwrap();
 

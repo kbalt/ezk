@@ -1,7 +1,7 @@
-use crate::{not_whitespace, TaggedAddress};
+use crate::{TaggedAddress, not_whitespace};
 use bytes::Bytes;
 use bytesstr::BytesStr;
-use internal::{ws, IResult};
+use internal::{IResult, ws};
 use nom::bytes::complete::take_while;
 use nom::combinator::map;
 use nom::error::context;

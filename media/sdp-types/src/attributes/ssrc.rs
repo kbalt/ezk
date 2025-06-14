@@ -6,7 +6,7 @@ use internal::IResult;
 use nom::{
     branch::alt,
     bytes::complete::{is_not, tag, take_while1},
-    character::complete::{char, u32, u8},
+    character::complete::{char, u8, u32},
     combinator::{map, opt},
     error::context,
     sequence::{preceded, separated_pair, tuple},

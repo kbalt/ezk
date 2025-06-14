@@ -3,8 +3,8 @@ use crate::util::{random_sequence_number, random_string};
 use bytesstr::BytesStr;
 use sip_core::transport::{OutgoingResponse, TargetTransportInfo};
 use sip_core::{Endpoint, IncomingRequest, Request, Result};
-use sip_types::header::typed::{CSeq, CallID, Contact, FromTo, MaxForwards, Routing};
 use sip_types::header::HeaderError;
+use sip_types::header::typed::{CSeq, CallID, Contact, FromTo, MaxForwards, Routing};
 use sip_types::{Method, Name, StatusCode};
 use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::sync::Mutex;
@@ -15,7 +15,7 @@ mod layer;
 
 pub use client_builder::ClientDialogBuilder;
 pub use key::DialogKey;
-pub use layer::{register_usage, DialogLayer, Usage, UsageGuard};
+pub use layer::{DialogLayer, Usage, UsageGuard, register_usage};
 
 #[derive(Debug)]
 pub struct Dialog {

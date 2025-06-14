@@ -6,11 +6,11 @@ use std::{
     time::{Duration, Instant},
 };
 use stun_types::{
+    Class, Message, MessageBuilder, Method, TransactionId,
     attributes::{
         ErrorCode, Fingerprint, IceControlled, IceControlling, MessageIntegrity,
         MessageIntegrityKey, Priority, UseCandidate, Username, XorMappedAddress,
     },
-    Class, Message, MessageBuilder, Method, TransactionId,
 };
 
 pub(crate) struct StunConfig {

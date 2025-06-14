@@ -4,10 +4,10 @@ use bytes::Bytes;
 use bytesstr::BytesStr;
 use parking_lot::lock_api::MutexGuard;
 use parking_lot::{MappedMutexGuard, Mutex};
-use sip_types::msg::{MessageLine, StatusLine};
 use sip_types::Headers;
-use std::collections::hash_map::Entry;
+use sip_types::msg::{MessageLine, StatusLine};
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use tokio::sync::mpsc;
 
 mod client;
@@ -109,7 +109,7 @@ pub struct TsxMessage {
 
 fn generate_branch() -> BytesStr {
     use rand::distr::Alphanumeric;
-    use rand::{rng, Rng};
+    use rand::{Rng, rng};
 
     consts::RFC3261_BRANCH_PREFIX
         .bytes()

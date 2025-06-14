@@ -3,8 +3,8 @@
 mod ws;
 
 pub type IResult<I, O> = nom::IResult<I, O, nom::error::VerboseError<I>>;
-use nom::error::VerboseError;
 pub use nom::Finish;
+use nom::error::VerboseError;
 pub use ws::ws;
 
 pub fn verbose_error_to_owned(i: VerboseError<&str>) -> VerboseError<String> {

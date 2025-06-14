@@ -2,7 +2,7 @@
 
 use bytes::Bytes;
 use bytesstr::BytesStr;
-use internal::{ws, IResult};
+use internal::{IResult, ws};
 use nom::bytes::complete::{tag, take_while};
 use nom::character::complete::digit1;
 use nom::combinator::{map, map_res, opt};

@@ -1,5 +1,5 @@
-use super::consts::T1;
 use super::TsxRegistration;
+use super::consts::T1;
 use crate::transport::OutgoingResponse;
 use crate::{IncomingRequest, Result};
 use sip_types::{CodeKind, Method};

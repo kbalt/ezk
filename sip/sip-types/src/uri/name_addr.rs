@@ -1,5 +1,5 @@
 use super::sip::SipUri;
-use crate::parse::{parse_quoted, whitespace, Parse};
+use crate::parse::{Parse, parse_quoted, whitespace};
 use crate::print::{AppendCtx, Print, PrintCtx};
 use bytes::Bytes;
 use bytesstr::BytesStr;

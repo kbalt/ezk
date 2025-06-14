@@ -8,10 +8,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{fmt, io};
-use tokio::io::{split, AsyncRead, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf, split};
 use tokio::net::ToSocketAddrs;
-use tokio::sync::{broadcast, oneshot, Mutex};
-use tokio::time::{interval, sleep, Sleep};
+use tokio::sync::{Mutex, broadcast, oneshot};
+use tokio::time::{Sleep, interval, sleep};
 use tokio_stream::StreamExt;
 use tokio_util::codec::FramedRead;
 

@@ -1,13 +1,13 @@
 use super::consts::T1;
 use super::key::TsxKey;
 use super::{TsxRegistration, TsxResponse};
+use crate::Result;
 use crate::error::Error;
 use crate::transport::{OutgoingParts, OutgoingRequest, TargetTransportInfo};
-use crate::Result;
 use crate::{Endpoint, Request};
 use bytes::Bytes;
-use sip_types::header::typed::{CSeq, MaxForwards};
 use sip_types::header::HeaderError;
+use sip_types::header::typed::{CSeq, MaxForwards};
 use sip_types::msg::RequestLine;
 use sip_types::{CodeKind, Headers, Method, Name};
 use std::time::{Duration, Instant};

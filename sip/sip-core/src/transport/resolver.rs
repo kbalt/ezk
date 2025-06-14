@@ -1,6 +1,6 @@
+use hickory_resolver::ResolveError;
 use hickory_resolver::proto::rr::rdata::{NAPTR, SRV};
 use hickory_resolver::proto::rr::{RData, RecordType};
-use hickory_resolver::ResolveError;
 use hickory_resolver::{Name, TokioResolver};
 use multimap::MultiMap;
 use std::io;

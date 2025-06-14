@@ -1,7 +1,7 @@
 use crate::{not_whitespace, slash_num};
 use bytes::Bytes;
 use bytesstr::BytesStr;
-use internal::{ws, IResult};
+use internal::{IResult, ws};
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_while1};
 use nom::character::complete::digit1;

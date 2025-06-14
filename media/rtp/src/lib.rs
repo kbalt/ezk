@@ -3,7 +3,7 @@ use bytes::Bytes;
 mod extensions;
 mod rtp_packet;
 
-pub use extensions::{parse_extensions, RtpExtensionsWriter};
+pub use extensions::{RtpExtensionsWriter, parse_extensions};
 pub use rtp_packet::{RtpExtensionIds, RtpExtensions, RtpPacket};
 
 pub use rtcp_types;

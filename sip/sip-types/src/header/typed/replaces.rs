@@ -1,14 +1,14 @@
 //! [RFC3891](https://datatracker.ietf.org/doc/html/rfc3891)
 
+use crate::Name;
 use crate::header::headers::OneOrMore;
 use crate::header::{ConstNamed, ExtendValues, HeaderParse};
 use crate::print::PrintCtx;
-use crate::uri::params::{Params, CPS};
-use crate::Name;
+use crate::uri::params::{CPS, Params};
 use anyhow::Context;
 use bytes::Bytes;
 use bytesstr::BytesStr;
-use internal::{ws, IResult};
+use internal::{IResult, ws};
 use nom::bytes::complete::take_while1;
 use nom::combinator::map_res;
 use std::fmt;

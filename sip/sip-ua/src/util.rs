@@ -1,5 +1,5 @@
 use bytesstr::BytesStr;
-use rand::{distr::Alphanumeric, rng, Rng};
+use rand::{Rng, distr::Alphanumeric, rng};
 
 pub fn random_string() -> BytesStr {
     rng()

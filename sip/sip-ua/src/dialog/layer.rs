@@ -7,7 +7,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{info_span, Instrument};
+use tracing::{Instrument, info_span};
 
 #[async_trait::async_trait]
 pub trait Usage: Send + Sync + 'static {
@@ -109,7 +109,9 @@ impl Layer for DialogLayer {
                     Ordering::Greater => {
                         // If its larger than the expected one store it inside the dialog's backlog and return.
                         dialog_entry.backlog.insert(request_cseq, request.take());
-                        log::debug!("dialog received a message with cseq value above the expected one, saving it for later");
+                        log::debug!(
+                            "dialog received a message with cseq value above the expected one, saving it for later"
+                        );
                         return;
                     }
                 }

@@ -1,23 +1,23 @@
 //! Contains SIP message parts and parser
 
+use crate::Name;
 use crate::code::StatusCode;
 use crate::method::Method;
-use crate::parse::{token, whitespace, Parse};
+use crate::parse::{Parse, token, whitespace};
 use crate::print::{AppendCtx, Print, PrintCtx};
 use crate::uri::SipUri;
-use crate::Name;
 use anyhow::Result;
 use bytes::Bytes;
 use bytesstr::BytesStr;
-use internal::ws;
 use internal::IResult;
+use internal::ws;
 use memchr::memchr2;
+use nom::AsChar;
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_while};
 use nom::character::complete::char;
 use nom::combinator::{map, map_res, opt};
 use nom::sequence::{preceded, separated_pair, terminated, tuple};
-use nom::AsChar;
 use std::fmt;
 use std::str::FromStr;
 

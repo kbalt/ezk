@@ -1,11 +1,11 @@
 use crate::util::{random_sequence_number, random_string};
-use sip_core::transaction::TsxResponse;
 use sip_core::Request;
+use sip_core::transaction::TsxResponse;
 use sip_types::header::typed::{CSeq, CallID, Contact, Expires, FromTo, MinExpires};
 use sip_types::uri::{NameAddr, SipUri};
 use sip_types::{CodeKind, Method, Name};
 use std::time::Duration;
-use tokio::time::{interval_at, Instant, Interval};
+use tokio::time::{Instant, Interval, interval_at};
 
 pub struct Registration {
     registrar: SipUri,

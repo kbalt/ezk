@@ -6,9 +6,9 @@
 //! [__Examples__](https://github.com/kbalt/ezk/tree/main/examples) can be found here
 
 use bytes::Bytes;
-use downcast_rs::{impl_downcast, Downcast};
-use sip_types::header::typed::{CSeq, CallID, FromTo, Via};
+use downcast_rs::{Downcast, impl_downcast};
 use sip_types::header::HeaderError;
+use sip_types::header::typed::{CSeq, CallID, FromTo, Via};
 use sip_types::msg::{RequestLine, StatusLine};
 use sip_types::print::AppendCtx;
 use sip_types::uri::SipUri;
@@ -114,7 +114,10 @@ impl IncomingRequest {
     #[track_caller]
     fn take_tsx_registration(&mut self) -> TsxRegistration {
         let Some(tsx) = self.tsx.take() else {
-            panic!("Tried to create transaction for {:?}, which is an already handled message or isn't a transaction creating request", self.tsx_key);
+            panic!(
+                "Tried to create transaction for {:?}, which is an already handled message or isn't a transaction creating request",
+                self.tsx_key
+            );
         };
 
         tsx

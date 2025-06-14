@@ -1,5 +1,5 @@
-use super::timer::SessionTimer;
 use super::Inner;
+use super::timer::SessionTimer;
 use crate::dialog::{Dialog, UsageGuard};
 use crate::invite::AwaitedAck;
 use sip_core::transaction::{ServerInvTsx, ServerTsx, TsxResponse};

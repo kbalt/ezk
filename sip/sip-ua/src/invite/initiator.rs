@@ -11,15 +11,15 @@ use parking_lot as pl;
 use sip_core::transaction::{ClientInvTsx, TsxResponse};
 use sip_core::transport::OutgoingRequest;
 use sip_core::{Endpoint, Error, Request};
-use sip_types::header::typed::{Contact, RSeq, Refresher, Supported};
 use sip_types::header::HeaderError;
+use sip_types::header::typed::{Contact, RSeq, Refresher, Supported};
 use sip_types::uri::{NameAddr, SipUri};
 use sip_types::{Method, Name, StatusCode};
 use std::collections::HashMap;
 use std::future::poll_fn;
 use std::sync::Arc;
-use std::task::{ready, Context, Poll};
-use tokio::sync::{mpsc, Mutex};
+use std::task::{Context, Poll, ready};
+use tokio::sync::{Mutex, mpsc};
 
 #[derive(Debug)]
 pub enum Response {

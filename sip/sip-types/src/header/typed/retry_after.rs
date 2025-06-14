@@ -3,7 +3,7 @@ use crate::header::name::Name;
 use crate::header::{ConstNamed, ExtendValues, HeaderParse};
 use crate::parse::whitespace;
 use crate::print::PrintCtx;
-use crate::uri::params::{Params, CPS};
+use crate::uri::params::{CPS, Params};
 use bytes::Bytes;
 use bytesstr::BytesStr;
 use internal::IResult;

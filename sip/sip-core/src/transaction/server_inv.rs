@@ -1,6 +1,6 @@
 use crate::error::Error;
-use crate::transaction::consts::{T1, T2};
 use crate::transaction::TsxRegistration;
+use crate::transaction::consts::{T1, T2};
 use crate::transport::OutgoingResponse;
 use crate::{IncomingRequest, Result};
 use sip_types::msg::MessageLine;

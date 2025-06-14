@@ -1,9 +1,9 @@
+use crate::Name;
 use crate::header::{ConstNamed, ExtendValues, HeaderParse, OneOrMore};
 use crate::print::{AppendCtx, Print, PrintCtx};
-use crate::uri::params::{Params, CPS};
-use crate::Name;
+use crate::uri::params::{CPS, Params};
 use bytes::Bytes;
-use internal::{ws, IResult};
+use internal::{IResult, ws};
 use nom::character::complete::alphanumeric1;
 use nom::combinator::{map, map_res};
 use std::fmt;

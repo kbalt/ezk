@@ -1,13 +1,13 @@
 use sip_core::transaction::TsxResponse;
 use sip_core::transport::OutgoingResponse;
 use sip_core::{IncomingRequest, Request};
-use sip_types::header::typed::{MinSe, Refresher, Require, SessionExpires};
-use sip_types::header::HeaderError;
 use sip_types::Name;
+use sip_types::header::HeaderError;
+use sip_types::header::typed::{MinSe, Refresher, Require, SessionExpires};
 use std::future::pending;
 use std::pin::Pin;
 use std::time::Duration;
-use tokio::time::{sleep, Sleep};
+use tokio::time::{Sleep, sleep};
 
 /// Config of the `timer` extension used by the acceptor
 pub struct AcceptorTimerConfig {

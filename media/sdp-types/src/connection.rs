@@ -1,4 +1,4 @@
-use crate::{slash_num, TaggedAddress};
+use crate::{TaggedAddress, slash_num};
 use bytes::Bytes;
 use internal::IResult;
 use nom::combinator::opt;

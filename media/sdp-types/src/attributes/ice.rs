@@ -4,7 +4,7 @@ use crate::ice_char;
 use bytes::Bytes;
 use bytesstr::BytesStr;
 use internal::IResult;
-use nom::bytes::complete::{take_while1, take_while_m_n};
+use nom::bytes::complete::{take_while_m_n, take_while1};
 use nom::combinator::map;
 use nom::error::context;
 use nom::multi::many1;

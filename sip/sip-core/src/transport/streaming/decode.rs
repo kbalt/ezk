@@ -1,11 +1,11 @@
 use crate::Result;
 use bytes::{Buf, Bytes, BytesMut};
 use internal::Finish;
+use sip_types::Headers;
 use sip_types::msg::{Line, MessageLine, PullParser};
 use sip_types::parse::Parse;
-use sip_types::Headers;
 use std::io;
-use std::str::{from_utf8, Utf8Error};
+use std::str::{Utf8Error, from_utf8};
 use tokio_util::codec::Decoder;
 
 #[derive(Debug, thiserror::Error)]

@@ -1,7 +1,7 @@
 use super::Attribute;
 use crate::builder::MessageBuilder;
 use crate::parse::{AttrSpan, Message};
-use crate::{Error, COOKIE, NE};
+use crate::{COOKIE, Error, NE};
 use byteorder::ReadBytesExt;
 use bytes::BufMut;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};

@@ -2,7 +2,7 @@
 
 use crate::TaggedAddress;
 use bytes::Bytes;
-use internal::{ws, IResult};
+use internal::{IResult, ws};
 use nom::character::complete::digit1;
 use nom::combinator::{map, map_res, opt};
 use nom::error::context;

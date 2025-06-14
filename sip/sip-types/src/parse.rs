@@ -5,11 +5,11 @@ use std::str::FromStr;
 use bytes::Bytes;
 use bytesstr::BytesStr;
 use internal::IResult;
+use nom::Finish;
 use nom::bytes::complete::{escaped, is_not};
 use nom::character::complete::char;
 use nom::error::{VerboseError, VerboseErrorKind};
 use nom::sequence::delimited;
-use nom::Finish;
 
 pub(crate) fn parse_quoted(i: &str) -> IResult<&str, &str> {
     delimited(char('"'), escaped(is_not("\""), '\\', char('"')), char('"'))(i)

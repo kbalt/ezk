@@ -2,7 +2,7 @@ use crate::header::headers::OneOrMore;
 use crate::header::name::Name;
 use crate::header::{ConstNamed, ExtendValues, HeaderParse};
 use crate::method::Method;
-use crate::parse::{whitespace, Parse};
+use crate::parse::{Parse, whitespace};
 use crate::print::PrintCtx;
 use anyhow::Result;
 use bytes::Bytes;

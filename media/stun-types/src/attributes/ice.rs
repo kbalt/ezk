@@ -1,8 +1,8 @@
 use super::Attribute;
 use crate::{
+    Error, NE,
     builder::MessageBuilder,
     parse::{AttrSpan, Message},
-    Error, NE,
 };
 use byteorder::ReadBytesExt;
 use bytes::BufMut;

@@ -67,10 +67,10 @@ impl<'s> Attribute<'s> for ErrorCode<'s> {
 #[cfg(test)]
 mod test {
     use crate::{
+        TransactionId,
         builder::MessageBuilder,
         header::{Class, Method},
         parse::Message,
-        TransactionId,
     };
 
     use super::ErrorCode;

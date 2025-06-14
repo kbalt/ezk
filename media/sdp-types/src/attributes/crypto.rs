@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use bytesstr::BytesStr;
-use internal::{ws, IResult};
+use internal::{IResult, ws};
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_while1};
 use nom::character::complete::{char, digit1};
@@ -290,11 +290,7 @@ impl SrtpKeyingMaterial {
                                 peek(not(char(':'))),
                             ),
                             |(exp, n)| {
-                                if exp.is_some() {
-                                    2u32.pow(n)
-                                } else {
-                                    n
-                                }
+                                if exp.is_some() { 2u32.pow(n) } else { n }
                             },
                         )),
                         // mki
@@ -624,6 +620,9 @@ WSH=123",
         );
         assert_eq!(c.params[7], SrtpSessionParam::WindowSizeHint(123));
 
-        assert_eq!(c.to_string(), "1 AES_CM_128_HMAC_SHA1_80 inline:d0RmdmcmVCspeEc3QGZiNWpVLFJhQX1cfHAwJSoj|2^20|1:4;inline:d0RmdmcmVCspeEc3QGZiNWpVLFJhQX1cfHAwJSoj|2^14|1:2 KDR=100 UNENCRYPTED_SRTP UNENCRYPTED_SRTCP UNAUTHENTICATED_SRTP FEC_ORDER=FEC_SRTP FEC_ORDER=SRTP_FEC FEC_KEY=inline:d0RmdmcmVCspeEc3QGZiNWpVLFJhQX1cfHAwJSoj|1:4 WSH=123");
+        assert_eq!(
+            c.to_string(),
+            "1 AES_CM_128_HMAC_SHA1_80 inline:d0RmdmcmVCspeEc3QGZiNWpVLFJhQX1cfHAwJSoj|2^20|1:4;inline:d0RmdmcmVCspeEc3QGZiNWpVLFJhQX1cfHAwJSoj|2^14|1:2 KDR=100 UNENCRYPTED_SRTP UNENCRYPTED_SRTCP UNAUTHENTICATED_SRTP FEC_ORDER=FEC_SRTP FEC_ORDER=SRTP_FEC FEC_KEY=inline:d0RmdmcmVCspeEc3QGZiNWpVLFJhQX1cfHAwJSoj|1:4 WSH=123"
+        );
     }
 }

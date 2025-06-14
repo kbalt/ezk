@@ -1,7 +1,7 @@
 use super::Attribute;
+use crate::Error;
 use crate::builder::MessageBuilder;
 use crate::parse::{AttrSpan, Message};
-use crate::Error;
 use sha1::Digest;
 use sha2::Sha256;
 use std::convert::TryFrom;

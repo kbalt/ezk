@@ -1,9 +1,9 @@
 use core::mem::replace;
 
 use super::TsxResponse;
-use crate::transaction::key::TsxKey;
-use crate::transaction::TsxMessage;
 use crate::Endpoint;
+use crate::transaction::TsxMessage;
+use crate::transaction::key::TsxKey;
 use sip_types::msg::MessageLine;
 use tokio::sync::mpsc;
 
@@ -87,7 +87,7 @@ impl TsxRegistration {
                         base_headers,
                         headers,
                         body,
-                    }
+                    };
                 }
             }
         }

@@ -30,6 +30,6 @@ pub use header::name::Name;
 #[doc(hidden)]
 pub mod _private_reexport {
     pub use bytes::Bytes;
-    pub use internal::{identity, IResult};
+    pub use internal::{IResult, identity};
     pub use nom;
 }

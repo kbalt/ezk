@@ -1,7 +1,7 @@
 use super::Attribute;
 use crate::builder::MessageBuilder;
 use crate::parse::{AttrSpan, Message};
-use crate::{padding_usize, Error, NE};
+use crate::{Error, NE, padding_usize};
 use byteorder::ReadBytesExt;
 use bytes::BufMut;
 use std::convert::TryFrom;

@@ -5,7 +5,7 @@
 use core::fmt;
 use rand::distr::{Alphanumeric, SampleString};
 use sdp_types::{IceCandidate, UntaggedAddress};
-use slotmap::{new_key_type, SlotMap};
+use slotmap::{SlotMap, new_key_type};
 use std::{
     cmp::{max, min},
     collections::VecDeque,
@@ -16,11 +16,11 @@ use std::{
 };
 use stun::{StunConfig, StunServerBinding};
 use stun_types::{
+    Class, Message, TransactionId,
     attributes::{
         ErrorCode, Fingerprint, IceControlled, IceControlling, Priority, UseCandidate,
         XorMappedAddress,
     },
-    Class, Message, TransactionId,
 };
 
 mod stun;

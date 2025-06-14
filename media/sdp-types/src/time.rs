@@ -1,5 +1,5 @@
-use internal::ws;
 use internal::IResult;
+use internal::ws;
 use nom::character::complete::digit1;
 use nom::combinator::map;
 use nom::combinator::map_res;

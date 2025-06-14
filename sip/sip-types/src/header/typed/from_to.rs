@@ -1,8 +1,8 @@
 use crate::header::headers::OneOrMore;
 use crate::header::{ExtendValues, HeaderParse};
 use crate::print::{AppendCtx, Print, PrintCtx, UriContext};
-use crate::uri::params::{Params, CPS};
 use crate::uri::NameAddr;
+use crate::uri::params::{CPS, Params};
 use bytes::Bytes;
 use bytesstr::BytesStr;
 use internal::IResult;

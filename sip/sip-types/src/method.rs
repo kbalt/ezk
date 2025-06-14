@@ -1,4 +1,4 @@
-use crate::parse::{token, Parse};
+use crate::parse::{Parse, token};
 use bytes::Bytes;
 use bytesstr::BytesStr;
 use internal::IResult;

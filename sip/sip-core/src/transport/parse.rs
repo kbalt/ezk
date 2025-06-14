@@ -1,11 +1,11 @@
 use bytes::Bytes;
 use internal::Finish;
+use sip_types::Headers;
 use sip_types::header::typed::ContentLength;
 use sip_types::msg::{Line, MessageLine, PullParser};
 use sip_types::parse::Parse;
-use sip_types::Headers;
 use std::str::from_utf8;
-use stun_types::{is_stun_message, Message};
+use stun_types::{Message, is_stun_message};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {

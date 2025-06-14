@@ -1,6 +1,6 @@
-use crate::{parse_extensions, RtpExtensionsWriter, RtpTimestamp, SequenceNumber, Ssrc};
+use crate::{RtpExtensionsWriter, RtpTimestamp, SequenceNumber, Ssrc, parse_extensions};
 use bytes::Bytes;
-use rtp_types::{prelude::RtpPacketWriter, RtpPacketBuilder};
+use rtp_types::{RtpPacketBuilder, prelude::RtpPacketWriter};
 
 #[derive(Debug, Clone)]
 pub struct RtpPacket {
