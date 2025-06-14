@@ -30,3 +30,4 @@ log = "0.4"
 
 [workspace.lints.rust]
 unreachable_pub = "warn"
+

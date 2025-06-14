@@ -21,4 +21,4 @@ jobs:
     - name: clippy
       run: cargo clippy --workspace --all-features --tests
     - name: test
-      run: cargo test --workspace
+      run: cargo test --workspace --all-features

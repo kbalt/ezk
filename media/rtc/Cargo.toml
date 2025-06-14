@@ -40,3 +40,6 @@ local-ip-address = { version = "0.6", optional = true }
 [features]
 default = ["tokio"]
 tokio = ["dep:tokio", "dep:quinn-udp", "dep:local-ip-address"]
+
+vendor-openssl = ["openssl/vendored"]
+vendor-srtp = ["srtp/build-libsrtp"]
