@@ -300,7 +300,7 @@ fn map_instant_to_rtp_timestamp(
     let delta = instant.signed_duration_since(reference_instant);
     let delta_in_rtp_timesteps = (delta.as_seconds_f32() * clock_rate as f32) as i64;
 
-    u64::try_from(reference_timestamp.0 as i64 - delta_in_rtp_timesteps)
+    u64::try_from(reference_timestamp.0 as i64 + delta_in_rtp_timesteps)
         .ok()
         .map(ExtendedRtpTimestamp)
 }
@@ -311,48 +311,87 @@ mod tests {
     use bytes::Bytes;
     use rtp::{RtpExtensions, RtpTimestamp, SequenceNumber, Ssrc};
 
-    fn make_packet(seq: u16) -> RtpPacket {
+    fn make_packet(seq: u16, ts: u32) -> RtpPacket {
         RtpPacket {
             pt: 0,
             sequence_number: SequenceNumber(seq),
             ssrc: Ssrc(0),
-            timestamp: RtpTimestamp(0),
+            timestamp: RtpTimestamp(ts),
             extensions: RtpExtensions::default(),
             payload: Bytes::new(),
         }
     }
 
     #[test]
-    fn flimsy_test() {
-        let mut jb = InboundQueue::new(8000);
+    fn test_map_instant_to_rtp_timestamp() {
+        let reference_instant = Instant::now();
+        let reference_timestamp = ExtendedRtpTimestamp(1000);
+        let clock_rate = 1000;
+
+        assert_eq!(
+            map_instant_to_rtp_timestamp(
+                reference_instant,
+                reference_timestamp,
+                clock_rate,
+                reference_instant + Duration::from_millis(1000)
+            ),
+            Some(ExtendedRtpTimestamp(2000))
+        );
+
+        assert_eq!(
+            map_instant_to_rtp_timestamp(
+                reference_instant,
+                reference_timestamp,
+                clock_rate,
+                reference_instant - Duration::from_millis(1000)
+            ),
+            Some(ExtendedRtpTimestamp(0))
+        );
+
+        assert_eq!(
+            map_instant_to_rtp_timestamp(
+                reference_instant,
+                reference_timestamp,
+                clock_rate,
+                reference_instant - Duration::from_millis(2000)
+            ),
+            None,
+        );
+    }
+
+    #[test]
+    fn it_reorders() {
+        let mut jb = InboundQueue::new(1000);
 
         let now = Instant::now();
 
-        jb.push(now + Duration::from_millis(100), make_packet(1));
+        jb.push(now + Duration::from_millis(100), make_packet(1, 100));
         assert_eq!(jb.queue.len(), 1);
-        jb.push(now + Duration::from_millis(400), make_packet(4));
+        jb.push(now + Duration::from_millis(400), make_packet(4, 400));
         assert_eq!(jb.queue.len(), 4);
 
-        jb.push(now + Duration::from_millis(300), make_packet(3));
+        jb.push(now + Duration::from_millis(300), make_packet(3, 300));
         assert_eq!(jb.queue.len(), 4);
-        assert!(jb.pop(now + Duration::from_millis(99)).is_none());
+
+        assert!(jb.pop(now + Duration::from_millis(150)).is_none());
         assert_eq!(
-            jb.pop(now + Duration::from_millis(100))
+            jb.pop(now + Duration::from_millis(100) + RX_BUFFER_DURATION)
                 .unwrap()
                 .sequence_number
                 .0,
             1
         );
+
         assert!(jb.pop(now + Duration::from_millis(200)).is_none());
         assert_eq!(
-            jb.pop(now + Duration::from_millis(500))
+            jb.pop(now + Duration::from_millis(300) + RX_BUFFER_DURATION)
                 .unwrap()
                 .sequence_number
                 .0,
             3
         );
         assert_eq!(
-            jb.pop(now + Duration::from_millis(500))
+            jb.pop(now + Duration::from_millis(400) + RX_BUFFER_DURATION)
                 .unwrap()
                 .sequence_number
                 .0,
