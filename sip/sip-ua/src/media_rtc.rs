@@ -1,4 +1,6 @@
+use crate::MediaBackend;
 use rtc::{
+    rtp_session::SendRtpPacket,
     rtp_transport::TransportConnectionState,
     sdp::{
         Direction, MediaId, NegotiatedCodec, SdpError, SdpSession, SdpSessionEvent,
@@ -20,14 +22,12 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     task::{Context, Poll, ready},
-    time::Instant,
 };
 use tokio::sync::{
     mpsc::{self},
     watch,
 };
 use tokio_util::sync::PollSender;
-use crate::MediaBackend;
 
 /// Error returned by [`RtcMediaBackend::run`]
 #[derive(Debug, thiserror::Error)]
@@ -44,8 +44,8 @@ pub struct RtcMediaBackend {
     io_state: TokioIoState,
 
     /// Channel to receive RTP packets from sender
-    rx: mpsc::Receiver<(MediaId, RtpPacket)>,
-    this_tx: mpsc::Sender<(MediaId, RtpPacket)>,
+    rx: mpsc::Receiver<(MediaId, SendRtpPacket)>,
+    this_tx: mpsc::Sender<(MediaId, SendRtpPacket)>,
 
     /// Track the connection state of every transport in use.
     ///
@@ -55,6 +55,7 @@ pub struct RtcMediaBackend {
     /// State of every media in the session
     media: HashMap<MediaId, MediaState>,
 
+    /// Queue of events for the user
     events: VecDeque<MediaEvent>,
 }
 
@@ -84,7 +85,7 @@ impl RtcMediaBackend {
     pub fn new(sdp_session: SdpSession) -> Self {
         let (this_tx, rx) = mpsc::channel(16);
 
-        Self {
+        RtcMediaBackend {
             sdp_session,
             io_state: TokioIoState::new_with_local_ips().unwrap(),
             rx,
@@ -95,8 +96,6 @@ impl RtcMediaBackend {
         }
     }
 }
-
-
 
 impl MediaBackend for RtcMediaBackend {
     type Error = RtcMediaBackendError;
@@ -145,8 +144,12 @@ impl MediaBackend for RtcMediaBackend {
 
             let event = tokio::select! {
                 Some((media_id, packet)) = self.rx.recv() => {
-                    // TODO: check if media has a sender
-                    self.sdp_session.writer(media_id).unwrap().send_rtp(packet.pt, Instant::now(), packet.payload);
+                    if let Some(mut writer) = self.sdp_session.writer(media_id) {
+                        writer.send_rtp(packet);
+                    } else {
+                        log::warn!("Dropping outbound RTP packet, writer is no longer available");
+                    }
+
                     continue;
                 }
                 event = self.io_state.poll_session(&mut self.sdp_session) => event?,
@@ -255,7 +258,7 @@ fn add_sender(
     transport_state: &watch::Sender<TransportConnectionState>,
     media_id: MediaId,
     media_state: &mut MediaState,
-    this_tx: mpsc::Sender<(MediaId, RtpPacket)>,
+    this_tx: mpsc::Sender<(MediaId, SendRtpPacket)>,
 ) -> MediaEvent {
     let valid = Arc::new(AtomicBool::new(true));
     media_state.sender = Some(valid.clone());
@@ -315,7 +318,7 @@ pub struct RtpSender {
     media_id: MediaId,
     state: watch::Receiver<TransportConnectionState>,
     valid: Arc<AtomicBool>,
-    tx: PollSender<(MediaId, RtpPacket)>,
+    tx: PollSender<(MediaId, SendRtpPacket)>,
 }
 
 /// Error returned by [`RtpSender::send`]
@@ -337,7 +340,7 @@ impl RtpSender {
     /// Blocks until the backing transport has transitioned to the connected state.
     ///
     /// Returned errors are permanent and must be treated like the RTP sender has been destroyed
-    pub async fn send(&mut self, packet: RtpPacket) -> Result<(), RtpSendError> {
+    pub async fn send(&mut self, packet: SendRtpPacket) -> Result<(), RtpSendError> {
         if !self.valid.load(Ordering::Relaxed) {
             return Err(RtpSendError);
         }
@@ -361,7 +364,7 @@ impl RtpSender {
     }
 }
 
-impl futures_sink::Sink<RtpPacket> for RtpSender {
+impl futures_sink::Sink<SendRtpPacket> for RtpSender {
     type Error = RtpSendError;
 
     fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -382,7 +385,7 @@ impl futures_sink::Sink<RtpPacket> for RtpSender {
         }
     }
 
-    fn start_send(mut self: Pin<&mut Self>, item: RtpPacket) -> Result<(), Self::Error> {
+    fn start_send(mut self: Pin<&mut Self>, item: SendRtpPacket) -> Result<(), Self::Error> {
         let id = self.media_id;
         Pin::new(&mut self.tx)
             .start_send((id, item))

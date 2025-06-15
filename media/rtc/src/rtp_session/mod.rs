@@ -24,7 +24,7 @@ mod report;
 mod ssrc_hasher;
 
 pub use inbound::{RtpInboundRemoteStats, RtpInboundStats, RtpInboundStream};
-pub use outbound::{RtpOutboundRemoteStats, RtpOutboundStats, RtpOutboundStream};
+pub use outbound::{RtpOutboundRemoteStats, RtpOutboundStats, RtpOutboundStream, SendRtpPacket};
 
 /// Contains multiple RTP send/receive streams.
 ///

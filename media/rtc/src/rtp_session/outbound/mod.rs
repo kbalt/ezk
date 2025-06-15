@@ -1,9 +1,9 @@
-use crate::opt_min;
-
 use super::{ntp_timestamp::NtpTimestamp, report::ReportsQueue};
+use crate::opt_min;
+use bytes::Bytes;
 use queue::OutboundQueue;
 use rtp::{
-    RtpPacket, Ssrc,
+    RtpExtensions, RtpPacket, Ssrc,
     rtcp_types::{ReportBlock, SenderReport},
 };
 use std::time::{Duration, Instant};
@@ -104,19 +104,14 @@ impl RtpOutboundStream {
     }
 
     /// Queue the RTP packet to be sent.
-    ///
-    /// The `at` parameter specifies the time when the packet should be sent,
-    /// and is used to calculate the RTP timestamp.
-    ///
-    /// The sequence-number, ssrc and timestamp of the packet are ignored and will be overwritten
-    pub fn send_rtp(&mut self, at: Instant, mut packet: RtpPacket) {
-        packet.ssrc = self.ssrc;
-        self.queue.push(at, packet);
+    pub fn send_rtp(&mut self, packet: SendRtpPacket) {
+        self.queue.push(packet);
     }
 
     /// Check for a RTP packet that is ready to be sent
     pub(crate) fn pop(&mut self, now: Instant) -> Option<RtpPacket> {
-        let packet = self.queue.pop(now)?;
+        let mut packet = self.queue.pop(now)?;
+        packet.ssrc = self.ssrc;
 
         self.stats.packets_sent += 1;
         self.stats.bytes_sent += packet.payload.len() as u64;
@@ -126,5 +121,45 @@ impl RtpOutboundStream {
 
     pub fn stats(&self) -> RtpOutboundStats {
         self.stats
+    }
+}
+
+/// Outbound RTP packet builder
+pub struct SendRtpPacket {
+    send_at: Instant,
+    media_time: Instant,
+    pt: u8,
+    extensions: RtpExtensions,
+    payload: Bytes,
+}
+
+impl SendRtpPacket {
+    /// Create a RTP packet to be sent
+    ///
+    /// `media_time` will be used to calculate the packet's timestamp.
+    ///
+    /// To delay sending the packet use [`SendRtpPacket::send_at`].
+    pub fn new(media_time: Instant, pt: u8, payload: Bytes) -> Self {
+        Self {
+            send_at: media_time,
+            media_time,
+            pt,
+            extensions: RtpExtensions::default(),
+            payload,
+        }
+    }
+
+    pub fn with_extensions(self, extensions: RtpExtensions) -> Self {
+        Self { extensions, ..self }
+    }
+
+    /// Set a timestamp at which the packet should be sent
+    ///
+    /// If the timestamp is in the paste, the packet will be sent instantly.
+    pub fn send_at(self, at: Instant) -> Self {
+        Self {
+            send_at: at,
+            ..self
+        }
     }
 }

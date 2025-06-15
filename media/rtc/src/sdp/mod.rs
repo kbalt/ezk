@@ -12,7 +12,7 @@ use super::{
     },
 };
 use crate::{
-    rtp_session::{RtpOutboundStream, RtpSession, RtpSessionEvent},
+    rtp_session::{RtpOutboundStream, RtpSession, RtpSessionEvent, SendRtpPacket},
     rtp_transport::RtpOrRtcp,
     sdp::{
         local_media::LocalMedia,
@@ -25,7 +25,7 @@ use ice::{
     Component, IceAgent, IceConnectionState, IceCredentials, IceGatheringState, ReceivedPkt,
 };
 use openssl::{hash::MessageDigest, ssl::SslContext};
-use rtp::{RtpExtensions, RtpPacket, RtpTimestamp, SequenceNumber, Ssrc, rtcp_types::Compound};
+use rtp::{RtpExtensions, RtpPacket, rtcp_types::Compound};
 use sdp_types::{
     Connection, Fingerprint, FingerprintAlgorithm, Fmtp, Group, IceCandidate, IceOptions,
     IcePassword, IceUsernameFragment, MediaDescription, Origin, Rtcp, RtpMap, Time,
@@ -1737,21 +1737,13 @@ pub struct MediaWriter<'a> {
 }
 
 impl MediaWriter<'_> {
-    pub fn send_rtp(&mut self, pt: u8, timestamp: Instant, payload: Bytes) {
+    pub fn send_rtp(&mut self, packet: SendRtpPacket) {
         let mid: Option<&Bytes> = match &self.media.mid {
             Some(e) => Some(e.as_ref()),
             None => None,
         };
 
-        let rtp_packet = RtpPacket {
-            pt,
-            sequence_number: SequenceNumber(0),
-            ssrc: Ssrc(0),
-            timestamp: RtpTimestamp(0),
-            extensions: RtpExtensions { mid: mid.cloned() },
-            payload,
-        };
-
-        self.stream.send_rtp(timestamp, rtp_packet);
+        self.stream
+            .send_rtp(packet.with_extensions(RtpExtensions { mid: mid.cloned() }));
     }
 }

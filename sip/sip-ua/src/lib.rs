@@ -30,7 +30,7 @@ pub use inbound_call::{AcceptCallError, InboundCall, InboundCallFromInviteError,
 pub use media_backend::MediaBackend;
 #[cfg(feature = "rtc")]
 pub use media_rtc::{
-    Codec, MediaEvent, RtcMediaBackendError, RtcMediaBackend, RtpReceiver, RtpSender,
+    Codec, MediaEvent, RtcMediaBackend, RtcMediaBackendError, RtpReceiver, RtpSender,
 };
 pub use outbound_call::{MakeCallCompletionError, MakeCallError, OutboundCall};
 pub use registration::{RegisterError, RegistrarConfig, Registration};
