@@ -21,7 +21,7 @@ pub struct NameAddr {
 
 impl NameAddr {
     #[inline]
-    pub fn new<N, U>(name: N, uri: SipUri) -> Self
+    pub fn new<N>(name: N, uri: SipUri) -> Self
     where
         N: Into<BytesStr>,
     {

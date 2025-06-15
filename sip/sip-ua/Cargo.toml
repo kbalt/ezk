@@ -1,7 +1,7 @@
 [package]
 name = "ezk-sip-ua"
 version = "0.8.1"
-description = "Low level SIP user agent utilities"
+description = "SIP user agent utilities"
 categories = ["network-programming", "multimedia"]
 keywords = ["sip"]
 readme = "README.md"
@@ -17,6 +17,13 @@ workspace = true
 [dependencies]
 sip-types.workspace = true
 sip-core.workspace = true
+sdp-types.workspace = true
+rtc = { workspace = true, optional = true }
+rtp = { workspace = true, optional = true }
+sip-auth.workspace = true
+
+tokio-util = { version = "0.7", optional = true }
+futures-sink = { version = "0.3", optional = true }
 
 log = "0.4"
 bytesstr = "1"
@@ -28,3 +35,7 @@ tokio = "1"
 thiserror = "2"
 slotmap = "1"
 bytes = "1"
+
+[features]
+default = ["rtc"]
+rtc = ["dep:rtc", "dep:rtp", "dep:tokio-util", "dep:futures-sink"]
