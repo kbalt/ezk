@@ -3,6 +3,7 @@ use crate::{dialog::Dialog, invite::acceptor::InviteAcceptor};
 use bytesstr::BytesStr;
 use sdp_types::{ParseSessionDescriptionError, SessionDescription};
 use sip_core::{Endpoint, IncomingRequest};
+use sip_types::CodeKind;
 use sip_types::{
     StatusCode,
     header::{
@@ -100,6 +101,22 @@ impl InboundCall<NoMedia> {
 }
 
 impl<M> InboundCall<M> {
+    /// Send a 100 TRYING response
+    pub async fn respond_provisional(
+        &mut self,
+        code: StatusCode,
+    ) -> Result<(), crate::invite::acceptor::Error> {
+        assert_eq!(
+            code.kind(),
+            CodeKind::Provisional,
+            "Called send_provisional with invalid status code {code:?}"
+        );
+
+        let response = self.acceptor.create_response(code, None).await?;
+
+        self.acceptor.respond_provisional(response).await
+    }
+
     /// Returns if the initial invite contains an SDP offer
     pub fn has_sdp_offer(&self) -> bool {
         self.sdp_offer.is_some()

@@ -35,10 +35,6 @@ pub struct InviteSession {
     pub dialog: Arc<Dialog>,
 }
 
-pub struct RefreshNeeded<'s> {
-    pub session: &'s mut InviteSession,
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum SessionRefreshError {
     #[error(transparent)]
@@ -47,102 +43,22 @@ pub enum SessionRefreshError {
     UnexpectedStatus(StatusCode),
 }
 
-impl RefreshNeeded<'_> {
-    /// Send an empty INVITE request refreshing the INVITE session
-    pub async fn process_default(self) -> Result<(), SessionRefreshError> {
-        self.session.session_timer.reset();
-
-        let mut invite = self.session.dialog.create_request(Method::INVITE);
-        self.session.session_timer.populate_refresh(&mut invite);
-
-        let mut target_tp_info = self.session.dialog.target_tp_info.lock().await;
-
-        let mut transaction = self
-            .session
-            .endpoint
-            .send_invite(invite, &mut target_tp_info)
-            .await?;
-
-        drop(target_tp_info);
-
-        let mut ack = None;
-
-        while let Some(response) = transaction.receive().await? {
-            match response.line.code.kind() {
-                CodeKind::Provisional => { /* ignore */ }
-                CodeKind::Success => {
-                    let ack = if let Some(ack) = &mut ack {
-                        ack
-                    } else {
-                        let ack_req = super::create_ack(
-                            &self.session.dialog,
-                            response.base_headers.cseq.cseq,
-                        )
-                        .await?;
-
-                        ack.insert(ack_req)
-                    };
-
-                    self.session
-                        .endpoint
-                        .send_outgoing_request(ack)
-                        .await
-                        .map_err(sip_core::Error::from)?;
-                }
-                _ => return Err(SessionRefreshError::UnexpectedStatus(response.line.code)),
-            }
-        }
-
-        Ok(())
-    }
+#[allow(clippy::large_enum_variant)] // TODO address this
+pub enum InviteSessionEvent {
+    RefreshNeeded,
+    ReInviteReceived(ReInviteReceived),
+    Bye(ByeEvent),
+    Terminated,
 }
 
-pub struct ReInviteReceived<'s> {
-    pub session: &'s mut InviteSession,
+pub struct ReInviteReceived {
     pub invite: IncomingRequest,
     pub transaction: ServerInvTsx,
 }
 
-impl ReInviteReceived<'_> {
-    /// Respond with a successful response, returns the received ACK request
-    pub async fn respond_success(self, response: OutgoingResponse) -> Result<IncomingRequest> {
-        let (ack_sender, ack_recv) = oneshot::channel();
-
-        *self.session.inner.awaited_ack.lock() = Some(AwaitedAck {
-            cseq: self.invite.base_headers.cseq.cseq,
-            ack_sender,
-        });
-
-        let accepted = self.transaction.respond_success(response).await?;
-
-        super::receive_ack(accepted, ack_recv).await
-    }
-}
-
-pub struct ByeEvent<'s> {
-    pub session: &'s mut InviteSession,
-    pub bye: IncomingRequest,
-    pub transaction: ServerTsx,
-}
-
-impl ByeEvent<'_> {
-    /// Process the BYE as one would expect, respond with a 200 OK
-    pub async fn process_default(self) -> Result<()> {
-        let response = self
-            .session
-            .dialog
-            .create_response(&self.bye, StatusCode::OK, None)?;
-
-        self.transaction.respond(response).await
-    }
-}
-
-#[allow(clippy::large_enum_variant)] // TODO address this
-pub enum InviteSessionEvent<'s> {
-    RefreshNeeded(RefreshNeeded<'s>),
-    ReInviteReceived(ReInviteReceived<'s>),
-    Bye(ByeEvent<'s>),
-    Terminated,
+pub struct ByeEvent {
+    bye: IncomingRequest,
+    transaction: ServerTsx,
 }
 
 impl InviteSession {
@@ -166,7 +82,7 @@ impl InviteSession {
         }
     }
 
-    pub async fn drive(&mut self) -> Result<InviteSessionEvent<'_>> {
+    pub async fn run(&mut self) -> Result<InviteSessionEvent> {
         select! {
             _ = self.session_timer.wait() => {
                self.handle_session_timer().await
@@ -195,7 +111,7 @@ impl InviteSession {
         transaction.receive_final().await
     }
 
-    fn handle_usage_event(&mut self, evt: Option<UsageEvent>) -> Result<InviteSessionEvent<'_>> {
+    fn handle_usage_event(&mut self, evt: Option<UsageEvent>) -> Result<InviteSessionEvent> {
         let evt = if let Some(evt) = evt {
             evt
         } else {
@@ -209,7 +125,6 @@ impl InviteSession {
                 let transaction = self.endpoint.create_server_tsx(&mut request);
 
                 Ok(InviteSessionEvent::Bye(ByeEvent {
-                    session: self,
                     bye: request,
                     transaction,
                 }))
@@ -220,7 +135,6 @@ impl InviteSession {
                 let transaction = self.endpoint.create_server_inv_tsx(&mut invite);
 
                 Ok(InviteSessionEvent::ReInviteReceived(ReInviteReceived {
-                    session: self,
                     invite,
                     transaction,
                 }))
@@ -228,7 +142,7 @@ impl InviteSession {
         }
     }
 
-    async fn handle_session_timer(&mut self) -> Result<InviteSessionEvent<'_>> {
+    async fn handle_session_timer(&mut self) -> Result<InviteSessionEvent> {
         match (self.role, self.session_timer.refresher) {
             (_, Refresher::Unspecified) => unreachable!(),
             (Role::Uac, Refresher::Uac) | (Role::Uas, Refresher::Uas) => {
@@ -236,9 +150,7 @@ impl InviteSession {
                 // Timer expired meaning we are responsible for refresh now
                 self.session_timer.reset();
 
-                Ok(InviteSessionEvent::RefreshNeeded(RefreshNeeded {
-                    session: self,
-                }))
+                Ok(InviteSessionEvent::RefreshNeeded)
             }
             (Role::Uac, Refresher::Uas) | (Role::Uas, Refresher::Uac) => {
                 // Peer is responsible for refresh
@@ -247,6 +159,76 @@ impl InviteSession {
                 Ok(InviteSessionEvent::Terminated)
             }
         }
+    }
+
+    pub async fn refresh(&mut self) -> Result<(), SessionRefreshError> {
+        self.session_timer.reset();
+
+        let mut invite = self.dialog.create_request(Method::INVITE);
+        self.session_timer.populate_refresh(&mut invite);
+
+        let mut target_tp_info = self.dialog.target_tp_info.lock().await;
+
+        let mut transaction = self
+            .endpoint
+            .send_invite(invite, &mut target_tp_info)
+            .await?;
+
+        drop(target_tp_info);
+
+        let mut ack = None;
+
+        while let Some(response) = transaction.receive().await? {
+            match response.line.code.kind() {
+                CodeKind::Provisional => { /* ignore */ }
+                CodeKind::Success => {
+                    let ack = if let Some(ack) = &mut ack {
+                        ack
+                    } else {
+                        let ack_req =
+                            super::create_ack(&self.dialog, response.base_headers.cseq.cseq)
+                                .await?;
+
+                        ack.insert(ack_req)
+                    };
+
+                    self.endpoint
+                        .send_outgoing_request(ack)
+                        .await
+                        .map_err(sip_core::Error::from)?;
+                }
+                _ => return Err(SessionRefreshError::UnexpectedStatus(response.line.code)),
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn handle_bye(&mut self, event: ByeEvent) -> Result<()> {
+        let response = self
+            .dialog
+            .create_response(&event.bye, StatusCode::OK, None)?;
+
+        event.transaction.respond(response).await?;
+
+        Ok(())
+    }
+
+    pub async fn handle_reinvite_success(
+        &mut self,
+        event: ReInviteReceived,
+        response: OutgoingResponse,
+    ) -> Result<IncomingRequest> {
+        let (ack_sender, ack_recv) = oneshot::channel();
+
+        *self.inner.awaited_ack.lock() = Some(AwaitedAck {
+            cseq: event.invite.base_headers.cseq.cseq,
+            ack_sender,
+        });
+
+        let accepted = event.transaction.respond_success(response).await?;
+
+        super::receive_ack(accepted, ack_recv).await
     }
 }
 

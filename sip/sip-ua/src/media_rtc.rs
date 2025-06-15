@@ -95,6 +95,11 @@ impl RtcMediaBackend {
             events: VecDeque::new(),
         }
     }
+
+    /// Give access to the underlying SDP session, allowing for modification of the session
+    pub fn sdp_session(&mut self) -> &mut SdpSession {
+        &mut self.sdp_session
+    }
 }
 
 impl MediaBackend for RtcMediaBackend {
@@ -180,7 +185,8 @@ impl MediaBackend for RtcMediaBackend {
                     }
 
                     if recv {
-                        self.events.push_back(add_receiver(&mut media_state));
+                        self.events
+                            .push_back(add_receiver(event.id, &mut media_state));
                     }
 
                     self.media.insert(event.id, media_state);
@@ -212,7 +218,7 @@ impl MediaBackend for RtcMediaBackend {
                     }
 
                     if !old_recv && new_recv {
-                        self.events.push_back(add_receiver(media_state));
+                        self.events.push_back(add_receiver(event.id, media_state));
                     }
                 }
                 SdpSessionEvent::MediaRemoved(media_id) => {
@@ -281,12 +287,15 @@ fn add_sender(
     }
 }
 
-fn add_receiver(media_state: &mut MediaState) -> MediaEvent {
+fn add_receiver(media_id: MediaId, media_state: &mut MediaState) -> MediaEvent {
     let (tx, rx) = mpsc::channel(8);
     media_state.receiver = Some(tx);
 
     MediaEvent::ReceiverAdded {
-        receiver: RtpReceiver(rx),
+        receiver: RtpReceiver {
+            media_id,
+            receiver: rx,
+        },
         codec: Codec {
             pt: media_state.codec.recv_pt,
             name: media_state.codec.name.clone(),
@@ -327,6 +336,11 @@ pub struct RtpSender {
 pub struct RtpSendError;
 
 impl RtpSender {
+    /// Returns the associated [`MediaId`] of the sender
+    pub fn media_id(&self) -> MediaId {
+        self.media_id
+    }
+
     // Wait for the state to be connected, returns if the transceiver is still valid
     async fn wait_connected(&mut self) -> bool {
         self.state
@@ -408,18 +422,33 @@ impl futures_sink::Sink<SendRtpPacket> for RtpSender {
 /// RTP receiver. Exposes the inner tokio MPSC receiver for convenience.
 ///
 /// Consider the RTP session's receiver to be closed if the MPSC receiver is closed.
-pub struct RtpReceiver(pub mpsc::Receiver<RtpPacket>);
+pub struct RtpReceiver {
+    media_id: MediaId,
+    receiver: mpsc::Receiver<RtpPacket>,
+}
+
+impl RtpReceiver {
+    /// Returns the associated [`MediaId`] of the receiver
+    pub fn media_id(&self) -> MediaId {
+        self.media_id
+    }
+
+    /// Turn the RtpReceiver into a tokio channel receiver
+    pub fn into_inner(self) -> mpsc::Receiver<RtpPacket> {
+        self.receiver
+    }
+}
 
 impl Deref for RtpReceiver {
     type Target = mpsc::Receiver<RtpPacket>;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.receiver
     }
 }
 
 impl DerefMut for RtpReceiver {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        &mut self.receiver
     }
 }
