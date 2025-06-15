@@ -26,7 +26,6 @@ pub enum CallError<M> {
 ///
 /// Can only be created using [`OutboundCall`](crate::OutboundCall) or [`InboundCall`](crate::InboundCall).
 pub struct Call<M: MediaBackend> {
-    // Always Some outside of the Drop impl
     invite_session: Option<InviteSession>,
     media: M,
 
@@ -37,10 +36,17 @@ pub struct Call<M: MediaBackend> {
 
 /// Event returned by [`Call::run`]
 pub enum CallEvent<M: MediaBackend> {
+    /// Internal call event, must be passed back into the call. This odd API allows [`Call::run`] to be cancel-safe.
+    Internal(InternalCallEvent),
     /// Media backend specific evet
     Media(M::Event),
     /// Call has been terminated by the peer
     Terminated,
+}
+
+/// Internal event, must be passed to [`Call::handle_internal_event`]
+pub struct InternalCallEvent {
+    event: Box<InviteSessionEvent>,
 }
 
 impl<M: MediaBackend> Call<M> {
@@ -59,38 +65,147 @@ impl<M: MediaBackend> Call<M> {
     ///
     /// > Be aware that any time spent outside this function will be time not spent on potentially handling real time
     /// > media data if the [`MediaBackend`] isn't running on a separate task.
+    ///
+    /// This functions cancel safe. To accomplish this, it sometimes returns an [`CallEvent::Internal`] which must be passed to
+    /// [`Call::handle_internal_event`] which is not cancel safe.
     pub async fn run(&mut self) -> Result<CallEvent<M>, CallError<M::Error>> {
-        loop {
-            if let Some(event) = self.backlog.pop_front() {
-                return Ok(event);
-            }
+        if let Some(event) = self.backlog.pop_front() {
+            return Ok(event);
+        }
 
-            let event = select! {
-                invite_session_event = self.invite_session.as_mut().unwrap().drive() => invite_session_event?,
-                media_event = self.media.run() => {
-                    return Ok(CallEvent::Media(media_event.map_err(CallError::Media)?));
+        let Some(invite_session) = &mut self.invite_session else {
+            return Ok(CallEvent::Terminated);
+        };
+
+        let event = select! {
+            invite_session_event = invite_session.run() => {
+                CallEvent::Internal(InternalCallEvent { event: Box::new(invite_session_event?) })
+            },
+            media_event = self.media.run() => {
+                CallEvent::Media(media_event.map_err(CallError::Media)?)
+            }
+        };
+
+        Ok(event)
+    }
+
+    /// Handle an [`CallEvent::Internal`]
+    ///
+    /// This function is not cancel safe.
+    pub async fn handle_internal_event(
+        &mut self,
+        event: InternalCallEvent,
+    ) -> Result<(), CallError<M::Error>> {
+        let invite_session = self.invite_session.as_mut().unwrap();
+
+        match *event.event {
+            InviteSessionEvent::RefreshNeeded => {
+                let refresh = pin!(invite_session.refresh());
+
+                run_media_and_future(&mut self.backlog, &mut self.media, refresh).await?;
+            }
+            InviteSessionEvent::ReInviteReceived(event) => {
+                self.handle_reinvite(event).await?;
+            }
+            InviteSessionEvent::Bye(event) => {
+                invite_session.handle_bye(event).await?;
+
+                self.backlog.push_back(CallEvent::Terminated);
+            }
+            InviteSessionEvent::Terminated => {
+                self.backlog.push_back(CallEvent::Terminated);
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn handle_reinvite(
+        &mut self,
+        event: ReInviteReceived,
+    ) -> Result<(), CallError<M::Error>> {
+        let invite_session = self.invite_session.as_mut().unwrap();
+
+        let ReInviteReceived { invite, .. } = &event;
+
+        let invite_contains_sdp = invite
+            .headers
+            .get_named::<ContentType>()
+            .map(|c| c == CONTENT_TYPE_SDP)
+            .unwrap_or_default();
+
+        if invite_contains_sdp {
+            let Some(sdp_offer) = parse_sdp_body(invite.body.clone()) else {
+                respond_failure(invite_session, event, StatusCode::BAD_REQUEST).await?;
+                return Ok(());
+            };
+
+            let sdp_answer = match self.media.receive_sdp_offer(sdp_offer).await {
+                Ok(sdp_answer) => sdp_answer,
+                Err(e) => {
+                    respond_failure(invite_session, event, StatusCode::SERVER_INTERNAL_ERROR)
+                        .await?;
+                    return Err(CallError::Media(e));
                 }
             };
 
-            match event {
-                InviteSessionEvent::RefreshNeeded(refresh_needed) => {
-                    let refresh = pin!(refresh_needed.process_default());
+            let mut response =
+                invite_session
+                    .dialog
+                    .create_response(invite, StatusCode::OK, None)?;
 
-                    run_media_and_future(&mut self.backlog, &mut self.media, refresh).await?;
-                }
-                InviteSessionEvent::ReInviteReceived(event) => {
-                    let media = &mut self.media;
+            response.msg.headers.insert_named(&CONTENT_TYPE_SDP);
+            response.msg.body = sdp_answer.to_string().into();
 
-                    handle_reinvite(&mut self.backlog, event, media).await?;
-                }
-                InviteSessionEvent::Bye(bye_event) => {
-                    bye_event.process_default().await?;
+            let respond_success = pin!(invite_session.handle_reinvite_success(event, response));
 
-                    return Ok(CallEvent::Terminated);
+            run_media_and_future(&mut self.backlog, &mut self.media, respond_success).await?;
+        } else {
+            let sdp_offer = match self.media.create_sdp_offer().await {
+                Ok(sdp_answer) => sdp_answer,
+                Err(e) => {
+                    respond_failure(invite_session, event, StatusCode::SERVER_INTERNAL_ERROR)
+                        .await?;
+                    return Err(CallError::Media(e));
                 }
-                InviteSessionEvent::Terminated => return Ok(CallEvent::Terminated),
+            };
+
+            let mut response =
+                invite_session
+                    .dialog
+                    .create_response(invite, StatusCode::OK, None)?;
+            response.msg.headers.insert_named(&CONTENT_TYPE_SDP);
+            response.msg.body = sdp_offer.to_string().into();
+
+            let respond_success = pin!(invite_session.handle_reinvite_success(event, response));
+
+            let ack =
+                run_media_and_future(&mut self.backlog, &mut self.media, respond_success).await?;
+
+            let ack_contains_sdp = ack
+                .headers
+                .get_named::<ContentType>()
+                .map(|c| c == CONTENT_TYPE_SDP)
+                .unwrap_or_default();
+
+            if !ack_contains_sdp {
+                // oh well, no sdp exchange i guess
+                return Ok(());
             }
+
+            let Some(sdp_answer) = parse_sdp_body(ack.body) else {
+                // TODO: should probably terminate the call here?
+                log::warn!("Failed to parse SDP body in ACK");
+                return Ok(());
+            };
+
+            self.media
+                .receive_sdp_answer(sdp_answer)
+                .await
+                .map_err(CallError::Media)?;
         }
+
+        Ok(())
     }
 
     /// Returns access to the inner media backend
@@ -112,11 +227,13 @@ impl<M: MediaBackend> Drop for Call<M> {
             return;
         }
 
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        let Some(mut invite_session) = self.invite_session.take() else {
             return;
         };
 
-        let mut invite_session = self.invite_session.take().unwrap();
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
 
         handle.spawn(async move {
             if let Err(e) = invite_session.terminate().await {
@@ -126,96 +243,12 @@ impl<M: MediaBackend> Drop for Call<M> {
     }
 }
 
-async fn handle_reinvite<M: MediaBackend>(
-    backlog: &mut VecDeque<CallEvent<M>>,
-    event: ReInviteReceived<'_>,
-    media: &mut M,
-) -> Result<(), CallError<M::Error>> {
-    let ReInviteReceived {
-        session, invite, ..
-    } = &event;
-
-    let invite_contains_sdp = invite
-        .headers
-        .get_named::<ContentType>()
-        .map(|c| c == CONTENT_TYPE_SDP)
-        .unwrap_or_default();
-
-    if invite_contains_sdp {
-        let Some(sdp_offer) = parse_sdp_body(invite.body.clone()) else {
-            respond_failure(event, StatusCode::BAD_REQUEST).await?;
-            return Ok(());
-        };
-
-        let sdp_answer = match media.receive_sdp_offer(sdp_offer).await {
-            Ok(sdp_answer) => sdp_answer,
-            Err(e) => {
-                respond_failure(event, StatusCode::SERVER_INTERNAL_ERROR).await?;
-                return Err(CallError::Media(e));
-            }
-        };
-
-        let mut response = session
-            .dialog
-            .create_response(invite, StatusCode::OK, None)?;
-
-        response.msg.headers.insert_named(&CONTENT_TYPE_SDP);
-        response.msg.body = sdp_answer.to_string().into();
-
-        let respond_success = pin!(event.respond_success(response));
-
-        run_media_and_future(backlog, media, respond_success).await?;
-    } else {
-        let sdp_offer = match media.create_sdp_offer().await {
-            Ok(sdp_answer) => sdp_answer,
-            Err(e) => {
-                respond_failure(event, StatusCode::SERVER_INTERNAL_ERROR).await?;
-                return Err(CallError::Media(e));
-            }
-        };
-
-        let mut response = session
-            .dialog
-            .create_response(invite, StatusCode::OK, None)?;
-        response.msg.headers.insert_named(&CONTENT_TYPE_SDP);
-        response.msg.body = sdp_offer.to_string().into();
-
-        let respond_success = pin!(event.respond_success(response));
-
-        let ack = run_media_and_future(backlog, media, respond_success).await?;
-
-        let ack_contains_sdp = ack
-            .headers
-            .get_named::<ContentType>()
-            .map(|c| c == CONTENT_TYPE_SDP)
-            .unwrap_or_default();
-
-        if !ack_contains_sdp {
-            // oh well, no sdp exchange i guess
-            return Ok(());
-        }
-
-        let Some(sdp_answer) = parse_sdp_body(ack.body) else {
-            // TODO: should probably terminate the call here?
-            log::warn!("Failed to parse SDP body in ACK");
-            return Ok(());
-        };
-
-        media
-            .receive_sdp_answer(sdp_answer)
-            .await
-            .map_err(CallError::Media)?;
-    }
-
-    Ok(())
-}
-
 async fn respond_failure(
-    event: ReInviteReceived<'_>,
+    invite_session: &mut InviteSession,
+    event: ReInviteReceived,
     code: StatusCode,
 ) -> Result<(), sip_core::Error> {
-    let response = event
-        .session
+    let response = invite_session
         .dialog
         .create_response(&event.invite, code, None)?;
 

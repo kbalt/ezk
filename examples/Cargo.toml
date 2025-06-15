@@ -10,12 +10,14 @@ sip-types.workspace = true
 sip-core = { workspace = true, features = ["tls-native-tls"] }
 sip-ua.workspace = true
 sip-auth.workspace = true
+sdp-types.workspace = true
+rtc.workspace = true
 
-tokio = { version = "1", features = ["rt", "macros"] }
+tokio = { version = "1", features = ["rt", "macros", "signal"] }
 
 async-trait = "0.1"
 bytesstr = "1"
-tracing-subscriber = "0.3"
+env_logger = "0.11"
 
 tokio-native-tls.workspace = true
 
@@ -28,5 +30,5 @@ name = "accept_invite"
 path = "accept_invite.rs"
 
 [[example]]
-name = "send_invite"
-path = "send_invite.rs"
+name = "make_call"
+path = "make_call.rs"

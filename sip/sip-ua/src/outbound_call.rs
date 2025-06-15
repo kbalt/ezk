@@ -375,10 +375,7 @@ impl<M: MediaBackend> UnacknowledgedCall<M> {
 }
 
 fn attach_sdp(request: &mut Request, sdp: &SessionDescription) {
-    request
-        .headers
-        .insert_named(&ContentType(BytesStr::from_static("application/sdp")));
-
+    request.headers.insert_named(&CONTENT_TYPE_SDP);
     request.body = sdp.to_string().into();
 }
 
