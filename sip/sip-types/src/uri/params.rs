@@ -210,7 +210,7 @@ fn header_char(c: char) -> bool {
     c.is_alphanumeric()
         || matches!(
             c,
-            '['| ']'| '/'| /*'=' |*/ ':'| '+'| '$'| '-'| '_'| '.'| '!'| '~'| '*'| '\''| '(' | ')'
+            '['| ']'| '/'| /*'=' |*/ ':'| '+'| '$'| '-'| '_'| '.'| '!'| '~'| '*'| '\''| '(' | ')' | '%'
         )
 }
 
@@ -383,7 +383,7 @@ mod test {
     #[test]
     fn common_params_decode() {
         let src = BytesStr::from_static(";emoji=%F0%9F%98%80");
-        let (rem, params) = Params::<HPS>::parse(src.as_ref())(&src).unwrap();
+        let (rem, params) = Params::<CPS>::parse(src.as_ref())(&src).unwrap();
 
         assert!(rem.is_empty());
 
