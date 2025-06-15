@@ -17,13 +17,16 @@ jobs:
     - uses: actions/checkout@v4
     - uses: EmbarkStudios/cargo-deny-action@v2
 
-  build:
-
+  cargo-clippy:
     runs-on: [ubuntu-latest]
-
     steps:
-    - uses: actions/checkout@v2
-    - name: clippy
-      run: cargo clippy --workspace --all-features --tests
-    - name: test
-      run: cargo test --workspace --all-features
+    - uses: actions/checkout@v4
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+    - run: cargo clippy --all-features --workspace
+
+  cargo-test:
+    runs-on: [ubuntu-latest]
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+    - run: cargo test --all-features --workspace
