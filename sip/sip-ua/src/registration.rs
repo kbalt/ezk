@@ -34,7 +34,7 @@ pub struct RegistrarConfig {
     /// Display name of the user for the binding, may be displayed to other users
     pub display_name: Option<String>,
 
-    /// Override the generated ID use in the From header
+    /// Override the generated ID used in the From header
     pub override_id: Option<NameAddr>,
 
     /// Override the generated Contact header
@@ -42,6 +42,51 @@ pub struct RegistrarConfig {
 
     /// Override the default expiry duration
     pub expiry: Option<Duration>,
+}
+
+impl RegistrarConfig {
+    pub fn new(username: String, registrar: SipUri) -> Self {
+        RegistrarConfig {
+            registrar,
+            username,
+            display_name: None,
+            override_id: None,
+            override_contact: None,
+            expiry: None,
+        }
+    }
+
+    /// Set a display name to use, see [`RegistrarConfig::display_name`]
+    pub fn with_display_name(self, display_name: String) -> Self {
+        Self {
+            display_name: Some(display_name),
+            ..self
+        }
+    }
+
+    /// Override the default expiry duration
+    pub fn with_custom_expiry(self, expiry: Duration) -> Self {
+        Self {
+            expiry: Some(expiry),
+            ..self
+        }
+    }
+
+    /// Override the generated ID used in the From header
+    pub fn with_override_id(self, id: NameAddr) -> Self {
+        Self {
+            override_id: Some(id),
+            ..self
+        }
+    }
+
+    /// Override the generated Contact header
+    pub fn with_override_contact(self, contact: Contact) -> Self {
+        Self {
+            override_contact: Some(contact),
+            ..self
+        }
+    }
 }
 
 /// An active registration with a SIP registrar.

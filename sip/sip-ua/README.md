@@ -1,4 +1,4 @@
-# ezk-sip-ua
+# SIP User Agent
 
 [![crates.io][crates-badge]][crates-url]
 [![documentation][docs-badge]][docs-url]
@@ -13,4 +13,4 @@
 [docs-badge]: https://img.shields.io/docsrs/ezk-sip-ua/latest
 [docs-url]: https://docs.rs/ezk-sip-ua/latest
 
-Low level SIP user agent utilities.
+Provides abstractions for registrations, calls and other dialog usages.

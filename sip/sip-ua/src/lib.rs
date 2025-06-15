@@ -11,6 +11,7 @@
 //!
 //! The modules [`dialog`], [`invite`], [`register`] and [`util`] contain implementation details used inside the top
 //! level abstractions and can be used for more specialized use cases.
+//!
 
 pub mod dialog;
 pub mod invite;

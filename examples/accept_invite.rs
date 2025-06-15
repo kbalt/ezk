@@ -46,17 +46,20 @@ impl Layer for InviteAcceptLayer {
         let (mut session, _ack) = acceptor.respond_success(response).await.unwrap();
 
         loop {
-            match session.drive().await.unwrap() {
-                InviteSessionEvent::RefreshNeeded(event) => {
-                    event.process_default().await.unwrap();
+            match session.run().await.unwrap() {
+                InviteSessionEvent::RefreshNeeded => {
+                    session.refresh().await.unwrap();
                 }
                 InviteSessionEvent::ReInviteReceived(event) => {
                     let response = endpoint.create_response(&event.invite, StatusCode::OK, None);
 
-                    event.respond_success(response).await.unwrap();
+                    session
+                        .handle_reinvite_success(event, response)
+                        .await
+                        .unwrap();
                 }
                 InviteSessionEvent::Bye(event) => {
-                    event.process_default().await.unwrap();
+                    session.handle_bye(event).await.unwrap();
                 }
                 InviteSessionEvent::Terminated => {
                     break;
