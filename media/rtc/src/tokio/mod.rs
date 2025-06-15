@@ -102,7 +102,7 @@ impl TokioIoState {
         Ok(())
     }
 
-    /// Should be used to handle the [`SdpSessionEvent::SendData`](crate::sdp::SdpSessionEvent::SendData).
+    /// Should be used to handle the [`SdpSessionEvent::SendData`]
     pub fn send(
         &mut self,
         transport_id: TransportId,
@@ -194,7 +194,7 @@ impl BuildHasher for BuildTransportHasher {
 struct TransportHasher(u32, u8);
 impl Hasher for TransportHasher {
     fn finish(&self) -> u64 {
-        ((self.0 as u64) << 8) | self.1 as u64
+        (u64::from(self.0) << 8) | u64::from(self.1)
     }
 
     fn write(&mut self, _bytes: &[u8]) {
