@@ -155,7 +155,7 @@ impl SendRtpPacket {
 
     /// Set a timestamp at which the packet should be sent
     ///
-    /// If the timestamp is in the paste, the packet will be sent instantly.
+    /// If the timestamp is in the past, the packet will be sent instantly.
     pub fn send_at(self, at: Instant) -> Self {
         Self {
             send_at: at,
