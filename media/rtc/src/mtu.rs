@@ -62,6 +62,10 @@ impl Mtu {
         }
     }
 
+    pub(crate) const fn for_dtls(self) -> usize {
+        self.base
+    }
+
     /// The maximum allowed size of RTP payloads
     pub const fn for_rtp_payload(self) -> usize {
         let mut base = self.base;

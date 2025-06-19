@@ -632,6 +632,7 @@ impl SdpSession {
         let id = self.make_public_transport_id();
 
         let transport = transport::create_from_offer(
+            self.config.mtu,
             &self.ssl_context,
             &self.ice_credentials,
             &self.stun_servers,
@@ -788,6 +789,7 @@ impl SdpSession {
 
                         let (transport, early_received_rtp_or_rtcp) = offered_transport
                             .build_from_answer(
+                                self.config.mtu,
                                 &self.ssl_context,
                                 &mut self.transport_changes,
                                 &answer,

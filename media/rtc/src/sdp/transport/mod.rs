@@ -1,6 +1,6 @@
 use super::TransportId;
 use crate::{
-    OpenSslContext,
+    Mtu, OpenSslContext,
     rtp_transport::{
         Connectivity, DtlsSetup, DtlsSrtpCreateError, RtpDtlsSrtpTransport, RtpOrRtcp,
         RtpTransport, RtpTransportEvent, RtpTransportKind, RtpTransportPorts,
@@ -133,6 +133,7 @@ impl OfferedTransport {
 
     pub(crate) fn build_from_answer(
         self,
+        mtu: Mtu,
         ssl_context: &OpenSslContext,
         changes: &mut VecDeque<TransportChange>,
         remote_session_desc: &SessionDescription,
@@ -208,6 +209,7 @@ impl OfferedTransport {
                     ssl_context,
                     fingerprints,
                     setup,
+                    mtu,
                 )?)
             }
         };
@@ -272,7 +274,9 @@ impl OfferedTransport {
 }
 
 /// create RtpTransport from SDP offer & SdpSession
+#[allow(clippy::too_many_arguments)]
 pub(super) fn create_from_offer(
+    mtu: Mtu,
     ssl_context: &OpenSslContext,
     ice_credentials: &IceCredentials,
     stun_servers: &[SocketAddr],
@@ -355,7 +359,12 @@ pub(super) fn create_from_offer(
                 .filter_map(|e| Some((to_openssl_digest(&e.algorithm)?, e.fingerprint.clone())))
                 .collect();
 
-            RtpTransportKind::DtlsSrtp(RtpDtlsSrtpTransport::new(ssl_context, fingerprints, setup)?)
+            RtpTransportKind::DtlsSrtp(RtpDtlsSrtpTransport::new(
+                ssl_context,
+                fingerprints,
+                setup,
+                mtu,
+            )?)
         }
         _ => return Err(TransportCreateError::UnknownTransportType),
     };

@@ -1,6 +1,7 @@
 use rtc::{
     rtp_session::SendRtpPacket,
-    sdp::{Codec, Codecs, SdpSession, SdpSessionConfig}, OpenSslContext,
+    sdp::{Codec, Codecs, SdpSession, SdpSessionConfig},
+    OpenSslContext,
 };
 use sdp_types::{Direction, MediaType};
 use sip_core::{transport::udp::Udp, Endpoint, IncomingRequest, Layer, MayTake, Result};

@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use crate::OpenSslContext;
+use crate::{Mtu, OpenSslContext};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DtlsSrtpCreateError {
@@ -56,9 +56,16 @@ impl RtpDtlsSrtpTransport {
         ssl_context: &OpenSslContext,
         fingerprints: Vec<(MessageDigest, Vec<u8>)>,
         setup: DtlsSetup,
+        mtu: Mtu,
     ) -> Result<Self, DtlsSrtpCreateError> {
         let mut ssl = Ssl::new(&ssl_context.ctx).map_err(DtlsSrtpCreateError::NewSsl)?;
-        ssl.set_mtu(1200).map_err(DtlsSrtpCreateError::SetMtu)?;
+
+        ssl.set_mtu(
+            mtu.for_dtls()
+                .try_into()
+                .expect("MTU must not be larger than u32::MAX"),
+        )
+        .map_err(DtlsSrtpCreateError::SetMtu)?;
 
         // Use the openssl verify callback to test the peer certificate against the fingerprints that were sent to us
         ssl.set_verify_callback(
