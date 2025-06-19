@@ -5,6 +5,8 @@ const SRTP_OVERHEAD: usize = 32;
 const SRTCP_OVERHEAD: usize = 32;
 
 /// Maximum Transmission Unit. Utility type to calculate maximum packet sizes.
+///
+/// Default MTU is __1472__.
 #[derive(Debug, Clone, Copy)]
 pub struct Mtu {
     base: usize,
@@ -26,7 +28,7 @@ impl Default for Mtu {
 impl Mtu {
     /// Create a new MTU config with the given upper limit.
     ///
-    /// The limit will always be at least 256, which is a value I completely made up.
+    /// The limit will always be at least 256.
     ///
     /// Overhead of the IP & UDP layer is not taken into account when calculating RTP/RTCP packet sizes.
     pub const fn new(mut mtu: usize) -> Self {

@@ -149,6 +149,7 @@ impl SendRtpPacket {
         }
     }
 
+    /// Set all extension values for this RTP packet
     pub fn with_extensions(self, extensions: RtpExtensions) -> Self {
         Self { extensions, ..self }
     }

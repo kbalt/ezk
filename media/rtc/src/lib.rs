@@ -14,11 +14,13 @@ mod mtu;
 pub mod rtp_session;
 pub mod rtp_transport;
 pub mod sdp;
+mod ssl;
 #[cfg(feature = "tokio")]
 pub mod tokio;
 
 pub use ice::ReceivedPkt;
 pub use mtu::Mtu;
+pub use ssl::OpenSslContext;
 
 fn opt_min<T: Ord>(a: Option<T>, b: Option<T>) -> Option<T> {
     match (a, b) {

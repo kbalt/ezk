@@ -1,11 +1,6 @@
-use std::{
-    collections::VecDeque,
-    net::SocketAddr,
-    time::{Duration, Instant},
-};
-
 use super::TransportId;
 use crate::{
+    OpenSslContext,
     rtp_transport::{
         Connectivity, DtlsSetup, DtlsSrtpCreateError, RtpDtlsSrtpTransport, RtpOrRtcp,
         RtpTransport, RtpTransportEvent, RtpTransportKind, RtpTransportPorts,
@@ -14,12 +9,17 @@ use crate::{
     sdp::{TransportChange, TransportType, rtp_extensions::RtpExtensionIdsExt},
 };
 use ice::{IceAgent, IceCredentials, ReceivedPkt};
-use openssl::{hash::MessageDigest, ssl::SslContext};
+use openssl::hash::MessageDigest;
 use resolve::resolve_rtp_and_rtcp_address;
 use rtp::RtpExtensionIds;
 use sdes_srtp::{SdesSrtpNegotiationError, SdesSrtpOffer};
 use sdp_types::{
     FingerprintAlgorithm, MediaDescription, SessionDescription, Setup, TransportProtocol,
+};
+use std::{
+    collections::VecDeque,
+    net::SocketAddr,
+    time::{Duration, Instant},
 };
 use stun_types::{IsStunMessageInfo, is_stun_message};
 
@@ -133,7 +133,7 @@ impl OfferedTransport {
 
     pub(crate) fn build_from_answer(
         self,
-        ssl_context: &SslContext,
+        ssl_context: &OpenSslContext,
         changes: &mut VecDeque<TransportChange>,
         remote_session_desc: &SessionDescription,
         remote_media_desc: &MediaDescription,
@@ -273,7 +273,7 @@ impl OfferedTransport {
 
 /// create RtpTransport from SDP offer & SdpSession
 pub(super) fn create_from_offer(
-    ssl_context: &SslContext,
+    ssl_context: &OpenSslContext,
     ice_credentials: &IceCredentials,
     stun_servers: &[SocketAddr],
     changes: &mut VecDeque<TransportChange>,

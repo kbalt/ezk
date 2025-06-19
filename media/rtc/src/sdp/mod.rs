@@ -7,11 +7,10 @@
 
 use super::{
     opt_min,
-    rtp_transport::{
-        Connectivity, RtpTransport, RtpTransportEvent, RtpTransportPorts, make_ssl_context,
-    },
+    rtp_transport::{Connectivity, RtpTransport, RtpTransportEvent, RtpTransportPorts},
 };
 use crate::{
+    OpenSslContext,
     rtp_session::{RtpOutboundStream, RtpSession, RtpSessionEvent, SendRtpPacket},
     rtp_transport::RtpOrRtcp,
     sdp::{
@@ -24,7 +23,7 @@ use bytesstr::BytesStr;
 use ice::{
     Component, IceAgent, IceConnectionState, IceCredentials, IceGatheringState, ReceivedPkt,
 };
-use openssl::{hash::MessageDigest, ssl::SslContext};
+use openssl::hash::MessageDigest;
 use rtp::{RtpExtensions, RtpPacket, rtcp_types::Compound};
 use sdp_types::{
     Connection, Fingerprint, FingerprintAlgorithm, Fmtp, Group, IceCandidate, IceOptions,
@@ -65,6 +64,10 @@ pub enum SdpError {
     CreateTransport(#[from] TransportCreateError),
     #[error("Transport bundling is not supported by the peer")]
     PeerDoesNotSupportBundling,
+    #[error("SDP answer did not contain any previously offered codec")]
+    AnswerHasNoValidCodecs,
+    #[error("Failed to map media m-line-index={mline} of SDP answer to any offered media")]
+    AnswerContainsUnknownMedia { mline: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -104,7 +107,7 @@ pub struct SdpSession {
     stun_servers: Vec<SocketAddr>,
 
     // DTLS
-    ssl_context: SslContext,
+    ssl_context: OpenSslContext,
     fingerprint: Fingerprint,
 
     // Transports
@@ -219,13 +222,11 @@ impl SdpSession {
     ///
     /// The `address` will be put into the SDP connection attribute, which will serve as fallback address if no ICE is
     /// used.
-    pub fn new(address: IpAddr, config: SdpSessionConfig) -> Self {
-        // TODO: wrap this in a nice API
-        let ssl = make_ssl_context().unwrap();
-
-        let digest = ssl
+    pub fn new(ssl_context: OpenSslContext, address: IpAddr, config: SdpSessionConfig) -> Self {
+        let digest = ssl_context
+            .ctx
             .certificate()
-            .expect("SSL context always contains a certificate")
+            .expect("OpenSslContext context always contains a certificate")
             .digest(MessageDigest::sha256())
             .expect("Creating digest of certificate should not fail");
 
@@ -243,7 +244,7 @@ impl SdpSession {
             local_media: SlotMap::with_key(),
             ice_credentials: IceCredentials::random(),
             stun_servers: Vec::new(),
-            ssl_context: ssl,
+            ssl_context,
             fingerprint,
             next_transport_id: 0,
             transports: SlotMap::with_key(),
@@ -811,7 +812,7 @@ impl SdpSession {
 
                 let chosen_codec = self.local_media[pending_media.local_media_id]
                     .choose_codec_from_answer(remote_media_desc)
-                    .unwrap();
+                    .ok_or(SdpError::AnswerHasNoValidCodecs)?;
 
                 let recv_fmtp = remote_media_desc
                     .fmtp
@@ -869,8 +870,7 @@ impl SdpSession {
                 continue 'next_media_desc;
             }
 
-            // TODO: hard error?
-            log::warn!("Failed to match mline={mline} to any offered media");
+            return Err(SdpError::AnswerContainsUnknownMedia { mline });
         }
 
         // remove all media that is pending removal

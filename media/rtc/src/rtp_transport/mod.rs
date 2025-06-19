@@ -29,7 +29,6 @@ mod event;
 mod packet_kind;
 mod sdes_srtp;
 
-pub(crate) use dtls_srtp::make_ssl_context;
 pub use dtls_srtp::{DtlsHandshakeError, DtlsSetup, DtlsSrtpCreateError, RtpDtlsSrtpTransport};
 pub use event::{RtpTransportEvent, TransportConnectionState};
 pub use sdes_srtp::RtpSdesSrtpTransport;

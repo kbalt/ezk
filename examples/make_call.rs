@@ -1,6 +1,7 @@
 use rtc::{
     rtp_session::SendRtpPacket,
     sdp::{Codec, Codecs, SdpSession, SdpSessionConfig},
+    OpenSslContext,
 };
 use sdp_types::{Direction, MediaType};
 use sip_auth::{DigestAuthenticator, DigestCredentials, DigestUser};
@@ -42,7 +43,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Call alice
 
     // Setup SDP session
-    let mut sdp_session = SdpSession::new("192.168.1.128".parse()?, SdpSessionConfig::default());
+    let mut sdp_session = SdpSession::new(
+        OpenSslContext::try_new()?,
+        "192.168.1.128".parse()?,
+        SdpSessionConfig::default(),
+    );
 
     // Define some audio codecs
     let audio = sdp_session
