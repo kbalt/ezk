@@ -42,11 +42,11 @@ pub struct NegotiatedCodec {
     pub clock_rate: u32,
     /// Number of channels of the codec (usually only used for audio)
     pub channels: Option<u32>,
-    /// FMTP line set in the local SDP. Sets expectations for the data that is received from the peer.
-    pub send_fmtp: Option<String>,
     /// FMTP line set in the remote SDP. Should be used to configure the local encoder.
+    pub send_fmtp: Option<String>,
+    /// FMTP line set in the local SDP. Sets expectations for the data that is received from the peer.
     pub recv_fmtp: Option<String>,
-    /// Optional DTMF configuration if configured and then successfully negotiated.
+    /// DTMF configuration if configured and successfully negotiated.
     pub dtmf: Option<NegotiatedDtmf>,
 }
 
