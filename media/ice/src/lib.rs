@@ -310,7 +310,7 @@ impl IceAgent {
     /// Register a host address for a given ICE component. This will be used to create a host candidate.
     /// For the ICE agent to work properly, all available ip addresses of the host system should be provided.
     pub fn add_host_addr(&mut self, component: Component, addr: SocketAddr) {
-        if addr.ip().is_loopback() || addr.ip().is_unspecified() {
+        if addr.ip().is_unspecified() {
             return;
         }
 
