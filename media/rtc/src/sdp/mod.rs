@@ -355,7 +355,7 @@ impl SdpSession {
                         public_transport_id,
                         transport_kind,
                         ice_agent,
-                        matches!(self.config.rtcp_mux_policy, RtcpMuxPolicy::Negotiate),
+                        matches!(self.config.rtcp_mux_policy, RtcpMuxPolicy::Require),
                     ));
 
                 (
@@ -379,7 +379,7 @@ impl SdpSession {
                         public_transport_id,
                         transport_kind,
                         ice_agent,
-                        matches!(self.config.rtcp_mux_policy, RtcpMuxPolicy::Negotiate),
+                        matches!(self.config.rtcp_mux_policy, RtcpMuxPolicy::Require),
                     ));
 
                     AnyTransportId::Offered(id)
@@ -1259,6 +1259,7 @@ impl SdpSession {
     ) -> MediaDescription {
         let mut rtpmap = vec![];
         let mut fmtp = vec![];
+        let mut fmts = vec![media.codec_pt];
 
         rtpmap.push(RtpMap {
             payload: media.codec_pt,
@@ -1276,6 +1277,8 @@ impl SdpSession {
         let ports = transport.require_ports();
 
         if let Some(dtmf_pt) = media.dtmf_pt {
+            fmts.push(dtmf_pt);
+
             rtpmap.push(RtpMap {
                 payload: dtmf_pt,
                 encoding: "telephone-event".into(),
@@ -1290,7 +1293,7 @@ impl SdpSession {
                 port: ports.rtp,
                 ports_num: None,
                 proto: transport.type_().sdp_type(media.use_avpf),
-                fmts: vec![media.codec_pt],
+                fmts,
             },
             connection: None,
             bandwidth: vec![],

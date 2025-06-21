@@ -129,6 +129,11 @@ impl OfferedTransport {
                 desc.setup = Some(Setup::ActPass);
             }
         }
+
+        if let Some(ice_agent) = &self.ice_agent {
+            desc.ice_candidates.extend(ice_agent.ice_candidates());
+            desc.ice_end_of_candidates = true;
+        }
     }
 
     pub(crate) fn build_from_answer(
@@ -396,6 +401,11 @@ pub(super) fn populate_desc(transport: &RtpTransport, media_desc: &mut MediaDesc
                 DtlsSetup::Connect => Setup::Active,
             });
         }
+    }
+
+    if let Connectivity::Ice(ice_agent) = &transport.connectivity() {
+        media_desc.ice_candidates.extend(ice_agent.ice_candidates());
+        media_desc.ice_end_of_candidates = true;
     }
 }
 
