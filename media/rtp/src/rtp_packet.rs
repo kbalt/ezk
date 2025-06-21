@@ -44,7 +44,7 @@ impl RtpPacket {
     }
 
     pub fn to_vec(&self, extension_ids: RtpExtensionIds) -> Vec<u8> {
-        let mut vec = vec![];
+        let mut vec = Vec::with_capacity(1500);
         self.write_vec(extension_ids, &mut vec);
         vec
     }
