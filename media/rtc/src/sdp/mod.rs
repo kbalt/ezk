@@ -341,7 +341,14 @@ impl SdpSession {
             .transports
             .iter()
             .find(|(_, e)| e.transport.type_() == transport_kind)
-            .map(|(id, _)| id);
+            .map(|(id, _)| AnyTransportId::Established(id))
+            .or_else(|| {
+                // also search offered transports
+                self.offered_transports
+                    .iter()
+                    .find(|(_, t)| t.type_() == transport_kind)
+                    .map(|(id, _)| AnyTransportId::Offered(id))
+            });
 
         let (standalone_transport, bundle_transport) = match self.config.bundle_policy {
             BundlePolicy::MaxCompat => {
@@ -360,15 +367,13 @@ impl SdpSession {
 
                 (
                     Some(AnyTransportId::Offered(standalone_transport_id)),
-                    bundle_transport_id
-                        .map(AnyTransportId::Established)
-                        .unwrap_or(AnyTransportId::Offered(standalone_transport_id)),
+                    bundle_transport_id.unwrap_or(AnyTransportId::Offered(standalone_transport_id)),
                 )
             }
             BundlePolicy::MaxBundle => {
                 // Force bundling, only create a transport if none exists yet
                 let transport_id = if let Some(existing_transport) = bundle_transport_id {
-                    AnyTransportId::Established(existing_transport)
+                    existing_transport
                 } else {
                     let ice_agent = self.make_ice_agent();
 
@@ -1056,7 +1061,7 @@ impl SdpSession {
         let mut media_descriptions = vec![];
 
         // Put the current media sessions in the offer
-        for media in &self.media {
+        'outer: for media in &self.media {
             let mut override_direction = None;
 
             // Apply requested changes
@@ -1065,7 +1070,7 @@ impl SdpSession {
                     PendingChange::AddMedia(..) => {}
                     PendingChange::RemoveMedia(media_id) => {
                         if media.id == *media_id {
-                            continue;
+                            continue 'outer;
                         }
                     }
                     PendingChange::ChangeDirection(media_id, direction) => {
