@@ -1433,10 +1433,14 @@ impl SdpSession {
                         }
                     }
                     RtpSessionEvent::SendRtp(rtp_packet) => {
-                        writer.send_rtp(rtp_packet);
+                        if let Err(e) = writer.send_rtp(rtp_packet) {
+                            log::warn!("Failed to send RTP packet, {e:?}");
+                        }
                     }
                     RtpSessionEvent::SendRtcp(rtcp_packet) => {
-                        writer.send_rctp(rtcp_packet);
+                        if let Err(e) = writer.send_rctp(rtcp_packet) {
+                            log::warn!("Failed to send RTCP packet, {e:?}");
+                        }
                     }
                 }
             }

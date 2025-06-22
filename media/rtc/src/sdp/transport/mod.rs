@@ -328,7 +328,7 @@ pub(super) fn create_from_offer(
         Connectivity::Ice(ice_agent)
     } else {
         let (remote_rtp_address, remote_rtcp_address) =
-            resolve_rtp_and_rtcp_address(session_desc, media_desc).unwrap();
+            resolve_rtp_and_rtcp_address(session_desc, media_desc)?;
 
         Connectivity::Static {
             remote_rtp_address,

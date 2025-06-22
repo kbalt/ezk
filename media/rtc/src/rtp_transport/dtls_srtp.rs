@@ -23,7 +23,7 @@ pub enum DtlsSrtpCreateError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum DtlsHandshakeError {
-    #[error("Error during handshake: {0}")]
+    #[error("OpenSSL handshake error: {0}")]
     OpenSsl(#[from] openssl::ssl::Error),
     #[error("Failed to export keying material: {0}")]
     ExtractingKeyingMaterial(#[from] srtp::openssl::Error),
