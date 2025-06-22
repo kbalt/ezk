@@ -1,54 +1,9 @@
 use bytesstr::BytesStr;
-use ezk_rtc::{
-    OpenSslContext,
-    rtp_transport::RtpTransportPorts,
-    sdp::{
-        BundlePolicy, Codec, Codecs, LocalMediaId, RtcpMuxPolicy, SdpSession, SdpSessionConfig,
-        TransportChange,
-    },
-};
-use sdp_types::{Direction, MediaType, SessionDescription};
-use std::net::Ipv4Addr;
+use common::{make_session, satisfy_transport_changes};
+use ezk_rtc::sdp::{BundlePolicy, RtcpMuxPolicy, SdpSessionConfig};
+use sdp_types::{Direction, SessionDescription};
 
-fn make_session(config: SdpSessionConfig) -> (LocalMediaId, SdpSession) {
-    let mut session = SdpSession::new(
-        OpenSslContext::try_new().unwrap(),
-        Ipv4Addr::LOCALHOST.into(),
-        config,
-    );
-
-    let audio = session
-        .add_local_media(
-            Codecs::new(MediaType::Audio).with_codec(Codec::G722),
-            Direction::SendRecv,
-        )
-        .unwrap();
-
-    (audio, session)
-}
-
-fn satisfy_transport_changes(session: &mut SdpSession, port: u16) {
-    while let Some(change) = session.pop_transport_change() {
-        match change {
-            TransportChange::CreateSocket(transport_id) => {
-                session.set_transport_ports(
-                    transport_id,
-                    &[Ipv4Addr::LOCALHOST.into()],
-                    RtpTransportPorts::mux(port),
-                );
-            }
-            TransportChange::CreateSocketPair(transport_id) => {
-                session.set_transport_ports(
-                    transport_id,
-                    &[Ipv4Addr::LOCALHOST.into()],
-                    RtpTransportPorts::new(port, port + 1),
-                );
-            }
-            TransportChange::Remove(..) => {}
-            TransportChange::RemoveRtcpSocket(..) => {}
-        }
-    }
-}
+mod common;
 
 #[test]
 fn offer_ice_credentials_not_in_offer_when_ice_is_disabled() {
