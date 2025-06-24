@@ -51,7 +51,7 @@ a=rtpmap:9 G722/8000/1
 
     let offer = SessionDescription::parse(&BytesStr::from_static(offer)).unwrap();
 
-    let answer = session.receive_sdp_offer(offer.clone()).unwrap();
+    let answer = session.receive_sdp_offer(offer).unwrap();
 
     satisfy_transport_changes(&mut session, 1000);
 
@@ -65,7 +65,7 @@ a=rtpmap:9 G722/8000/1
     // Make sure the fingerprint is in the session level
     assert_eq!(answer.fingerprint.len(), 1);
     // No fingerprint in media level
-    assert!(offer.media_descriptions[0].fingerprint.is_empty());
+    assert!(answer.media_descriptions[0].fingerprint.is_empty());
 
     // Setup attribute must be set on the media level so it can be different per transport
     // depending on which side initiated the (re)-negotiation, the receiver of the offer should be passive

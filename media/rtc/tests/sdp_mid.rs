@@ -45,7 +45,7 @@ a=rtpmap:9 G722/8000/1
 
     let offer = SessionDescription::parse(&BytesStr::from_static(offer)).unwrap();
 
-    let answer = session.receive_sdp_offer(offer.clone()).unwrap();
+    let answer = session.receive_sdp_offer(offer).unwrap();
 
     satisfy_transport_changes(&mut session, 1000);
 
@@ -74,7 +74,7 @@ a=rtpmap:9 G722/8000/1
 
     let offer = SessionDescription::parse(&BytesStr::from_static(offer)).unwrap();
 
-    let answer = session.receive_sdp_offer(offer.clone()).unwrap();
+    let answer = session.receive_sdp_offer(offer).unwrap();
 
     satisfy_transport_changes(&mut session, 1000);
 
@@ -101,7 +101,7 @@ a=rtpmap:9 G722/8000/1
 
     let offer = SessionDescription::parse(&BytesStr::from_static(offer)).unwrap();
 
-    let answer = session.receive_sdp_offer(offer.clone()).unwrap();
+    let answer = session.receive_sdp_offer(offer).unwrap();
 
     satisfy_transport_changes(&mut session, 1000);
 
