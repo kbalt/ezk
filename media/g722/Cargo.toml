@@ -8,4 +8,3 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-bytes = "1"
