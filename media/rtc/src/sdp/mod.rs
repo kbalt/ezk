@@ -16,6 +16,7 @@ use crate::{
     sdp::{
         local_media::LocalMedia,
         media::{Media, MediaStreams},
+        pending_media::PendingMedia,
     },
 };
 use bytes::Bytes;
@@ -44,6 +45,7 @@ mod config;
 mod event;
 mod local_media;
 mod media;
+mod pending_media;
 mod rtp_extensions;
 mod transport;
 
@@ -141,67 +143,6 @@ enum PendingChange {
     AddMedia(PendingMedia),
     RemoveMedia(MediaId),
     ChangeDirection(MediaId, Direction),
-}
-
-struct PendingMedia {
-    id: MediaId,
-    local_media_id: LocalMediaId,
-    media_type: MediaType,
-    mid: BytesStr,
-    direction: Direction,
-    use_avpf: bool,
-    /// Transport to use when not bundling,
-    /// this is discarded when the peer chooses the bundle transport
-    standalone_transport_id: Option<AnyTransportId>,
-    /// Transport to use when bundling
-    bundle_transport_id: AnyTransportId,
-}
-
-impl PendingMedia {
-    fn matches_answer(
-        &self,
-        transports: &SlotMap<EstablishedTransportId, EstablishedTransport>,
-        offered_transports: &SlotMap<OfferedTransportId, OfferedTransport>,
-        desc: &MediaDescription,
-    ) -> bool {
-        if self.media_type != desc.media.media_type {
-            return false;
-        }
-
-        if let Some(answer_mid) = &desc.mid {
-            return self.mid == answer_mid.as_str();
-        }
-
-        if let Some(standalone_transport) = self.standalone_transport_id {
-            let expected_sdp_transport = match standalone_transport {
-                AnyTransportId::Established(transport_id) => transports[transport_id]
-                    .transport
-                    .type_()
-                    .sdp_type(self.use_avpf),
-                AnyTransportId::Offered(offered_transport_id) => offered_transports
-                    [offered_transport_id]
-                    .type_()
-                    .sdp_type(self.use_avpf),
-            };
-
-            if expected_sdp_transport == desc.media.proto {
-                return true;
-            }
-        }
-
-        let expected_sdp_transport = match self.bundle_transport_id {
-            AnyTransportId::Established(transport_id) => transports[transport_id]
-                .transport
-                .type_()
-                .sdp_type(self.use_avpf),
-            AnyTransportId::Offered(offered_transport_id) => offered_transports
-                [offered_transport_id]
-                .type_()
-                .sdp_type(self.use_avpf),
-        };
-
-        expected_sdp_transport == desc.media.proto
-    }
 }
 
 /// Some additional information to create a SDP answer. Must be passed into [`SdpSession::create_sdp_answer`].
