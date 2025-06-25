@@ -1,0 +1,11 @@
+[package]
+name = "ezk-g722"
+version = "0.2.0"
+description = "G.722 audio codec"
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+bytes = "1"
