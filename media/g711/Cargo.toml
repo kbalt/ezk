@@ -1,0 +1,10 @@
+[package]
+name = "ezk-g711"
+version = "0.3.0"
+description = "G.711 audio codec"
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
