@@ -546,7 +546,9 @@ impl RtpTransportWriter<'_> {
         match &mut self.transport.kind {
             RtpTransportKind::Unencrypted => {}
             RtpTransportKind::SdesSrtp(rtp_sdes_srtp_transport) => {
-                rtp_sdes_srtp_transport.outbound.protect(&mut rtcp_packet)?;
+                rtp_sdes_srtp_transport
+                    .outbound
+                    .protect_rtcp(&mut rtcp_packet)?;
             }
             RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) => {
                 let DtlsState::Connected { outbound, .. } = rtp_dtls_srtp_transport.state() else {
