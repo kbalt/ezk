@@ -79,7 +79,7 @@ impl fmt::Display for MediaDescription {
         write!(f, "m={}\r\n", self.media)?;
 
         if let Some(conn) = &self.connection {
-            write!(f, "c={}\r\n", conn)?;
+            write!(f, "c={conn}\r\n")?;
         }
 
         for bw in &self.bandwidth {
@@ -89,7 +89,7 @@ impl fmt::Display for MediaDescription {
         write!(f, "a={}\r\n", self.direction)?;
 
         if let Some(rtcp) = &self.rtcp {
-            write!(f, "a=rtcp:{}\r\n", rtcp)?;
+            write!(f, "a=rtcp:{rtcp}\r\n")?;
         }
 
         if self.rtcp_mux {
@@ -97,15 +97,15 @@ impl fmt::Display for MediaDescription {
         }
 
         if let Some(mid) = &self.mid {
-            write!(f, "a=mid:{}\r\n", mid)?;
+            write!(f, "a=mid:{mid}\r\n")?;
         }
 
         for rtpmap in &self.rtpmap {
-            write!(f, "a=rtpmap:{}\r\n", rtpmap)?;
+            write!(f, "a=rtpmap:{rtpmap}\r\n")?;
         }
 
         for fmtp in &self.fmtp {
-            write!(f, "a=fmtp:{}\r\n", fmtp)?;
+            write!(f, "a=fmtp:{fmtp}\r\n")?;
         }
 
         if let Some(ufrag) = &self.ice_ufrag {
@@ -149,7 +149,7 @@ impl fmt::Display for MediaDescription {
         }
 
         for attr in &self.attributes {
-            write!(f, "{}\r\n", attr)?;
+            write!(f, "{attr}\r\n")?;
         }
 
         Ok(())

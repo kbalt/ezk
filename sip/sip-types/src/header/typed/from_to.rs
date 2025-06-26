@@ -56,7 +56,7 @@ impl Print for FromTo {
         ctx.uri = Some(UriContext::FromTo);
         self.uri.print(f, ctx)?;
         if let Some(tag) = &self.tag {
-            write!(f, ";tag={}", tag)?;
+            write!(f, ";tag={tag}")?;
         }
         self.params.print(f, ctx)
     }

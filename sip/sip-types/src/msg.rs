@@ -168,7 +168,7 @@ impl fmt::Display for StatusLine {
         write!(f, "SIP/2.0 {}", self.code.into_u16())?;
 
         if let Some(reason) = &self.reason {
-            write!(f, " {}", reason)?;
+            write!(f, " {reason}")?;
         }
 
         Ok(())

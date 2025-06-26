@@ -95,7 +95,7 @@ mod test {
 
         match addr {
             TaggedAddress::IP4(ip) => assert_eq!(ip, Ipv4Addr::new(192, 168, 123, 222)),
-            other => panic!("{:?}", other),
+            other => panic!("{other:?}"),
         }
     }
 
@@ -116,7 +116,7 @@ mod test {
 
         match addr {
             TaggedAddress::IP4FQDN(host) => assert_eq!(host, "example.com"),
-            other => panic!("{:?}", other),
+            other => panic!("{other:?}"),
         }
     }
 
@@ -137,7 +137,7 @@ mod test {
 
         match addr {
             TaggedAddress::IP6(ip) => assert_eq!(ip, Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)),
-            other => panic!("{:?}", other),
+            other => panic!("{other:?}"),
         }
     }
 
@@ -158,7 +158,7 @@ mod test {
 
         match addr {
             TaggedAddress::IP6FQDN(host) => assert_eq!(host, "example.com"),
-            other => panic!("{:?}", other),
+            other => panic!("{other:?}"),
         }
     }
 

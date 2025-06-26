@@ -159,7 +159,7 @@ impl Decoder for StreamingDecoder {
                 match Line::parse(&src_bytes, line).finish() {
                     Ok((_, line)) => headers.insert(line.name, line.value),
                     Err(e) => {
-                        log::error!("Incoming SIP message has malformed header line, {}", e);
+                        log::error!("Incoming SIP message has malformed header line, {e}");
                     }
                 }
             }

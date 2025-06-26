@@ -319,7 +319,7 @@ impl Endpoint {
         let mut base_headers = match BaseHeaders::extract_from(&message.headers) {
             Ok(base_headers) => base_headers,
             Err(e) => {
-                log::warn!("Failed to get base headers for incoming message, {}", e);
+                log::warn!("Failed to get base headers for incoming message, {e}");
                 return;
             }
         };
@@ -331,7 +331,7 @@ impl Endpoint {
         let tsx_key = match TsxKey::from_message_parts(&message.line, &base_headers) {
             Ok(tsx_key) => tsx_key,
             Err(e) => {
-                log::warn!("Failed to get tsx key for incoming message, {}", e);
+                log::warn!("Failed to get tsx key for incoming message, {e}");
                 return;
             }
         };
@@ -349,10 +349,10 @@ impl Endpoint {
                     body: message.body,
                 };
 
-                log::trace!("delegating message to transaction {}", tsx_key);
+                log::trace!("delegating message to transaction {tsx_key}");
 
                 if let Some(rejected_tsx_message) = handler(tsx_message) {
-                    log::trace!("transaction {} rejected message", tsx_key);
+                    log::trace!("transaction {tsx_key} rejected message");
 
                     // TsxMessage was rejected, restore previous state
                     base_headers = rejected_tsx_message.base_headers;
@@ -414,7 +414,7 @@ impl Endpoint {
         let request = request.unwrap();
 
         if let Err(e) = self.handle_unwanted_request(request).await {
-            log::error!("Failed to respond to unhandled incoming request, {:?}", e);
+            log::error!("Failed to respond to unhandled incoming request, {e:?}");
         }
     }
 

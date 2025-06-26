@@ -58,16 +58,16 @@ impl fmt::Display for Connection {
         match self.address {
             TaggedAddress::IP4(_) | TaggedAddress::IP4FQDN(_) => {
                 if let Some(ttl) = self.ttl {
-                    write!(f, "/{}", ttl)?;
+                    write!(f, "/{ttl}")?;
 
                     if let Some(num) = self.num {
-                        write!(f, "/{}", num)?;
+                        write!(f, "/{num}")?;
                     }
                 }
             }
             TaggedAddress::IP6(_) | TaggedAddress::IP6FQDN(_) => {
                 if let Some(num) = self.num {
-                    write!(f, "/{}", num)?;
+                    write!(f, "/{num}")?;
                 }
             }
         }

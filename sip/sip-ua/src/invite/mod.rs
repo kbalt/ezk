@@ -147,7 +147,7 @@ impl Layer for InviteLayer {
                 .handle_cancel(endpoint, MayTake::new(request.inner()))
                 .await
             {
-                log::error!("Failed to handle CANCEL request {:?}", e);
+                log::error!("Failed to handle CANCEL request {e:?}");
             }
         }
     }
@@ -266,10 +266,7 @@ impl Usage for InviteUsage {
                             )
                             .await
                         {
-                            log::warn!(
-                                "Failed to handle bye request in provisional state: {:?}",
-                                e
-                            );
+                            log::warn!("Failed to handle bye request in provisional state: {e:?}");
                         }
                     }
                     InviteSessionState::Established { evt_sink } => {
@@ -291,7 +288,7 @@ impl Usage for InviteUsage {
                     .handle_prack(endpoint, MayTake::new(request.inner()))
                     .await
                 {
-                    log::warn!("Failed to handle PRACK request {:?}", e);
+                    log::warn!("Failed to handle PRACK request {e:?}");
                 }
             }
             _ => {}

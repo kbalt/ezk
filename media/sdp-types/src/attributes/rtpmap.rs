@@ -71,7 +71,7 @@ impl fmt::Display for RtpMap {
         write!(f, "{} {}/{}", self.payload, self.encoding, self.clock_rate)?;
 
         if let Some(params) = &self.params {
-            let _ = write!(f, "/{}", params);
+            let _ = write!(f, "/{params}");
         }
 
         Ok(())

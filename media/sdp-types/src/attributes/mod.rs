@@ -58,7 +58,7 @@ impl fmt::Display for UnknownAttribute {
         write!(f, "a={}", self.name)?;
 
         if let Some(value) = &self.value {
-            write!(f, ":{}", value)?;
+            write!(f, ":{value}")?;
         }
 
         Ok(())

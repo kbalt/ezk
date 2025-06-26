@@ -56,7 +56,7 @@ impl fmt::Display for EventReasonValue {
             GiveUp => f.write_str("giveup"),
             NoResource => f.write_str("noresource"),
             Invariant => f.write_str("invariant"),
-            Other(o) => write!(f, "{}", o),
+            Other(o) => write!(f, "{o}"),
         }
     }
 }
@@ -107,13 +107,13 @@ impl Print for SubscriptionState {
     fn print(&self, f: &mut Formatter<'_>, _ctx: PrintCtx<'_>) -> fmt::Result {
         write!(f, "{}", self.state)?;
         if let Some(e) = &self.expires {
-            write!(f, ";expires={}", e)?;
+            write!(f, ";expires={e}")?;
         }
         if let Some(reason) = &self.reason {
-            write!(f, ";reason={}", reason)?;
+            write!(f, ";reason={reason}")?;
         }
         if let Some(after) = &self.retry_after {
-            write!(f, ";retry-after={}", after)?;
+            write!(f, ";retry-after={after}")?;
         }
         write!(f, "{}", &self.params)?;
         Ok(())

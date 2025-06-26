@@ -219,12 +219,12 @@ where
                 let local = match stream.local_addr() {
                     Ok(local) => local,
                     Err(e) => {
-                        log::error!("Could not retrieve local addr for incoming stream {}", e);
+                        log::error!("Could not retrieve local addr for incoming stream {e}");
                         continue;
                     }
                 };
 
-                log::trace!("Connection accepted from {} on {}", remote, local);
+                log::trace!("Connection accepted from {remote} on {local}");
 
                 let (read, write) = split(stream);
 
@@ -251,7 +251,7 @@ where
                     true,
                 ));
             }
-            Err(e) => log::error!("Error accepting connection, {}", e),
+            Err(e) => log::error!("Error accepting connection, {e}"),
         }
     }
 }

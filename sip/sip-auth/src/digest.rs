@@ -203,7 +203,7 @@ impl ClientAuthenticator for DigestAuthenticator {
                 let response = match result {
                     Ok(response) => response,
                     Err(e) => {
-                        log::warn!("failed to handle challenge {}", e);
+                        log::warn!("failed to handle challenge {e}");
                         continue;
                     }
                 };

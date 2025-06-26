@@ -35,7 +35,7 @@ impl Udp {
         let socket = UdpSocket::bind(addr).await?;
         let bound = socket.local_addr()?;
 
-        log::info!("Bound UDP to {}", bound);
+        log::info!("Bound UDP to {bound}");
 
         let inner = Arc::new(Inner { bound, socket });
 
@@ -98,7 +98,7 @@ async fn receive_task(
         let result = inner.socket.recv_from(&mut buffer).await;
 
         if let Err(e) = handle_msg(&endpoint, &inner, &handle, result, &buffer).await {
-            log::error!("UDP recv error {:?}", e);
+            log::error!("UDP recv error {e:?}");
         }
     }
 }

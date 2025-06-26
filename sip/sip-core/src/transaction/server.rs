@@ -78,7 +78,7 @@ impl ServerTsx {
                         .send_outgoing_response(&mut response)
                         .await
                     {
-                        log::warn!("Failed to retransmit message, {}", e);
+                        log::warn!("Failed to retransmit message, {e}");
                     }
                 }
             }

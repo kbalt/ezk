@@ -339,7 +339,7 @@ impl Transports {
         for server in servers {
             // Search unmanaged ones (connectionless, e.g. udp)
             if let Some(transport) = self.find_matching_unmanaged_transport(uri, &server) {
-                log::trace!("selected connectionless: {}", transport);
+                log::trace!("selected connectionless: {transport}");
 
                 return Ok((transport.clone(), server.address));
             }
@@ -463,7 +463,7 @@ impl Transports {
 
             match factory.create(endpoint.clone(), uri, server.address).await {
                 Ok(transport) => {
-                    log::debug!("created new transport {}", transport);
+                    log::debug!("created new transport {transport}");
 
                     return Some(transport);
                 }
@@ -558,7 +558,7 @@ impl Transports {
 
     /// Remove the transport behind the key
     pub(crate) fn drop_transport(&self, tp_key: &TpKey) {
-        log::trace!("drop transport {:?}", tp_key);
+        log::trace!("drop transport {tp_key:?}");
 
         self.transports.lock().remove(tp_key);
     }

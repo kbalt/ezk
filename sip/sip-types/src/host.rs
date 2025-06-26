@@ -96,8 +96,8 @@ impl From<Ipv6Addr> for Host {
 impl fmt::Display for Host {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Host::IP6(addr) => write!(f, "[{}]", addr),
-            Host::IP4(addr) => write!(f, "{}", addr),
+            Host::IP6(addr) => write!(f, "[{addr}]"),
+            Host::IP4(addr) => write!(f, "{addr}"),
             Host::Name(name) => f.write_str(name),
         }
     }
@@ -187,7 +187,7 @@ impl Print for HostPort {
 
         match self.port {
             Some(port) if !matches!(ctx.uri, Some(UriContext::FromTo)) => {
-                write!(f, ":{}", port)
+                write!(f, ":{port}")
             }
             _ => Ok(()),
         }

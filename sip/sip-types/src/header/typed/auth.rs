@@ -171,11 +171,11 @@ impl Print for DigestChallenge {
         )?;
 
         if let Some(domain) = &self.domain {
-            write!(f, r#", domain="{}""#, domain)?;
+            write!(f, r#", domain="{domain}""#)?;
         }
 
         if let Some(opaque) = &self.opaque {
-            write!(f, r#", opaque="{}""#, opaque)?;
+            write!(f, r#", opaque="{opaque}""#)?;
         }
 
         if self.stale {
@@ -192,10 +192,10 @@ impl Print for DigestChallenge {
         let mut qop_iter = self.qop.iter();
 
         if let Some(first) = qop_iter.next() {
-            write!(f, r#", qop="{}"#, first)?;
+            write!(f, r#", qop="{first}"#)?;
 
             for qop_option in qop_iter {
-                write!(f, ",{}", qop_option)?;
+                write!(f, ",{qop_option}")?;
             }
 
             f.write_char('"')?;
@@ -206,7 +206,7 @@ impl Print for DigestChallenge {
         }
 
         for param in &self.other {
-            write!(f, ", {}", param)?;
+            write!(f, ", {param}")?;
         }
 
         Ok(())
@@ -283,7 +283,7 @@ impl Username {
         match maybe_encoded {
             Cow::Borrowed(_) => Username::Username(username),
             Cow::Owned(encoded) => {
-                let username_encoded = format!("UTF-8''{}", encoded).into();
+                let username_encoded = format!("UTF-8''{encoded}").into();
 
                 Username::UsernameNonASCII(username_encoded)
             }
@@ -295,10 +295,10 @@ impl Display for Username {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Username::Username(username) => {
-                write!(f, r#"username="{}""#, username)
+                write!(f, r#"username="{username}""#)
             }
             Username::UsernameNonASCII(username_non_ascii) => {
-                write!(f, r#"username*={}"#, username_non_ascii)
+                write!(f, r#"username*={username_non_ascii}"#)
             }
         }
     }
@@ -426,7 +426,7 @@ impl Print for DigestResponse {
         }
 
         if let Some(opaque) = &self.opaque {
-            write!(f, r#", opaque="{}""#, opaque)?;
+            write!(f, r#", opaque="{opaque}""#)?;
         }
 
         if let Some(qop_response) = &self.qop_response {
@@ -442,7 +442,7 @@ impl Print for DigestResponse {
         }
 
         for param in &self.other {
-            write!(f, ", {}", param)?;
+            write!(f, ", {param}")?;
         }
 
         Ok(())
@@ -512,8 +512,8 @@ impl From<BytesStr> for Algorithm {
 impl Display for Algorithm {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Algorithm::AlgorithmValue(algorithm) => write!(f, "{}", algorithm),
-            Algorithm::AkaNamespace((version, algorithm)) => write!(f, "{}-{}", version, algorithm),
+            Algorithm::AlgorithmValue(algorithm) => write!(f, "{algorithm}"),
+            Algorithm::AkaNamespace((version, algorithm)) => write!(f, "{version}-{algorithm}"),
         }
     }
 }
@@ -637,10 +637,10 @@ impl Print for Auth {
         let mut params = self.params.iter();
 
         if let Some(param) = params.next() {
-            write!(f, "{}", param)?;
+            write!(f, "{param}")?;
 
             for param in params {
-                write!(f, ", {}", param)?;
+                write!(f, ", {param}")?;
             }
         }
 

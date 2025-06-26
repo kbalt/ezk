@@ -44,7 +44,7 @@ fn parse_complete_stun(bytes: &[u8]) -> Result<CompleteItem, Error> {
     let msg = match Message::parse(bytes) {
         Ok(msg) => msg,
         Err(e) => {
-            log::warn!("failed to parse complete stun message, {}", e);
+            log::warn!("failed to parse complete stun message, {e}");
             return Err(Error::FailedToParse);
         }
     };
@@ -81,8 +81,7 @@ fn parse_complete_sip(bytes: &[u8]) -> Result<CompleteItem, Error> {
                 }
                 Err(_) => {
                     log::warn!(
-                        "Incoming SIP message contained invalid Request/Status Line: {:?}",
-                        line
+                        "Incoming SIP message contained invalid Request/Status Line: {line:?}"
                     );
                     return Err(Error::FailedToParse);
                 }
@@ -91,7 +90,7 @@ fn parse_complete_sip(bytes: &[u8]) -> Result<CompleteItem, Error> {
             match Line::parse(&buffer, line).finish() {
                 Ok((_, line)) => headers.insert(line.name, line.value),
                 Err(e) => {
-                    log::error!("Incoming SIP message has malformed header line, {}", e);
+                    log::error!("Incoming SIP message has malformed header line, {e}");
                     return Err(Error::FailedToParse);
                 }
             }

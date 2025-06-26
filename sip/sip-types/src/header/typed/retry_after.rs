@@ -84,7 +84,7 @@ impl fmt::Display for RetryAfter {
         write!(f, "{}{}", self.value, self.params)?;
 
         if let Some(comment) = &self.comment {
-            write!(f, " ({})", comment)?;
+            write!(f, " ({comment})")?;
         }
 
         Ok(())

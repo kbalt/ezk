@@ -103,7 +103,7 @@ impl fmt::Debug for BytesPrint<'_> {
             } else if (0x20..0x7f).contains(&b) {
                 write!(f, "{}", b as char)?;
             } else {
-                write!(f, "\\x{:02x}", b)?;
+                write!(f, "\\x{b:02x}")?;
             }
         }
         Ok(())

@@ -11,11 +11,11 @@ use sha2::Sha256;
 use std::convert::TryFrom;
 
 pub fn long_term_password_md5(username: &str, realm: &str, password: &str) -> Vec<u8> {
-    md5::compute(format!("{}:{}:{}", username, realm, password).as_bytes()).to_vec()
+    md5::compute(format!("{username}:{realm}:{password}").as_bytes()).to_vec()
 }
 
 pub fn long_term_password_sha256(username: &str, realm: &str, password: &str) -> Vec<u8> {
-    Sha256::digest(format!("{}:{}:{}", username, realm, password).as_bytes()).to_vec()
+    Sha256::digest(format!("{username}:{realm}:{password}").as_bytes()).to_vec()
 }
 
 pub struct MessageIntegrityKey(SimpleHmac<Sha1>);

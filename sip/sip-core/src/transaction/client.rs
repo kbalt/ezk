@@ -43,8 +43,7 @@ impl ClientTsx {
 
         assert!(
             !matches!(method, Method::INVITE | Method::ACK),
-            "tried to create client transaction from {} request",
-            method
+            "tried to create client transaction from {method} request"
         );
 
         let mut request = endpoint.create_outgoing(request, target).await?;

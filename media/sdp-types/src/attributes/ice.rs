@@ -42,7 +42,7 @@ impl fmt::Display for IceOptions {
         }
 
         for option in &self.options {
-            write!(f, " {}", option)?;
+            write!(f, " {option}")?;
         }
 
         Ok(())

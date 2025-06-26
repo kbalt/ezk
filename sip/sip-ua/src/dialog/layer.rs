@@ -121,7 +121,7 @@ impl Layer for DialogLayer {
             }
         };
 
-        log::debug!("message matches {:?}", key);
+        log::debug!("message matches {key:?}");
 
         'outer: for request in requests {
             let mut request = Some(request);
@@ -142,7 +142,7 @@ impl Layer for DialogLayer {
             // Requests that not handled by any usage will be handled with some default behavior
             if let Some(request) = request {
                 if let Err(e) = self.handle_unwanted_request(endpoint, request).await {
-                    log::warn!("failed to respond to unwanted request, {:?}", e);
+                    log::warn!("failed to respond to unwanted request, {e:?}");
                 }
             }
         }

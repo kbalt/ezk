@@ -183,15 +183,15 @@ impl fmt::Display for IceCandidate {
         )?;
 
         if let Some(rel_addr) = &self.rel_addr {
-            write!(f, " raddr {}", rel_addr)?;
+            write!(f, " raddr {rel_addr}")?;
         }
 
         if let Some(rel_port) = &self.rel_port {
-            write!(f, " rport {}", rel_port)?;
+            write!(f, " rport {rel_port}")?;
         }
 
         for (key, value) in &self.unknown {
-            write!(f, " {} {}", key, value)?;
+            write!(f, " {key} {value}")?;
         }
 
         Ok(())

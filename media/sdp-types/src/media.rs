@@ -157,7 +157,7 @@ impl fmt::Display for Media {
         write!(f, "{}", self.proto)?;
 
         for fmt in &self.fmts {
-            write!(f, " {}", fmt)?;
+            write!(f, " {fmt}")?;
         }
 
         Ok(())

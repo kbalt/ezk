@@ -11,7 +11,7 @@ pub struct UserHash(pub [u8; 32]);
 
 impl UserHash {
     pub fn new(username: &str, realm: &str) -> Self {
-        let input = format!("{}:{}", username, realm);
+        let input = format!("{username}:{realm}");
         let output = Sha256::digest(input.as_bytes());
 
         Self(output.into())

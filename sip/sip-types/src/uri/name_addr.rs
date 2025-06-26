@@ -81,7 +81,7 @@ impl_from_str!(NameAddr);
 impl Print for NameAddr {
     fn print(&self, f: &mut fmt::Formatter<'_>, ctx: PrintCtx<'_>) -> fmt::Result {
         if let Some(name) = &self.name {
-            write!(f, "\"{}\"", name)?;
+            write!(f, "\"{name}\"")?;
         }
 
         write!(f, "<{}>", self.uri.print_ctx(ctx))

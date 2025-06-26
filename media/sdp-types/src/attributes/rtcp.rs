@@ -51,7 +51,7 @@ impl fmt::Display for Rtcp {
         write!(f, "{}", self.port)?;
 
         if let Some(address) = &self.address {
-            write!(f, " {}", address)?;
+            write!(f, " {address}")?;
         }
 
         Ok(())
