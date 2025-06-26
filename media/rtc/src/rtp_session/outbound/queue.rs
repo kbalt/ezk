@@ -30,6 +30,7 @@ struct QueueKey {
 struct QueueEntry {
     pt: u8,
     timestamp: RtpTimestamp,
+    marker: bool,
     extensions: RtpExtensions,
     payload: Bytes,
 }
@@ -64,6 +65,7 @@ impl OutboundQueue {
             send_at,
             media_time,
             pt,
+            marker,
             extensions,
             payload,
         }: SendRtpPacket,
@@ -90,6 +92,7 @@ impl OutboundQueue {
             QueueEntry {
                 pt,
                 timestamp,
+                marker,
                 extensions,
                 payload,
             },
@@ -106,6 +109,7 @@ impl OutboundQueue {
         let QueueEntry {
             pt,
             timestamp,
+            marker,
             extensions,
             payload,
         } = self
@@ -119,6 +123,7 @@ impl OutboundQueue {
             sequence_number: self.current_sequence_number.increase_one(),
             ssrc: Ssrc(0), // set by the stream
             timestamp,
+            marker,
             extensions,
             payload,
         })

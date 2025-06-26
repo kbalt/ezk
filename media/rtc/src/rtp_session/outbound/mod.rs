@@ -129,6 +129,7 @@ pub struct SendRtpPacket {
     send_at: Instant,
     media_time: Instant,
     pt: u8,
+    marker: bool,
     extensions: RtpExtensions,
     payload: Bytes,
 }
@@ -144,6 +145,7 @@ impl SendRtpPacket {
             send_at: media_time,
             media_time,
             pt,
+            marker: false,
             extensions: RtpExtensions::default(),
             payload,
         }
@@ -162,5 +164,10 @@ impl SendRtpPacket {
             send_at: at,
             ..self
         }
+    }
+
+    /// Set the marker bit of the RTP header
+    pub fn marker(self, marker: bool) -> Self {
+        Self { marker, ..self }
     }
 }

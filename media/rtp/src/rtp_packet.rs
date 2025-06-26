@@ -8,6 +8,7 @@ pub struct RtpPacket {
     pub sequence_number: SequenceNumber,
     pub ssrc: Ssrc,
     pub timestamp: RtpTimestamp,
+    pub marker: bool,
     pub extensions: RtpExtensions,
     pub payload: Bytes,
 }
@@ -30,6 +31,7 @@ impl RtpPacket {
             .sequence_number(self.sequence_number.0)
             .ssrc(self.ssrc.0)
             .timestamp(self.timestamp.0)
+            .marker_bit(self.marker)
             .payload(&self.payload[..]);
 
         let builder = self.extensions.write(extension_ids, builder);
@@ -63,11 +65,12 @@ impl RtpPacket {
             RtpExtensions { mid: None }
         };
 
-        Ok(Self {
+        Ok(RtpPacket {
             pt: parsed.payload_type(),
             sequence_number: SequenceNumber(parsed.sequence_number()),
             ssrc: Ssrc(parsed.ssrc()),
             timestamp: RtpTimestamp(parsed.timestamp()),
+            marker: parsed.marker_bit(),
             extensions,
             payload: packet.slice_ref(parsed.payload()),
         })
