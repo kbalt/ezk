@@ -317,6 +317,7 @@ mod tests {
             sequence_number: SequenceNumber(seq),
             ssrc: Ssrc(0),
             timestamp: RtpTimestamp(ts),
+            marker: false,
             extensions: RtpExtensions::default(),
             payload: Bytes::new(),
         }
