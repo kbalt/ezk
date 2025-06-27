@@ -24,7 +24,7 @@ openssl = "0.10"
 rand = "0.9"
 slotmap = "1.0.7"
 srtp = { version = "0.7", features = [
-  "enable-openssl",
+ "enable-openssl",
 ], default-features = false }
 thiserror = "2"
 time = "0.3"
@@ -42,4 +42,4 @@ default = ["tokio"]
 tokio = ["dep:tokio", "dep:quinn-udp", "dep:local-ip-address"]
 
 vendor-openssl = ["openssl/vendored"]
-vendor-srtp = ["srtp/build-libsrtp"]
+#vendor-srtp = ["srtp/build-libsrtp"]

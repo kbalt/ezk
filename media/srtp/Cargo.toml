@@ -1,0 +1,22 @@
+[package]
+name = "ezk-srtp"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+links = "srtp2"
+
+[dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
+openssl-sys = "0.9"
+log = "0.4"
+thiserror = "2"
+
+[build-dependencies]
+bindgen = "0.72"
+cmake = "0.1"
+
+[lints]
+workspace = true
