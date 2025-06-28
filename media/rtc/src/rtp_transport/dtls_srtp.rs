@@ -2,7 +2,7 @@ use openssl::{
     hash::MessageDigest,
     ssl::{ErrorCode, Ssl, SslStream, SslVerifyMode},
 };
-use srtp::openssl::Config;
+use srtp::{DtlsSrtpPolicies, SrtpError, SrtpFromSslError, SrtpSession};
 use std::{
     collections::VecDeque,
     io::{self, Cursor, Read, Write},
@@ -25,8 +25,10 @@ pub enum DtlsSrtpCreateError {
 pub enum DtlsHandshakeError {
     #[error("OpenSSL handshake error: {0}")]
     OpenSsl(#[from] openssl::ssl::Error),
-    #[error("Failed to export keying material: {0}")]
-    ExtractingKeyingMaterial(#[from] srtp::openssl::Error),
+    #[error("Failed to create SRTP policies from DTLS state: {0}")]
+    SrtpFromSsl(#[from] SrtpFromSslError),
+    #[error("Failed to create SRTP session: {0}")]
+    CreateSrtp(#[from] SrtpError),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -39,8 +41,8 @@ pub(crate) enum DtlsState {
     Accepting,
     Connecting,
     Connected {
-        inbound: srtp::Session,
-        outbound: srtp::Session,
+        inbound: SrtpSession,
+        outbound: SrtpSession,
     },
     Failed,
 }
@@ -161,12 +163,12 @@ impl RtpDtlsSrtpTransport {
         if matches!(self.state, DtlsState::Connected { .. }) {
             Ok(())
         } else {
-            let (inbound, outbound) =
-                srtp::openssl::session_pair(self.stream.ssl(), Config::default())?;
+            let DtlsSrtpPolicies { inbound, outbound } =
+                DtlsSrtpPolicies::from_ssl(self.stream.ssl())?;
 
             self.state = DtlsState::Connected {
-                inbound: inbound.into_session(),
-                outbound: outbound.into_session(),
+                inbound: SrtpSession::new(vec![inbound])?,
+                outbound: SrtpSession::new(vec![outbound])?,
             };
 
             Ok(())

@@ -5,7 +5,7 @@ use sdp_types::{
     SrtpCrypto, SrtpKeyingMaterial,
     SrtpSuite::{self, *},
 };
-use srtp::CryptoPolicy;
+use srtp::{CryptoPolicy, SrtpError, SrtpPolicy, SrtpSession, Ssrc};
 
 const SUITES: [SrtpSuite; 4] = [
     AES_256_CM_HMAC_SHA1_80,
@@ -21,7 +21,7 @@ pub enum SdesSrtpNegotiationError {
     #[error("Failed to decode base64 key in crypto attribute")]
     InvalidBas64(#[from] base64::DecodeError),
     #[error("Failed to create SRTP session")]
-    CreateSrtpSession(#[from] srtp::Error),
+    CreateSrtpSession(#[from] SrtpError),
 }
 
 pub(super) fn negotiate_from_offer(
@@ -43,18 +43,18 @@ pub(super) fn negotiate_from_offer(
     let mut send_key = vec![0u8; suite.key_len()];
     rand::rng().fill_bytes(&mut send_key);
 
-    let inbound = srtp::Session::with_inbound_template(srtp::StreamPolicy {
-        rtp: suite,
-        rtcp: suite,
-        key: &recv_key,
-        ..Default::default()
-    })?;
-    let outbound = srtp::Session::with_outbound_template(srtp::StreamPolicy {
-        rtp: suite,
-        rtcp: suite,
-        key: &send_key,
-        ..Default::default()
-    })?;
+    let inbound = SrtpSession::new(vec![SrtpPolicy::new(
+        suite,
+        suite,
+        recv_key.into(),
+        srtp::Ssrc::AnyInbound,
+    )?])?;
+    let outbound = SrtpSession::new(vec![SrtpPolicy::new(
+        suite,
+        suite,
+        std::borrow::Cow::Borrowed(&send_key),
+        srtp::Ssrc::AnyOutbound,
+    )?])?;
 
     Ok(RtpSdesSrtpTransport::new(
         SrtpCrypto {
@@ -69,7 +69,7 @@ pub(super) fn negotiate_from_offer(
         },
         inbound,
         outbound,
-    )?)
+    ))
 }
 
 pub(super) struct SdesSrtpOffer {
@@ -137,25 +137,26 @@ impl SdesSrtpOffer {
             };
 
             let crypto_policy = srtp_suite_to_policy(&suite).expect("suite is one we offered");
-            let inbound = srtp::Session::with_inbound_template(srtp::StreamPolicy {
-                rtp: crypto_policy,
-                rtcp: crypto_policy,
-                key: &recv_key,
-                ..Default::default()
-            })?;
 
-            let outbound = srtp::Session::with_outbound_template(srtp::StreamPolicy {
-                rtp: crypto_policy,
-                rtcp: crypto_policy,
-                key: &send_key,
-                ..Default::default()
-            })?;
+            let inbound = SrtpSession::new(vec![SrtpPolicy::new(
+                crypto_policy,
+                crypto_policy,
+                recv_key.into(),
+                Ssrc::AnyInbound,
+            )?])?;
+
+            let outbound = SrtpSession::new(vec![SrtpPolicy::new(
+                crypto_policy,
+                crypto_policy,
+                send_key.into(),
+                Ssrc::AnyOutbound,
+            )?])?;
 
             return Ok(RtpSdesSrtpTransport::new(
                 local_sdp_crypto,
                 inbound,
                 outbound,
-            )?);
+            ));
         }
 
         Err(SdesSrtpNegotiationError::NoCompatibleSrtpSuite)

@@ -16,6 +16,7 @@ log.workspace = true
 rtp.workspace = true
 sdp-types.workspace = true
 stun-types.workspace = true
+srtp.workspace = true
 
 base64 = "0.22"
 bytes = "1"
@@ -23,9 +24,6 @@ bytesstr = "1.0.2"
 openssl = "0.10"
 rand = "0.9"
 slotmap = "1.0.7"
-srtp = { version = "0.7", features = [
- "enable-openssl",
-], default-features = false }
 thiserror = "2"
 time = "0.3"
 

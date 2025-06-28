@@ -18,6 +18,7 @@ use crate::{
 };
 use ice::{Component, IceAgent, IceConnectionState, ReceivedPkt};
 use rtp::{RtpExtensionIds, RtpPacket};
+use srtp::SrtpError;
 use std::{
     collections::VecDeque,
     net::{IpAddr, SocketAddr},
@@ -275,7 +276,8 @@ impl RtpTransport {
                 match &mut self.kind {
                     RtpTransportKind::Unencrypted => {}
                     RtpTransportKind::SdesSrtp(rtp_sdes_srtp_transport) => {
-                        if let Err(e) = rtp_sdes_srtp_transport.inbound.unprotect(&mut pkt.data) {
+                        if let Err(e) = rtp_sdes_srtp_transport.inbound.unprotect_rtp(&mut pkt.data)
+                        {
                             log::warn!("Failed to unprotect incoming RTP packet, {e}");
                             return None;
                         }
@@ -284,7 +286,7 @@ impl RtpTransport {
                         if let DtlsState::Connected { inbound, .. } =
                             rtp_dtls_srtp_transport.state()
                         {
-                            if let Err(e) = inbound.unprotect(&mut pkt.data) {
+                            if let Err(e) = inbound.unprotect_rtp(&mut pkt.data) {
                                 log::warn!("Failed to unprotect incoming RTP packet, {e}");
                                 return None;
                             }
@@ -512,20 +514,20 @@ pub struct RtpTransportWriter<'a> {
 
 impl RtpTransportWriter<'_> {
     /// Send a RTP packet using the transport
-    pub fn send_rtp(&mut self, rtp_packet: RtpPacket) -> Result<(), srtp::Error> {
+    pub fn send_rtp(&mut self, rtp_packet: RtpPacket) -> Result<(), SrtpError> {
         let mut data = rtp_packet.to_vec(self.transport.extension_ids);
 
         match &mut self.transport.kind {
             RtpTransportKind::Unencrypted => {}
             RtpTransportKind::SdesSrtp(rtp_sdes_srtp_transport) => {
-                rtp_sdes_srtp_transport.outbound.protect(&mut data)?;
+                rtp_sdes_srtp_transport.outbound.protect_rtp(&mut data)?;
             }
             RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) => {
                 let DtlsState::Connected { outbound, .. } = rtp_dtls_srtp_transport.state() else {
                     unreachable!("RtpTransportWriter is only created when DtlsState is Connected");
                 };
 
-                outbound.protect(&mut data)?;
+                outbound.protect_rtp(&mut data)?;
             }
         }
 
@@ -542,7 +544,7 @@ impl RtpTransportWriter<'_> {
     }
 
     /// Send a RTCP packet using the transport
-    pub fn send_rctp(&mut self, mut rtcp_packet: Vec<u8>) -> Result<(), srtp::Error> {
+    pub fn send_rctp(&mut self, mut rtcp_packet: Vec<u8>) -> Result<(), SrtpError> {
         match &mut self.transport.kind {
             RtpTransportKind::Unencrypted => {}
             RtpTransportKind::SdesSrtp(rtp_sdes_srtp_transport) => {
