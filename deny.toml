@@ -70,15 +70,6 @@ feature-depth = 1
 # A list of advisory IDs to ignore. Note that ignored advisories will still
 # output a note when they are encountered.
 ignore = [
-    # SRTP crate uses paste which is unmaintained
-    "RUSTSEC-2024-0436",
-
-    # SRTP crate uses an older version of bindgen which causes these issues.
-    "RUSTSEC-2021-0139",
-    "RUSTSEC-2021-0145",
-    "RUSTSEC-2024-0006",
-    "RUSTSEC-2024-0375",
-
     #{ id = "RUSTSEC-0000-0000", reason = "you can specify a reason the advisory is ignored" },
     #"a-crate-that-is-yanked@0.1.1", # you can also ignore yanked crate versions if you wish
     #{ crate = "a-crate-that-is-yanked@0.1.1", reason = "you can specify why you are ignoring the yanked crate" },
