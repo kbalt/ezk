@@ -90,7 +90,7 @@ error_codes! {
     ALLOC_FAIL, srtp_err_status_t_srtp_err_status_alloc_fail, "couldn't allocate memory";
     DEALLOC_FAIL, srtp_err_status_t_srtp_err_status_dealloc_fail, "couldn't deallocate properly";
     INIT_FAIL, srtp_err_status_t_srtp_err_status_init_fail, "couldn't initialize";
-    TERMINUS, srtp_err_status_t_srtp_err_status_terminus, "can't process as much data as  requested";
+    TERMINUS, srtp_err_status_t_srtp_err_status_terminus, "can't process as much data as requested";
     AUTH_FAIL, srtp_err_status_t_srtp_err_status_auth_fail, "authentication failure";
     CIPHER_FAIL, srtp_err_status_t_srtp_err_status_cipher_fail, "cipher failure";
     REPLAY_FAIL, srtp_err_status_t_srtp_err_status_replay_fail, "replay check failed (bad index)";

@@ -40,4 +40,3 @@ default = ["tokio"]
 tokio = ["dep:tokio", "dep:quinn-udp", "dep:local-ip-address"]
 
 vendor-openssl = ["openssl/vendored"]
-#vendor-srtp = ["srtp/build-libsrtp"]

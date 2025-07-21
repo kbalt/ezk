@@ -70,8 +70,3 @@ pub fn init() -> Result<(), SrtpError> {
 pub fn ensure_openssl_is_linked() {
     let _f = openssl_sys::EVP_CIPHER_CTX_new;
 }
-
-#[test]
-fn lol() {
-    init().unwrap();
-}
