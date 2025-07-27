@@ -568,7 +568,7 @@ impl SdpSession {
             }
         }
 
-        // Try and to find a transport outside of the bundle group by looking a the address attribute
+        // Try and match a transport using transport specific attributes
         if let Some(transport) =
             self.find_similar_looking_transport(session_desc, remote_media_desc)
         {
@@ -596,9 +596,29 @@ impl SdpSession {
         }))
     }
 
-    /// Some implementations like to replace the entire session description with their own mids but reuse the
-    /// previously negotiated transport. This means that the transport is now "unused" from our point of view and
-    /// the peer has created a new BUNDLE group. Following is a futile effort to try and catch that.
+    fn find_bundled_transport(
+        &self,
+        new_state: &[Media],
+        offer: &SessionDescription,
+        mid: &BytesStr,
+    ) -> Option<EstablishedTransportId> {
+        let group = offer
+            .group
+            .iter()
+            .find(|g| g.typ == "BUNDLE" && g.mids.contains(mid))?;
+
+        new_state.iter().chain(&self.media).find_map(|media| {
+            let mid = media.mid.as_ref()?;
+
+            group
+                .mids
+                .iter()
+                .any(|v| v == mid.as_str())
+                .then_some(media.transport_id)
+        })
+    }
+
+    /// Try and find a transport that matches the incoming SDP media using transport attributes instead of the BUNDLE group
     fn find_similar_looking_transport(
         &mut self,
         session_desc: &SessionDescription,
@@ -635,28 +655,6 @@ impl SdpSession {
                 }
             })
             .map(|(t, _)| t)
-    }
-
-    fn find_bundled_transport(
-        &self,
-        new_state: &[Media],
-        offer: &SessionDescription,
-        mid: &BytesStr,
-    ) -> Option<EstablishedTransportId> {
-        let group = offer
-            .group
-            .iter()
-            .find(|g| g.typ == "BUNDLE" && g.mids.contains(mid))?;
-
-        new_state.iter().chain(&self.media).find_map(|media| {
-            let mid = media.mid.as_ref()?;
-
-            group
-                .mids
-                .iter()
-                .any(|v| v == mid.as_str())
-                .then_some(media.transport_id)
-        })
     }
 
     /// Receive a SDP answer after sending an offer.
