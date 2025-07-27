@@ -76,6 +76,8 @@ impl RtpOutboundStream {
             .octet_count(self.stats.bytes_sent as u32);
 
         reports.add_sender_report(report);
+
+        self.last_report_sent = Some(now);
     }
 
     pub(crate) fn handle_report_block(&mut self, now: Instant, report_block: ReportBlock) {
