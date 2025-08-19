@@ -258,11 +258,11 @@ impl OfferedTransport {
     }
 
     pub(crate) fn receive(&mut self, now: Instant, pkt: ReceivedPkt) {
-        if let Some(ice_agent) = &mut self.ice_agent {
-            if matches!(is_stun_message(&pkt.data), IsStunMessageInfo::Yes { .. }) {
-                ice_agent.receive(pkt);
-                return;
-            }
+        if let Some(ice_agent) = &mut self.ice_agent
+            && matches!(is_stun_message(&pkt.data), IsStunMessageInfo::Yes { .. })
+        {
+            ice_agent.receive(pkt);
+            return;
         }
 
         // Limit the backlog buffer so it doesn't become a problem

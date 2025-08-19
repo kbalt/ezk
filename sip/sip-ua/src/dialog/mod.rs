@@ -152,10 +152,10 @@ impl Dialog {
 
             let code = code.into_u16();
 
-            if let 101..=399 | 485 = code {
-                if !response.msg.headers.contains(&Name::CONTACT) {
-                    response.msg.headers.insert_named(&self.local_contact);
-                }
+            if let 101..=399 | 485 = code
+                && !response.msg.headers.contains(&Name::CONTACT)
+            {
+                response.msg.headers.insert_named(&self.local_contact);
             }
 
             if let 180..=189 | 200..=299 | 405 = code {

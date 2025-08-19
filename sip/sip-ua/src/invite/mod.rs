@@ -142,13 +142,12 @@ impl Layer for InviteLayer {
     }
 
     async fn receive(&self, endpoint: &Endpoint, mut request: MayTake<'_, IncomingRequest>) {
-        if let Method::CANCEL = request.line.method {
-            if let Err(e) = self
+        if let Method::CANCEL = request.line.method
+            && let Err(e) = self
                 .handle_cancel(endpoint, MayTake::new(request.inner()))
                 .await
-            {
-                log::error!("Failed to handle CANCEL request {e:?}");
-            }
+        {
+            log::error!("Failed to handle CANCEL request {e:?}");
         }
     }
 }

@@ -140,10 +140,10 @@ impl Layer for DialogLayer {
             }
 
             // Requests that not handled by any usage will be handled with some default behavior
-            if let Some(request) = request {
-                if let Err(e) = self.handle_unwanted_request(endpoint, request).await {
-                    log::warn!("failed to respond to unwanted request, {e:?}");
-                }
+            if let Some(request) = request
+                && let Err(e) = self.handle_unwanted_request(endpoint, request).await
+            {
+                log::warn!("failed to respond to unwanted request, {e:?}");
             }
         }
     }

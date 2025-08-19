@@ -149,10 +149,10 @@ impl Endpoint {
     /// Print the request to its buffer (if needed) and send it via the transport
     pub async fn send_outgoing_request(&self, message: &mut OutgoingRequest) -> io::Result<()> {
         // Append the endpoints configured user agent, if there isn't one already
-        if let Some(user_agent) = &self.inner.user_agent {
-            if !message.msg.headers.contains(&Name::USER_AGENT) {
-                message.msg.headers.insert(Name::USER_AGENT, user_agent);
-            }
+        if let Some(user_agent) = &self.inner.user_agent
+            && !message.msg.headers.contains(&Name::USER_AGENT)
+        {
+            message.msg.headers.insert(Name::USER_AGENT, user_agent);
         }
 
         if message.parts.buffer.is_empty() {

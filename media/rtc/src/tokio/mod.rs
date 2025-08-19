@@ -164,14 +164,14 @@ impl TokioIoState {
             }
         }
 
-        if let Some(timeout) = &mut self.timeout {
-            if timeout.as_mut().poll(cx).is_ready() {
-                session.poll(now);
+        if let Some(timeout) = &mut self.timeout
+            && timeout.as_mut().poll(cx).is_ready()
+        {
+            session.poll(now);
 
-                self.timeout = session
-                    .timeout(now)
-                    .map(|timeout| Box::pin(sleep_until((now + timeout).into())));
-            }
+            self.timeout = session
+                .timeout(now)
+                .map(|timeout| Box::pin(sleep_until((now + timeout).into())));
         }
 
         if session.has_events() {

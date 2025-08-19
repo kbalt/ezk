@@ -148,10 +148,10 @@ impl InboundQueue {
         sequence_number: ExtendedSequenceNumber,
         packet: RtpPacket,
     ) -> PushResult {
-        if let Some(seq) = self.last_sequence_number_returned {
-            if seq >= sequence_number {
-                return PushResult::Dropped;
-            }
+        if let Some(seq) = self.last_sequence_number_returned
+            && seq >= sequence_number
+        {
+            return PushResult::Dropped;
         }
 
         // front (1 2 3 4 5 6 7 8 9) back

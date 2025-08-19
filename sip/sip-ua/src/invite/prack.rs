@@ -53,10 +53,10 @@ impl InviteUsage {
 }
 
 pub fn get_rseq(response: &TsxResponse) -> Option<RSeq> {
-    if let Some(Ok(requires)) = response.headers.try_get_named::<Vec<Require>>() {
-        if requires.iter().any(|r| r.0 == "100rel") {
-            return response.headers.get_named().ok();
-        }
+    if let Some(Ok(requires)) = response.headers.try_get_named::<Vec<Require>>()
+        && requires.iter().any(|r| r.0 == "100rel")
+    {
+        return response.headers.get_named().ok();
     }
 
     None

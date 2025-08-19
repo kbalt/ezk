@@ -198,10 +198,11 @@ impl MediaBackend for RtcMediaBackend {
                     let media_state = self.media.get_mut(&event.id).unwrap();
                     let transport_state = &self.transports[&media_state.transport_id];
 
-                    if old_send && !new_send {
-                        if let Some(valid) = media_state.sender.take() {
-                            valid.store(false, Ordering::Relaxed);
-                        }
+                    if old_send
+                        && !new_send
+                        && let Some(valid) = media_state.sender.take()
+                    {
+                        valid.store(false, Ordering::Relaxed);
                     }
 
                     if !old_send && new_send {

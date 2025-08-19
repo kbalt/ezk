@@ -395,10 +395,10 @@ impl Transports {
         let mut transports = self.transports.lock();
 
         for (_, managed) in transports.iter_mut() {
-            if let Some(transport) = server.transport {
-                if transport.as_str() != managed.transport.name() {
-                    continue;
-                }
+            if let Some(transport) = server.transport
+                && transport.as_str() != managed.transport.name()
+            {
+                continue;
             }
 
             // Check if the transport is connected to the server's address
@@ -418,10 +418,10 @@ impl Transports {
             }
 
             // Check if the transport's name matches the transport parameter
-            if let Some(transport_param) = uri.uri_params.get_val("transport") {
-                if !managed.transport.matches_transport_param(transport_param) {
-                    continue;
-                }
+            if let Some(transport_param) = uri.uri_params.get_val("transport")
+                && !managed.transport.matches_transport_param(transport_param)
+            {
+                continue;
             }
 
             log::trace!("selected transport: {}", managed.transport);
@@ -444,10 +444,10 @@ impl Transports {
     ) -> Option<TpHandle> {
         // Try to build new transport with a factory
         for factory in self.factories.iter() {
-            if let Some(transport) = server.transport {
-                if transport.as_str() != factory.name() {
-                    continue;
-                }
+            if let Some(transport) = server.transport
+                && transport.as_str() != factory.name()
+            {
+                continue;
             }
 
             if uri.sips && !factory.secure() {
@@ -455,10 +455,10 @@ impl Transports {
             }
 
             // Check if the transport's name matches the transport parameter
-            if let Some(transport_param) = uri.uri_params.get_val("transport") {
-                if !factory.matches_transport_param(transport_param) {
-                    continue;
-                }
+            if let Some(transport_param) = uri.uri_params.get_val("transport")
+                && !factory.matches_transport_param(transport_param)
+            {
+                continue;
             }
 
             match factory.create(endpoint.clone(), uri, server.address).await {

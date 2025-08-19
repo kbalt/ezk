@@ -562,10 +562,10 @@ impl SdpSession {
         remote_media_desc: &MediaDescription,
     ) -> Result<EstablishedTransportId, TransportCreateError> {
         // See if there's a transport to be reused via BUNDLE group
-        if let Some(mid) = &remote_media_desc.mid {
-            if let Some(transport) = self.find_bundled_transport(new_state, session_desc, mid) {
-                return Ok(transport);
-            }
+        if let Some(mid) = &remote_media_desc.mid
+            && let Some(transport) = self.find_bundled_transport(new_state, session_desc, mid)
+        {
+            return Ok(transport);
         }
 
         // Try and match a transport using transport specific attributes

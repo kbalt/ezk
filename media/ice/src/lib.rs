@@ -836,29 +836,29 @@ impl IceAgent {
                     self.recompute_pair_priorities();
                 }
             }
-        } else if !self.is_controlling {
-            if let Some(Ok(ice_controlled)) = pkt.data.attribute::<IceControlled>() {
-                if self.control_tie_breaker >= ice_controlled.0 {
-                    let response = stun::make_role_error(
-                        pkt.data.transaction_id(),
-                        &self.local_credentials,
-                        remote_credentials,
-                        pkt.source,
-                        false,
-                        self.control_tie_breaker,
-                    );
+        } else if !self.is_controlling
+            && let Some(Ok(ice_controlled)) = pkt.data.attribute::<IceControlled>()
+        {
+            if self.control_tie_breaker >= ice_controlled.0 {
+                let response = stun::make_role_error(
+                    pkt.data.transaction_id(),
+                    &self.local_credentials,
+                    remote_credentials,
+                    pkt.source,
+                    false,
+                    self.control_tie_breaker,
+                );
 
-                    self.events.push_back(IceEvent::SendData {
-                        component: pkt.component,
-                        data: response,
-                        source: Some(pkt.destination.ip()),
-                        target: pkt.source,
-                    });
-                    return;
-                } else {
-                    self.is_controlling = true;
-                    self.recompute_pair_priorities();
-                }
+                self.events.push_back(IceEvent::SendData {
+                    component: pkt.component,
+                    data: response,
+                    source: Some(pkt.destination.ip()),
+                    target: pkt.source,
+                });
+                return;
+            } else {
+                self.is_controlling = true;
+                self.recompute_pair_priorities();
             }
         }
 
@@ -965,10 +965,10 @@ impl IceAgent {
         };
 
         // Limit new checks to 1 per 50ms
-        if let Some(it) = self.last_ta_trigger {
-            if it + Duration::from_millis(50) > now {
-                return;
-            }
+        if let Some(it) = self.last_ta_trigger
+            && it + Duration::from_millis(50) > now
+        {
+            return;
         }
         self.last_ta_trigger = Some(now);
 
