@@ -72,7 +72,11 @@ impl RtpDtlsSrtpTransport {
         // Use the openssl verify callback to test the peer certificate against the fingerprints that were sent to us
         ssl.set_verify_callback(
             SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT,
-            move |_, x509_store| {
+            move |preverify_ok, x509_store| {
+                if !preverify_ok {
+                    return false;
+                }
+
                 let Some(certificate) = x509_store.current_cert() else {
                     return false;
                 };
