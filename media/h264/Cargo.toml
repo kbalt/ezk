@@ -6,16 +6,24 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[dependencies]
-bytes = "1.10.0"
-thiserror = "2.0.11"
 
-openh264 = { version = "0.8", optional = true }
-openh264-sys2 = { version = "0.8", optional = true }
+[lints]
+workspace = true
 
 [features]
 default = ["openh264"]
 openh264 = ["dep:openh264", "dep:openh264-sys2"]
 
-[lints]
-workspace = true
+
+[dependencies]
+bytes = "1.10.0"
+thiserror = "2.0.11"
+rand = "0.9"
+
+openh264 = { version = "0.8", optional = true }
+openh264-sys2 = { version = "0.8", optional = true }
+log = "0.4"
+libva.workspace = true
+
+[dev-dependencies]
+env_logger = "0.11"
