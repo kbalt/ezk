@@ -23,6 +23,7 @@ stun = { package = "ezk-stun", version = "0.4.0", path = "media/stun" }
 stun-types = { package = "ezk-stun-types", version = "0.3.0", path = "media/stun-types" }
 rtc = { package = "ezk-rtc", version = "0.1.0", path = "media/rtc" }
 srtp = { package = "ezk-srtp", version = "0.1.0", path = "media/srtp" }
+libva = { package = "ezk-libva", version = "0.1.0", path = "media/libva" }
 
 rustls-pki-types = { version = "1", features = ["std"] }
 tokio-native-tls = { version = "0.3" }
