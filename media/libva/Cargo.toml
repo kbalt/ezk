@@ -1,0 +1,19 @@
+[package]
+name = "ezk-libva"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = "2"
+log = "0.4"
+
+env_logger = "0.11"
+
+[build-dependencies]
+bindgen = "0.72"

@@ -391,7 +391,6 @@ impl Transports {
         uri: &SipUri,
         server: &ServerEntry,
     ) -> Option<TpHandle> {
-        // TODO: do something about this lock
         let mut transports = self.transports.lock();
 
         for (_, managed) in transports.iter_mut() {
