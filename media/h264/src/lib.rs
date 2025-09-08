@@ -3,16 +3,19 @@
 use profile_level_id::{ParseProfileLevelIdError, ProfileLevelId};
 use std::{fmt, num::ParseIntError, str::FromStr};
 
+pub mod libva;
 #[cfg(feature = "openh264")]
 pub mod openh264;
 mod payload;
 pub mod profile_level_id;
 
+pub use libva::VaH264Encoder;
 pub use payload::{
     H264DePayloadError, H264DePayloader, H264DePayloaderOutputFormat, H264Payloader,
 };
 
 /// Generic H.264 encoder config
+#[derive(Debug, Clone, Copy)]
 pub struct H264EncoderConfig {
     /// H.264 encoding profile to use. Defines the feature-set the encoder may use.
     pub profile: Profile,
