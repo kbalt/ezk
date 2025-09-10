@@ -197,9 +197,11 @@ impl VaH264Encoder {
         if packed_headers_attr_supported {
             config_attributes.push(ffi::VAConfigAttrib {
                 type_: ffi::VAConfigAttribType_VAConfigAttribEncPackedHeaders,
-                value: packed_headers_attr.value & (ffi::VA_ENC_PACKED_HEADER_SEQUENCE), // | ffi::VA_ENC_PACKED_HEADER_PICTURE
-                                                                                         // | ffi::VA_ENC_PACKED_HEADER_SLICE
-                                                                                         // | ffi::VA_ENC_PACKED_HEADER_MISC),
+                value: packed_headers_attr.value
+                    & (ffi::VA_ENC_PACKED_HEADER_SEQUENCE
+                        | ffi::VA_ENC_PACKED_HEADER_PICTURE
+                        | ffi::VA_ENC_PACKED_HEADER_SLICE
+                        | ffi::VA_ENC_PACKED_HEADER_MISC),
             });
         }
 
@@ -245,7 +247,7 @@ impl VaH264Encoder {
             frame_type_pattern: FrameTypePattern {
                 idr_period,
                 i_period: None,
-                p_period: None,
+                p_period: Some(2),
             },
             num_submitted_frames: 0,
             num_encoded_frames: 0,
@@ -593,12 +595,12 @@ impl VaH264Encoder {
             let mut pic_param = zeroed::<ffi::VAEncPictureParameterBufferH264>();
 
             pic_param.CurrPic.picture_id = ref_surface.id();
-            pic_param.CurrPic.frame_idx = dbg!(display_index - self.current_idr_display);
-            pic_param.CurrPic.TopFieldOrderCnt = dbg!(self.calc_top_field_order_cnt(
+            pic_param.CurrPic.frame_idx = display_index - self.current_idr_display;
+            pic_param.CurrPic.TopFieldOrderCnt = self.calc_top_field_order_cnt(
                 frame_type,
                 (display_index as i32 - self.current_idr_display as i32)
                     % self.max_pic_order_cnt_lsb,
-            ));
+            );
             pic_param.CurrPic.BottomFieldOrderCnt = pic_param.CurrPic.TopFieldOrderCnt;
 
             if matches!(frame_type, FrameType::IDR | FrameType::I | FrameType::P) {
@@ -612,13 +614,33 @@ impl VaH264Encoder {
                 pic_param.ReferenceFrames[0] = self.reference_frames.last().unwrap().1;
 
                 for pic in &mut pic_param.ReferenceFrames[1..] {
-                    // if let Some((ref_surface, ref_frame_idx)) = reference_frames.next() {
-                    //     pic.picture_id = ref_surface.id();
-                    //     pic.frame_idx = *ref_frame_idx;
-                    // } else {
                     pic.picture_id = ffi::VA_INVALID_SURFACE;
                     pic.flags = ffi::VA_PICTURE_H264_INVALID;
-                    // }
+                }
+            }
+
+            if frame_type == FrameType::B {
+                let curr_frame_idx = display_index - self.current_idr_display;
+
+                let a = self
+                    .reference_frames
+                    .iter()
+                    .rev()
+                    .find(|(_, p)| p.frame_idx < curr_frame_idx)
+                    .unwrap();
+
+                let b = self
+                    .reference_frames
+                    .iter()
+                    .find(|(_, p)| p.frame_idx > curr_frame_idx)
+                    .unwrap();
+
+                pic_param.ReferenceFrames[0] = a.1;
+                pic_param.ReferenceFrames[1] = b.1;
+
+                for pic in &mut pic_param.ReferenceFrames[2..] {
+                    pic.picture_id = ffi::VA_INVALID_SURFACE;
+                    pic.flags = ffi::VA_PICTURE_H264_INVALID;
                 }
             }
 
@@ -679,64 +701,50 @@ impl VaH264Encoder {
                 FrameType::P => {
                     slice_params.RefPicList0[0] = self.reference_frames.last().unwrap().1;
 
-                    // let mut reference_frames = self.reference_frames.iter();
-
                     for pic in &mut slice_params.RefPicList0[1..] {
-                        // if let Some((ref_surface, ref_frame_idx)) = reference_frames.next() {
-                        //     pic.picture_id = ref_surface.id();
-                        //     pic.frame_idx = *ref_frame_idx;
-                        // } else {
                         pic.picture_id = ffi::VA_INVALID_SURFACE;
                         pic.flags = ffi::VA_PICTURE_H264_INVALID;
-                        // }
                     }
-
-                    // for pic in &mut slice_params.RefPicList1 {
-                    //     pic.picture_id = ffi::VA_INVALID_SURFACE;
-                    //     pic.flags = ffi::VA_PICTURE_H264_INVALID;
-                    // }
                 }
                 FrameType::B => {
-                    todo!()
-                    // let mut past_reference_frames = self
-                    //     .reference_frames
-                    //     .iter()
-                    //     .filter(|(_, frame_num)| *frame_num < encoding_index);
-                    //
-                    // for pic in &mut slice_params.RefPicList0 {
-                    //     if let Some((ref_surface, ref_frame_idx)) = past_reference_frames.next() {
-                    //         pic.picture_id = ref_surface.id();
-                    //         pic.frame_idx = *ref_frame_idx;
-                    //     } else {
-                    //         pic.picture_id = ffi::VA_INVALID_SURFACE;
-                    //         pic.flags = ffi::VA_PICTURE_H264_INVALID;
-                    //     }
-                    // }
-                    //
-                    // let mut future_reference_frames = self
-                    //     .reference_frames
-                    //     .iter()
-                    //     .filter(|(_, frame_num)| *frame_num > encoding_index);
-                    //
-                    // for pic in &mut slice_params.RefPicList1 {
-                    //     if let Some((ref_surface, ref_frame_idx)) = future_reference_frames.next() {
-                    //         pic.picture_id = ref_surface.id();
-                    //         pic.frame_idx = *ref_frame_idx;
-                    //     } else {
-                    //         pic.picture_id = ffi::VA_INVALID_SURFACE;
-                    //         pic.flags = ffi::VA_PICTURE_H264_INVALID;
-                    //     }
-                    // }
+                    let curr_frame_idx = display_index - self.current_idr_display;
+
+                    let a = self
+                        .reference_frames
+                        .iter()
+                        .rev()
+                        .find(|(_, p)| p.frame_idx < curr_frame_idx)
+                        .unwrap();
+
+                    let b = self
+                        .reference_frames
+                        .iter()
+                        .find(|(_, p)| p.frame_idx > curr_frame_idx)
+                        .unwrap();
+
+                    slice_params.RefPicList0[0] = a.1;
+                    slice_params.RefPicList1[0] = b.1;
+
+                    for pic in &mut slice_params.RefPicList0[1..] {
+                        pic.picture_id = ffi::VA_INVALID_SURFACE;
+                        pic.flags = ffi::VA_PICTURE_H264_INVALID;
+                    }
+
+                    for pic in &mut slice_params.RefPicList1[1..] {
+                        pic.picture_id = ffi::VA_INVALID_SURFACE;
+                        pic.flags = ffi::VA_PICTURE_H264_INVALID;
+                    }
                 }
                 FrameType::I => {}
                 FrameType::IDR => {
-                    slice_params.idr_pic_id = self.current_idr_display as u16; // TODO: maintain idr counter and put value here
+                    // TODO: avoid overflow here, idr_pic_id just needs to be unique
+                    slice_params.idr_pic_id = self.current_idr_display as u16;
                 }
             }
 
             slice_params.direct_spatial_mv_pred_flag = 1;
-            slice_params.pic_order_cnt_lsb =
-                display_index as u16 % self.max_pic_order_cnt_lsb as u16;
+            slice_params.pic_order_cnt_lsb = (display_index - self.current_idr_display) as u16
+                % self.max_pic_order_cnt_lsb as u16;
 
             slice_params
         }
