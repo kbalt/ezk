@@ -267,7 +267,7 @@ pub(super) fn write_slice_header(
     let is_idr = pic_fields.idr_pic_flag() != 0;
     let is_ref = pic_fields.reference_pic_flag() != 0;
 
-    let (nal_ref_idc, nal_unit_type) = match dbg!(slice_param.slice_type) {
+    let (nal_ref_idc, nal_unit_type) = match slice_param.slice_type {
         SLICE_TYPE_I => (NAL_REF_IDC_HIGH, if is_idr { NAL_IDR } else { NAL_NON_IDR }),
         SLICE_TYPE_P => (NAL_REF_IDC_MEDIUM, NAL_NON_IDR),
         SLICE_TYPE_B => (
