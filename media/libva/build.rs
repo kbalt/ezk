@@ -1,12 +1,25 @@
 use std::env;
 
 fn main() {
-    println!("cargo:rustc-link-lib=va");
-    println!("cargo:rustc-link-lib=va-drm");
+    let libva = pkg_config::probe_library("libva").unwrap();
+    let libva_drm = pkg_config::probe_library("libva-drm").unwrap();
 
-    bindgen::Builder::default()
-        .header("/usr/include/va/va.h")
-        .header("/usr/include/va/va_drm.h")
+    for lib in libva.libs.into_iter().chain(libva_drm.libs) {
+        println!("cargo:rustc-link-lib={lib}");
+    }
+
+    let mut bindgen = bindgen::Builder::default();
+
+    for include_path in libva
+        .include_paths
+        .into_iter()
+        .chain(libva_drm.include_paths)
+    {
+        bindgen = bindgen.clang_arg(format!("-I{}", include_path.to_string_lossy()));
+    }
+
+    bindgen
+        .header("wrapper.h")
         .allowlist_function("(va|VA).*")
         .allowlist_type("(va|VA).*")
         .allowlist_var("(va|VA).*")
