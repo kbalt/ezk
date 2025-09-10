@@ -52,6 +52,28 @@ impl Context {
         }
     }
 
+    pub fn create_buffer_from_bytes(&self, type_: ffi::VABufferType, bytes: &[u8]) -> Buffer {
+        unsafe {
+            let mut buf_id = ffi::VA_INVALID_ID;
+
+            VaError::try_(ffi::vaCreateBuffer(
+                self.display.dpy,
+                self.context_id,
+                type_,
+                bytes.len() as _,
+                1,
+                bytes.as_ptr().cast_mut().cast(),
+                &raw mut buf_id,
+            ))
+            .unwrap();
+
+            Buffer {
+                display: self.display.clone(),
+                buf_id,
+            }
+        }
+    }
+
     pub fn begin_picture(&self, render_target: &Surface) {
         debug_assert!(Arc::ptr_eq(&self.display, &render_target.display));
 
