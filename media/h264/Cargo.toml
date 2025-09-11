@@ -20,6 +20,8 @@ bytes = "1.10.0"
 thiserror = "2.0.11"
 rand = "0.9"
 bitstream-io = "4"
+scap = "0.0.8"
+ezk-image = "0.2.4"
 
 openh264 = { version = "0.8", optional = true }
 openh264-sys2 = { version = "0.8", optional = true }
