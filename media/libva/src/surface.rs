@@ -38,6 +38,12 @@ impl Surface {
             }
         }
     }
+
+    pub fn sync(&mut self) {
+        unsafe {
+            VaError::try_(ffi::vaSyncSurface(self.display.dpy, self.surface_id)).unwrap();
+        }
+    }
 }
 
 impl Drop for Surface {
