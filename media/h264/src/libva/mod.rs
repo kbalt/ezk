@@ -40,24 +40,24 @@ pub enum FrameType {
 /// #    ret
 /// # }
 /// // Only create I frames
-/// let pattern = FrameTypePattern { idr_period: None, i_period: Some(1), p_period: None };
+/// let pattern = FrameTypePattern { idr_period: 32, i_period: Some(1), p_period: None };
 /// assert_eq!(eval(pattern), [IDR, I, I, I, I, I, I, I, I, I, I, I, I, I, I, I]);
 ///
 /// // Create I & P Frames
-/// let pattern = FrameTypePattern { idr_period: None, i_period: Some(4), p_period: None };
+/// let pattern = FrameTypePattern { idr_period: 32, i_period: Some(4), p_period: None };
 /// assert_eq!(eval(pattern), [IDR, P, P, P, I, P, P, P, I, P, P, P, I, P, P, P]);
 ///
 /// // Insert some IDR frames, required for livestream or video conferences
-/// let pattern = FrameTypePattern { idr_period: Some(8), i_period: Some(4), p_period: None };
+/// let pattern = FrameTypePattern { idr_period: 8, i_period: Some(4), p_period: None };
 /// assert_eq!(eval(pattern), [IDR, P, P, P, I, P, P, P, IDR, P, P, P, I, P, P, P]);
 ///
 /// // B frames are only created if `p_period` is specified
-/// let pattern = FrameTypePattern { idr_period: None, i_period: Some(8), p_period: Some(4) };
+/// let pattern = FrameTypePattern { idr_period: 32, i_period: Some(8), p_period: Some(4) };
 /// assert_eq!(eval(pattern), [IDR, B, B, B, P, B, B, B, I, B, B, B, P, B, B, B]);
 /// // B frames are only created if `p_period` is specified
 ///
-/// let pattern = FrameTypePattern { idr_period: None, i_period: Some(8), p_period: Some(3) };
-/// assert_eq!(eval(pattern), [IDR, B, B, B, P, B, B, B, I, B, B, B, P, B, B, B]);
+/// let pattern = FrameTypePattern { idr_period: 8, i_period: None, p_period: Some(4) };
+/// assert_eq!(eval(pattern), [IDR, B, B, B, P, B, B, P, IDR, B, B, B, P, B, B, P]);
 /// ```
 pub struct FrameTypePattern {
     /// Period in which to create IDR frames
@@ -100,7 +100,16 @@ impl FrameTypePattern {
             if n % p_period == 0 {
                 return FrameType::P;
             } else {
-                return FrameType::B;
+                // Emit B-Frame if a P or I frame follows in this GOP, else emit a P-Frame
+                let mut i = n + 1;
+
+                loop {
+                    match self.frame_type_of_nth_frame(i) {
+                        FrameType::P | FrameType::I => return FrameType::B,
+                        FrameType::B => i += 1,
+                        FrameType::IDR => return FrameType::P,
+                    }
+                }
             }
         }
 
