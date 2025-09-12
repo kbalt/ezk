@@ -119,44 +119,48 @@ impl FrameTypePattern {
 
 pub struct VaH264Encoder {
     h264_config: H264EncoderConfig,
-    display: Display,
-    config: Config,
+
     context: Context,
 
     /// Indicates if packed headers are supported
     support_packed_headers: bool,
 
-    // Resolution macro block aligned (next 16x16 block boundary)
+    /// Resolution macro block aligned (next 16x16 block boundary)
     width_mbaligned: u32,
     height_mbaligned: u32,
 
-    // Maximum bitrate for rate control
+    /// Maximum bitrate for rate control
     target_bitrate: u32,
 
     /// Frame type pattern used to emit frames
     frame_type_pattern: FrameTypePattern,
 
-    num_submitted_frames: u32,
-    num_encoded_frames: u32,
-    current_idr_display: u32,
+    /// Number of bits to use for the picture_order_count
+    log2_max_pic_order_cnt_lsb: i32,
+    /// maximum value of picture_order_count
+    max_pic_order_cnt_lsb: i32,
 
-    /// Pool of preallocated source surfaces
+    /// Pool of pre-allocated source surfaces
     available_src_surfaces: Vec<Surface>,
-    /// Pool of preallocated surfaces for reference frames
+    /// Pool of pre-allocated surfaces for reference frames
     available_ref_surfaces: Vec<Surface>,
 
     /// Active reference pictures and their display frame index, cleared when rendering an IDR frame
     reference_frames: Vec<(Surface, ffi::VAPictureH264)>,
+    /// Maximum number of reference frames that should be used when encoding a P or B-Frame
     max_ref_frames: usize,
 
     /// Source pictures with their display index that should be rendered into B-Frames
     /// once a P or I Frame has been rendered and can be used as reference
     backlogged_b_frames: Vec<(Surface, u32)>,
 
-    // TODO: counters
-    // total frame counter. submitted: u64
-    // and the rest can be derived?
-    max_pic_order_cnt_lsb: i32,
+    /// Number of frames that have been submitted to the encoder (but not necessarily encoded)
+    num_submitted_frames: u32,
+    /// Number of frames that have been encoded
+    num_encoded_frames: u32,
+    /// Display index (nth submitted frame) of the last IDR frame
+    current_idr_display: u32,
+
     pic_order_cnt_msb_ref: i32,
     pic_order_cnt_lsb_ref: i32,
 
@@ -243,7 +247,7 @@ impl VaH264Encoder {
         );
 
         let idr_period = h264_config.gop.unwrap_or(60);
-        let log2_max_pic_order_cnt_lsb = (idr_period as f32).log2().ceil() as i32;
+        let log2_max_pic_order_cnt_lsb = ((idr_period as f32).log2().ceil() as i32).clamp(4, 12);
         let max_pic_order_cnt_lsb = 1 << log2_max_pic_order_cnt_lsb;
 
         log::trace!(
@@ -255,8 +259,6 @@ impl VaH264Encoder {
 
         VaH264Encoder {
             h264_config,
-            display: display.clone(),
-            config,
             context,
             support_packed_headers: packed_headers_attr_supported,
             width_mbaligned,
@@ -272,8 +274,9 @@ impl VaH264Encoder {
             available_src_surfaces: src_surfaces,
             available_ref_surfaces: ref_surfaces,
             reference_frames: Vec::new(),
-            max_ref_frames: 1,
+            max_ref_frames: 8,
             backlogged_b_frames: Vec::new(),
+            log2_max_pic_order_cnt_lsb,
             max_pic_order_cnt_lsb,
             pic_order_cnt_msb_ref: 0,
             pic_order_cnt_lsb_ref: 0,
@@ -490,16 +493,12 @@ impl VaH264Encoder {
             seq_param.time_scale = 50; // TODO: configurable
             seq_param.num_units_in_tick = 1; // TODO: configurable
 
-            // Calculate the picture order count bit count
-            let log2_max_pic_order_count_lsb =
-                (seq_param.intra_idr_period as f32).log2().ceil() as u32;
-            // It is stored at an offset to 4
-            let log2_max_pic_order_count_lsb_minus4 =
-                log2_max_pic_order_count_lsb.saturating_sub(4).clamp(0, 12);
             seq_param
                 .seq_fields
                 .bits
-                .set_log2_max_pic_order_cnt_lsb_minus4(log2_max_pic_order_count_lsb_minus4);
+                .set_log2_max_pic_order_cnt_lsb_minus4(
+                    (self.log2_max_pic_order_cnt_lsb - 4) as u32,
+                );
 
             seq_param
                 .seq_fields
@@ -755,7 +754,7 @@ impl VaH264Encoder {
                     }
 
                     slice_params.num_ref_idx_l0_active_minus1 = num_ref_idx_l0_active - 1;
-                    slice_params.num_ref_idx_active_override_flag = 1;
+                    // slice_params.num_ref_idx_active_override_flag = 1;
 
                     log::trace!(
                         "\tslice params.slice_params.num_ref_idx_l0_active_minus1 = {}",
@@ -887,12 +886,12 @@ mod tests {
             &display,
             H264EncoderConfig {
                 profile: crate::Profile::Main,
-                level: crate::Level::Level_5_2,
+                level: crate::Level::Level_1_0,
                 resolution: (1920, 1080),
                 qp: Some((20, 28)),
                 gop: Some(600),
-                bitrate: Some(10_000_000),
-                max_bitrate: Some(10_000_000),
+                bitrate: Some(400_000),
+                max_bitrate: Some(400_000),
                 max_slice_len: None,
             },
         );
