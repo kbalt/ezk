@@ -33,3 +33,7 @@ log = "0.4"
 
 [workspace.lints.rust]
 unreachable_pub = "warn"
+
+[profile.release]
+debug = true
+debug-assertions = true
