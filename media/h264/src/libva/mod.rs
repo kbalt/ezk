@@ -60,19 +60,19 @@ pub enum FrameType {
 /// assert_eq!(eval(pattern), [IDR, B, B, B, P, B, B, P, IDR, B, B, B, P, B, B, P]);
 /// ```
 pub struct FrameTypePattern {
-    /// Period in which to create IDR frames
+    /// Period in which to create IDR-Frames
     ///
     /// Must be a multiple of `i_period` (or `p_period`) if set
     pub idr_period: u32,
 
-    /// Period in which to create I frames
+    /// Period in which to create I-Frames
     ///
     /// Must be a multiple of `p_period` if set
     pub i_period: Option<u32>,
 
-    /// How often to insert P frames, instead of B frames
+    /// How often to insert P-Frames, instead of B-Frames
     ///
-    /// B Frames are not inserted if this is set to `None` or `Some(1)`
+    /// B-Frames are not inserted if this is set to `None` or `Some(1)`
     pub p_period: Option<u32>,
 }
 
@@ -162,7 +162,6 @@ pub struct VaH264Encoder {
 
     output: VecDeque<Buffer>,
 }
-
 impl VaH264Encoder {
     pub fn new(display: &Display, h264_config: H264EncoderConfig) -> Self {
         let width_mbaligned = macro_block_align(h264_config.resolution.0);
@@ -244,6 +243,15 @@ impl VaH264Encoder {
         );
 
         let idr_period = h264_config.gop.unwrap_or(60);
+        let log2_max_pic_order_cnt_lsb = (idr_period as f32).log2().ceil() as i32;
+        let max_pic_order_cnt_lsb = 1 << log2_max_pic_order_cnt_lsb;
+
+        log::trace!(
+            "IDR period: {idr_period}, \
+            log2_max_pic_order_cnt_lsb: {log2_max_pic_order_cnt_lsb}, \
+            max_pic_order_cnt_lsb: {max_pic_order_cnt_lsb}, \
+            support_packed_headers: {packed_headers_attr_supported}"
+        );
 
         VaH264Encoder {
             h264_config,
@@ -264,9 +272,9 @@ impl VaH264Encoder {
             available_src_surfaces: src_surfaces,
             available_ref_surfaces: ref_surfaces,
             reference_frames: Vec::new(),
-            max_ref_frames: 4,
+            max_ref_frames: 1,
             backlogged_b_frames: Vec::new(),
-            max_pic_order_cnt_lsb: 1 << (idr_period as f32).log2().ceil() as i32,
+            max_pic_order_cnt_lsb,
             pic_order_cnt_msb_ref: 0,
             pic_order_cnt_lsb_ref: 0,
             current_idr_display: 0,
@@ -299,7 +307,7 @@ impl VaH264Encoder {
             .frame_type_pattern
             .frame_type_of_nth_frame(self.num_submitted_frames);
 
-        // B-Frames are not encoded immediately, they are queued until after a I or P frame is encoded
+        // B-Frames are not encoded immediately, they are queued until after an I or P-frame is encoded
         if frame_type == FrameType::B {
             self.backlogged_b_frames
                 .push((src_surface, self.num_submitted_frames));
@@ -344,6 +352,12 @@ impl VaH264Encoder {
             self.num_encoded_frames
         );
 
+        let mut ref_surface = if let Some(ref_surface) = self.available_ref_surfaces.pop() {
+            ref_surface
+        } else {
+            self.reference_frames.remove(0).0
+        };
+
         // EncCodec buffer size is estimated from the input image resolution. Currently using a higher value to ensure
         // proper output even with worst case input
         let coded_buffer_size =
@@ -362,6 +376,7 @@ impl VaH264Encoder {
             self.num_encoded_frames,
             display_index,
             frame_type,
+            &ref_surface,
             &coded_buffer,
         );
         let slice_param =
@@ -439,8 +454,17 @@ impl VaH264Encoder {
 
         drop(bufs); // use bufs after `end_picture` to make sure they're available
 
+        src_surface.sync();
+
         // Put the source surface back into the pool
         self.available_src_surfaces.insert(0, src_surface);
+
+        if matches!(frame_type, FrameType::IDR | FrameType::I | FrameType::P) {
+            // Store the reference frame
+            self.reference_frames.push((ref_surface, pic_param.CurrPic));
+        } else {
+            self.available_ref_surfaces.push(ref_surface);
+        }
 
         self.num_encoded_frames += 1;
 
@@ -461,7 +485,7 @@ impl VaH264Encoder {
             seq_param.intra_idr_period = self.frame_type_pattern.idr_period;
             seq_param.ip_period = self.frame_type_pattern.p_period.unwrap_or(0);
 
-            seq_param.max_num_ref_frames = 16; // TODO: configurable?
+            seq_param.max_num_ref_frames = self.max_ref_frames as u32; // TODO: configurable?
             seq_param.seq_fields.bits.set_frame_mbs_only_flag(1);
             seq_param.time_scale = 50; // TODO: configurable
             seq_param.num_units_in_tick = 1; // TODO: configurable
@@ -567,10 +591,6 @@ impl VaH264Encoder {
     }
 
     fn calc_top_field_order_cnt(&mut self, frame_type: FrameType, pic_order_cnt_lsb: i32) -> i32 {
-        log::trace!(
-            "calc_picture_order_count frame_type={frame_type:?}, pic_order_cnt_lsb={pic_order_cnt_lsb}"
-        );
-
         let (prev_pic_order_cnt_msb, prev_pic_order_cnt_lsb) = if frame_type == FrameType::IDR {
             (0, 0)
         } else {
@@ -604,91 +624,71 @@ impl VaH264Encoder {
         encoding_index: u32,
         display_index: u32,
         frame_type: FrameType,
+        ref_surface: &Surface,
         coded_buffer: &Buffer,
     ) -> ffi::VAEncPictureParameterBufferH264 {
         unsafe {
-            let mut ref_surface = if let Some(ref_surface) = self.available_ref_surfaces.pop() {
-                ref_surface
-            } else {
-                self.reference_frames.remove(0).0
-            };
-
             let mut pic_param = zeroed::<ffi::VAEncPictureParameterBufferH264>();
 
+            for p in &mut pic_param.ReferenceFrames {
+                p.picture_id = ffi::VA_INVALID_SURFACE;
+                p.flags = ffi::VA_PICTURE_H264_INVALID;
+            }
+
+            pic_param.frame_num =
+                ((display_index - self.current_idr_display) % (u16::MAX as u32)) as u16;
+
             pic_param.CurrPic.picture_id = ref_surface.id();
-            pic_param.CurrPic.frame_idx = display_index - self.current_idr_display;
-            pic_param.CurrPic.TopFieldOrderCnt = self.calc_top_field_order_cnt(
-                frame_type,
-                (display_index as i32 - self.current_idr_display as i32)
-                    % self.max_pic_order_cnt_lsb,
-            );
+            pic_param.CurrPic.frame_idx = pic_param.frame_num as u32;
+
+            pic_param.CurrPic.flags =
+                if matches!(frame_type, FrameType::IDR | FrameType::I | FrameType::P) {
+                    ffi::VA_PICTURE_H264_SHORT_TERM_REFERENCE
+                } else {
+                    0
+                };
+
+            let poc_lsb = (display_index as i32 - self.current_idr_display as i32)
+                % self.max_pic_order_cnt_lsb;
+            pic_param.CurrPic.TopFieldOrderCnt = self.calc_top_field_order_cnt(frame_type, poc_lsb);
             pic_param.CurrPic.BottomFieldOrderCnt = pic_param.CurrPic.TopFieldOrderCnt;
 
-            if matches!(frame_type, FrameType::IDR | FrameType::I | FrameType::P) {
-                // Store the reference frame
-                self.reference_frames.push((ref_surface, pic_param.CurrPic));
-            } else {
-                self.available_ref_surfaces.push(ref_surface);
-            }
+            log::trace!(
+                "\tPictureParams frame_num: {}, CurrPic.frame_idx: {}, POC: {}",
+                pic_param.frame_num,
+                pic_param.CurrPic.frame_idx,
+                pic_param.CurrPic.TopFieldOrderCnt
+            );
 
-            if frame_type == FrameType::P {
-                let mut reference_frames =
-                    self.reference_frames.iter().rev().take(self.max_ref_frames);
+            match frame_type {
+                FrameType::P => {
+                    let mut num_ref_idx_l0_active = 0;
+                    let mut reference_frames =
+                        self.reference_frames.iter().rev().take(self.max_ref_frames);
 
-                for picture in &mut pic_param.ReferenceFrames {
-                    if let Some((_, ref_frame)) = reference_frames.next() {
-                        *picture = *ref_frame;
-                    } else {
-                        picture.picture_id = ffi::VA_INVALID_SURFACE;
-                        picture.flags = ffi::VA_PICTURE_H264_INVALID;
+                    for picture in &mut pic_param.ReferenceFrames {
+                        if let Some((_, ref_frame)) = reference_frames.next() {
+                            log::trace!(
+                                "\tUsing reference frame: frame_idx: {}",
+                                ref_frame.frame_idx
+                            );
+                            *picture = *ref_frame;
+                            num_ref_idx_l0_active += 1;
+                        } else {
+                            picture.picture_id = ffi::VA_INVALID_SURFACE;
+                            picture.flags = ffi::VA_PICTURE_H264_INVALID;
+                        }
                     }
+
+                    pic_param.num_ref_idx_l0_active_minus1 = num_ref_idx_l0_active - 1;
                 }
-
-                // pic_param.ReferenceFrames[0] = self.reference_frames.last().unwrap().1;
-                //
-                // for pic in &mut pic_param.ReferenceFrames[1..] {
-                //     pic.picture_id = ffi::VA_INVALID_SURFACE;
-                //     pic.flags = ffi::VA_PICTURE_H264_INVALID;
-                // }
-            }
-
-            if frame_type == FrameType::B {
-                let curr_frame_idx = display_index - self.current_idr_display;
-
-                let a = self
-                    .reference_frames
-                    .iter()
-                    .rev()
-                    .find(|(_, p)| p.frame_idx < curr_frame_idx)
-                    .unwrap();
-
-                let b = self
-                    .reference_frames
-                    .iter()
-                    .find(|(_, p)| p.frame_idx > curr_frame_idx)
-                    .unwrap();
-
-                pic_param.ReferenceFrames[0] = a.1;
-                pic_param.ReferenceFrames[1] = b.1;
-
-                for pic in &mut pic_param.ReferenceFrames[2..] {
-                    pic.picture_id = ffi::VA_INVALID_SURFACE;
-                    pic.flags = ffi::VA_PICTURE_H264_INVALID;
+                FrameType::B => {
+                    todo!()
+                }
+                FrameType::I | FrameType::IDR => {
+                    // No references to add
                 }
             }
-
-            // let mut reference_frames = self.reference_frames.iter();
-            //
-            //
-            // for pic in &mut pic_param.ReferenceFrames {
-            //     if let Some((ref_surface, ref_display_index)) = reference_frames.next() {
-            //         pic.picture_id = ref_surface.id();
-            //         pic.frame_idx = *ref_display_index;
-            //     } else {
-            //         pic.picture_id = ffi::VA_INVALID_SURFACE;
-            //         pic.flags = ffi::VA_PICTURE_H264_INVALID;
-            //     }
-            // }
 
             pic_param
                 .pic_fields
@@ -698,14 +698,12 @@ impl VaH264Encoder {
                 .pic_fields
                 .bits
                 .set_reference_pic_flag((frame_type != FrameType::B) as u32);
-            pic_param.pic_fields.bits.set_entropy_coding_mode_flag(1); // TODO: configurable?
+            pic_param.pic_fields.bits.set_entropy_coding_mode_flag(1);
             pic_param
                 .pic_fields
                 .bits
-                .set_deblocking_filter_control_present_flag(1); // TODO: configurable
+                .set_deblocking_filter_control_present_flag(1);
 
-            pic_param.frame_num =
-                ((encoding_index - self.current_idr_display) % u16::MAX as u32) as u16;
             pic_param.coded_buf = coded_buffer.id();
             pic_param.last_picture = 0; // TODO: set on flush
             pic_param.pic_init_qp = 26; // TODO: configurable
@@ -723,6 +721,15 @@ impl VaH264Encoder {
         unsafe {
             let mut slice_params = zeroed::<ffi::VAEncSliceParameterBufferH264>();
 
+            for pic in &mut slice_params.RefPicList0 {
+                pic.picture_id = ffi::VA_INVALID_SURFACE;
+                pic.flags = ffi::VA_PICTURE_H264_INVALID;
+            }
+            for pic in &mut slice_params.RefPicList1 {
+                pic.picture_id = ffi::VA_INVALID_SURFACE;
+                pic.flags = ffi::VA_PICTURE_H264_INVALID;
+            }
+
             slice_params.num_macroblocks = self.width_mbaligned * self.height_mbaligned / (16 * 16);
             slice_params.slice_type = match frame_type {
                 FrameType::P => 0,
@@ -732,12 +739,7 @@ impl VaH264Encoder {
 
             match frame_type {
                 FrameType::P => {
-                    // slice_params.RefPicList0[0] = self.reference_frames.last().unwrap().1;
-                    //
-                    // for pic in &mut slice_params.RefPicList0[1..] {
-                    //     pic.picture_id = ffi::VA_INVALID_SURFACE;
-                    //     pic.flags = ffi::VA_PICTURE_H264_INVALID;
-                    // }
+                    let mut num_ref_idx_l0_active = 0;
 
                     let mut reference_frames =
                         self.reference_frames.iter().rev().take(self.max_ref_frames);
@@ -745,44 +747,24 @@ impl VaH264Encoder {
                     for picture in &mut slice_params.RefPicList0 {
                         if let Some((_, ref_frame)) = reference_frames.next() {
                             *picture = *ref_frame;
+                            num_ref_idx_l0_active += 1;
                         } else {
                             picture.picture_id = ffi::VA_INVALID_SURFACE;
                             picture.flags = ffi::VA_PICTURE_H264_INVALID;
                         }
                     }
+
+                    slice_params.num_ref_idx_l0_active_minus1 = num_ref_idx_l0_active - 1;
+                    slice_params.num_ref_idx_active_override_flag = 1;
+
+                    log::trace!(
+                        "\tslice params.slice_params.num_ref_idx_l0_active_minus1 = {}",
+                        slice_params.num_ref_idx_l0_active_minus1
+                    );
                 }
-                FrameType::B => {
-                    let curr_frame_idx = display_index - self.current_idr_display;
-
-                    let a = self
-                        .reference_frames
-                        .iter()
-                        .rev()
-                        .find(|(_, p)| p.frame_idx < curr_frame_idx)
-                        .unwrap();
-
-                    let b = self
-                        .reference_frames
-                        .iter()
-                        .find(|(_, p)| p.frame_idx > curr_frame_idx)
-                        .unwrap();
-
-                    slice_params.RefPicList0[0] = a.1;
-                    slice_params.RefPicList1[0] = b.1;
-
-                    for pic in &mut slice_params.RefPicList0[1..] {
-                        pic.picture_id = ffi::VA_INVALID_SURFACE;
-                        pic.flags = ffi::VA_PICTURE_H264_INVALID;
-                    }
-
-                    for pic in &mut slice_params.RefPicList1[1..] {
-                        pic.picture_id = ffi::VA_INVALID_SURFACE;
-                        pic.flags = ffi::VA_PICTURE_H264_INVALID;
-                    }
-                }
+                FrameType::B => {}
                 FrameType::I => {}
                 FrameType::IDR => {
-                    // TODO: avoid overflow here, idr_pic_id just needs to be unique
                     slice_params.idr_pic_id = self.current_idr_display as u16;
                 }
             }
@@ -889,13 +871,10 @@ mod tests {
     use ezk_image::{
         ColorInfo, ColorPrimaries, ColorSpace, ColorTransfer, ImageRef, PixelFormat, YuvColorInfo,
     };
-    use rand::RngCore;
-    use scap::capturer;
     use scap::frame::Frame;
     use std::fs::OpenOptions;
     use std::io::Write;
     use std::slice::from_raw_parts;
-    use std::time::Instant;
 
     #[test]
     fn haha() {
@@ -1024,7 +1003,7 @@ mod tests {
             let mut mapped_ptr = mapped.data();
 
             while !mapped_ptr.is_null() {
-                let mut x = unsafe { *mapped_ptr.cast::<ffi::VACodedBufferSegment>() };
+                let x = unsafe { *mapped_ptr.cast::<ffi::VACodedBufferSegment>() };
                 mapped_ptr = x.next;
 
                 // println!(
