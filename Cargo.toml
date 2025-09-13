@@ -35,5 +35,5 @@ log = "0.4"
 unreachable_pub = "warn"
 
 [profile.release]
-debug = true
-debug-assertions = true
+#debug = true
+#debug-assertions = true
