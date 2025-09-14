@@ -1,10 +1,9 @@
+use crate::{Handle, Image, VaError, ffi};
 use std::{
     mem::MaybeUninit,
     ops::{Deref, DerefMut},
     sync::Arc,
 };
-
-use crate::{Handle, Image, VaError, ffi};
 
 pub struct Surface {
     pub(crate) display: Arc<Handle>,
@@ -42,6 +41,21 @@ impl Surface {
     pub fn sync(&mut self) {
         unsafe {
             VaError::try_(ffi::vaSyncSurface(self.display.dpy, self.surface_id)).unwrap();
+        }
+    }
+
+    pub fn try_sync(&mut self) -> bool {
+        unsafe {
+            if let Err(e) = VaError::try_(ffi::vaSyncSurface2(self.display.dpy, self.surface_id, 0))
+            {
+                if e.status == ffi::VA_STATUS_ERROR_TIMEDOUT as ffi::VAStatus {
+                    false
+                } else {
+                    panic!("vaSyncSurface2 failed: {:?}", e);
+                }
+            } else {
+                true
+            }
         }
     }
 }
