@@ -16,7 +16,7 @@ const NAL_NON_IDR: u8 = 1;
 const NAL_IDR: u8 = 5;
 const NAL_SPS: u8 = 7;
 const NAL_PPS: u8 = 8;
-const NAL_SEI: u8 = 6;
+// const NAL_SEI: u8 = 6;
 
 struct H264BitStreamWriter {
     buf: BitWriter<Vec<u8>, BigEndian>,
@@ -337,6 +337,7 @@ pub(super) fn write_slice_header(
 
     //     if ( redundant_pic_cnt_present_flag )
     //         redundant_pic_cnt  ue(v))
+    assert_eq!(pic_fields.redundant_pic_cnt_present_flag(), 0);
 
     //     if ( slice_type == B )
     //         direct_spatial_mv_pred_flag  u(1)
@@ -428,8 +429,8 @@ pub(super) fn write_slice_header(
 
     //     if ( slice_type == SP | | slice_type == SI ) {
     //         if ( slice_type == SP )
-    //         sp_for_switch_flag  u(1)
-    //         slice_qs_delta  se(v)
+    //             sp_for_switch_flag  u(1)
+    //             slice_qs_delta  se(v)
     //     }
 
     //     if ( deblocking_filter_control_present_flag ) {
