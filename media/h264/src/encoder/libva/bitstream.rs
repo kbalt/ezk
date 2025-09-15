@@ -1,7 +1,7 @@
 use bitstream_io::{BigEndian, BitWrite, BitWriter};
 use libva::ffi;
 
-use crate::{H264EncoderConfig, Profile};
+use crate::{encoder::H264EncoderConfig, Profile};
 
 const SLICE_TYPE_P: u8 = 0;
 const SLICE_TYPE_B: u8 = 1;
