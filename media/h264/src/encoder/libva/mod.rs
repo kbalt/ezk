@@ -1,4 +1,3 @@
-use crate::H264EncoderConfig;
 use libva::{Buffer, Context, Display, Surface, ffi};
 use std::{
     collections::VecDeque,
@@ -7,14 +6,15 @@ use std::{
     slice::from_raw_parts,
 };
 
+use crate::encoder::H264EncoderConfig;
+
 mod bitstream;
 
 // 16 is the maximum number of reference frames allowed by H.264
 const MAX_SURFACES: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[doc(hidden)]
-pub enum FrameType {
+enum FrameType {
     // Uses previous frames as reference
     P,
     // Uses previous and future frames as reference
@@ -22,7 +22,7 @@ pub enum FrameType {
     // Intra frame, standalone complete picture, no references
     I,
     // Intra Frame preceded by a SPS/PPS set. Clears all reference frames
-    IDR,
+    Idr,
 }
 
 /// Describes the pattern in which frames are created
@@ -60,33 +60,33 @@ pub enum FrameType {
 /// let pattern = FrameTypePattern { intra_idr_period: 8, intra_period: 8, ip_period: 4 };
 /// assert_eq!(eval(pattern), [IDR, P, B, B, B, P, B, B, P, IDR, P, B, B, B, P, B, B]);
 /// ```
-pub struct FrameTypePattern {
+struct FrameTypePattern {
     /// Period in which to create IDR-Frames
     ///
     /// Must be a multiple of `i_period` (or `p_period`) if set
-    pub intra_idr_period: u32,
+    intra_idr_period: u32,
 
     /// Period in which to create I-Frames
     ///
     /// Must be a multiple of `p_period` if set
-    pub intra_period: u32,
+    intra_period: u32,
 
     /// How often to insert P-Frames, instead of B-Frames
     ///
     /// B-Frames are not inserted if this is set to `None` or `Some(1)`
-    pub ip_period: u32,
+    ip_period: u32,
 }
 
 impl FrameTypePattern {
-    pub const fn frame_type_of_nth_frame(&self, n: u32) -> FrameType {
+    const fn frame_type_of_nth_frame(&self, n: u32) -> FrameType {
         // Always start with an IDR frame
         if n == 0 {
-            return FrameType::IDR;
+            return FrameType::Idr;
         }
 
         // Emit IDR frame every idr_period frames
         if n % self.intra_idr_period == 0 {
-            return FrameType::IDR;
+            return FrameType::Idr;
         }
 
         // Emit I frame every i_period frames
@@ -105,7 +105,7 @@ impl FrameTypePattern {
                 match self.frame_type_of_nth_frame(i) {
                     FrameType::P | FrameType::I => return FrameType::B,
                     FrameType::B => i += 1,
-                    FrameType::IDR => return FrameType::P,
+                    FrameType::Idr => return FrameType::P,
                 }
             }
         }
@@ -201,6 +201,27 @@ impl VaH264Encoder {
         let rc_attr = attributes[ffi::VAConfigAttribType_VAConfigAttribRateControl as usize];
         if rc_attr.value != ffi::VA_ATTRIB_NOT_SUPPORTED {
             // TODO: rate control
+            println!("Rate control available");
+
+            println!("\tNONE: {}", rc_attr.value & ffi::VA_RC_NONE !=0);
+            println!("\tCBR: {}", rc_attr.value & ffi::VA_RC_CBR !=0);
+            println!("\tVBR: {}", rc_attr.value & ffi::VA_RC_VBR !=0);
+            println!("\tVCM: {}", rc_attr.value & ffi::VA_RC_VCM !=0);
+            println!("\tCQP: {}", rc_attr.value & ffi::VA_RC_CQP !=0);
+            println!("\tVBR_CONSTRAINED: {}", rc_attr.value & ffi::VA_RC_VBR_CONSTRAINED !=0);
+            println!("\tICQ: {}", rc_attr.value & ffi::VA_RC_ICQ !=0);
+            println!("\tMB: {}", rc_attr.value & ffi::VA_RC_MB !=0);
+            println!("\tCFS: {}", rc_attr.value & ffi::VA_RC_CFS !=0);
+            println!("\tPARALLEL: {}", rc_attr.value & ffi::VA_RC_PARALLEL !=0);
+            println!("\tQVBR: {}", rc_attr.value & ffi::VA_RC_QVBR !=0);
+            println!("\tAVBR: {}", rc_attr.value & ffi::VA_RC_AVBR !=0);
+            println!("\tTCBRC: {}", rc_attr.value & ffi::VA_RC_TCBRC !=0);
+
+            config_attributes.push(ffi::VAConfigAttrib {
+                type_: ffi::VAConfigAttribType_VAConfigAttribRateControl,
+                value: ffi::VA_RC_CBR,
+            });
+
         }
 
         // Test if packed headers are available, and enable some if they are
@@ -255,14 +276,13 @@ impl VaH264Encoder {
             src_surfaces.iter().chain(ref_surfaces.iter()),
         );
 
+        // EncCodec buffer size is estimated from the input image resolution. Currently using a higher value to ensure
+        // proper output even with worst case input
+        let coded_buffer_size = (width_mbaligned as f64 * height_mbaligned as f64 * 2.5) as usize;
+
         let src_surfaces = src_surfaces
             .into_iter()
             .map(|src_surface| {
-                // EncCodec buffer size is estimated from the input image resolution. Currently using a higher value to ensure
-                // proper output even with worst case input
-                let coded_buffer_size =
-                    (width_mbaligned as f64 * height_mbaligned as f64 * 2.5) as usize;
-
                 let coded_buffer = context
                     .create_buffer_empty(ffi::VABufferType_VAEncCodedBufferType, coded_buffer_size);
 
@@ -339,12 +359,38 @@ impl VaH264Encoder {
         }
     }
 
-    pub fn pop_result(&mut self) -> Option<Vec<u8>> {
-        // Check if there's in-flight surfaces that are ready to be reused
+    /// Poll for encoded frame to be completed
+    ///
+    /// Returns `None` if nothing is ready yet, or no work has been submitted
+    pub fn poll_result(&mut self) -> Option<Vec<u8>> {
+        if let Some(buf) = self.output.pop_front() {
+            return Some(buf);
+        }
+
         if let Some((src_surface, _)) = self.in_flight.front_mut()
             && src_surface.try_sync()
         {
             let (src_surface, mut coded_buffer) = self.in_flight.pop_front().unwrap();
+            self.read_out_coded_buffer(&mut coded_buffer);
+            self.available_src_surfaces
+                .push((src_surface, coded_buffer));
+
+            self.output.pop_front()
+        } else {
+            None
+        }
+    }
+
+    /// Wait for encoded frame to be completed
+    ///
+    /// Returns `None` if work has been submitted
+    pub fn wait_result(&mut self) -> Option<Vec<u8>> {
+        if let Some(buf) = self.output.pop_front() {
+            return Some(buf);
+        }
+
+        if let Some((mut src_surface, mut coded_buffer)) = self.in_flight.pop_front() {
+            src_surface.sync();
             self.read_out_coded_buffer(&mut coded_buffer);
             self.available_src_surfaces
                 .push((src_surface, coded_buffer));
@@ -353,6 +399,7 @@ impl VaH264Encoder {
         self.output.pop_front()
     }
 
+    /// Submit a frame to be encoded
     pub fn encode_frame(
         &mut self,
         src_data: [&[u8]; 3],
@@ -395,7 +442,7 @@ impl VaH264Encoder {
             return;
         }
 
-        if frame_type == FrameType::IDR {
+        if frame_type == FrameType::Idr {
             assert!(self.backlogged_b_frames.is_empty());
 
             self.current_idr_display = display_index;
@@ -409,7 +456,7 @@ impl VaH264Encoder {
 
         self.encode_surface(display_index, src_surface, coded_buffer, frame_type);
 
-        if matches!(frame_type, FrameType::IDR | FrameType::I | FrameType::P) {
+        if matches!(frame_type, FrameType::Idr | FrameType::I | FrameType::P) {
             self.current_frame_num += 1;
 
             let backlogged_b_frames = take(&mut self.backlogged_b_frames);
@@ -447,7 +494,7 @@ impl VaH264Encoder {
             self.create_picture_params(display_index, frame_type, &ref_surface, &coded_buffer);
         let slice_param = self.create_slice_params(display_index, frame_type);
 
-        if frame_type == FrameType::IDR {
+        if frame_type == FrameType::Idr {
             // Render sequence params
             let rc_params_buf = self.create_rate_control_params();
             bufs.push(self.context.create_buffer_with_data(
@@ -512,7 +559,7 @@ impl VaH264Encoder {
 
         self.in_flight.push_back((src_surface, coded_buffer));
 
-        if matches!(frame_type, FrameType::IDR | FrameType::I | FrameType::P) {
+        if matches!(frame_type, FrameType::Idr | FrameType::I | FrameType::P) {
             self.reference_frames.push((ref_surface, pic_param.CurrPic));
         } else {
             self.available_ref_surfaces.insert(0, ref_surface);
@@ -591,7 +638,7 @@ impl VaH264Encoder {
             rate_control_params.window_size = 1000;
             rate_control_params.initial_qp = 26;
             rate_control_params.min_qp = 26;
-            rate_control_params.rc_flags.value = ffi::VA_RC_MB;
+            rate_control_params.rc_flags.value = ffi::VA_RC_CBR;
 
             if let Some((min_qp, max_qp)) = self.h264_config.qp {
                 rate_control_params.min_qp = min_qp;
@@ -605,7 +652,7 @@ impl VaH264Encoder {
     }
 
     fn calc_top_field_order_cnt(&mut self, frame_type: FrameType, pic_order_cnt_lsb: i32) -> i32 {
-        let (prev_pic_order_cnt_msb, prev_pic_order_cnt_lsb) = if frame_type == FrameType::IDR {
+        let (prev_pic_order_cnt_msb, prev_pic_order_cnt_lsb) = if frame_type == FrameType::Idr {
             (0, 0)
         } else {
             (self.pic_order_cnt_msb_ref, self.pic_order_cnt_lsb_ref)
@@ -648,7 +695,7 @@ impl VaH264Encoder {
             pic_param.CurrPic.frame_idx = self.current_frame_num;
 
             pic_param.CurrPic.flags =
-                if matches!(frame_type, FrameType::IDR | FrameType::I | FrameType::P) {
+                if matches!(frame_type, FrameType::Idr | FrameType::I | FrameType::P) {
                     ffi::VA_PICTURE_H264_SHORT_TERM_REFERENCE
                 } else {
                     0
@@ -674,7 +721,7 @@ impl VaH264Encoder {
                     let iter = self.reference_frames.iter().rev().take(self.max_ref_frames);
                     fill_pic_list(&mut pic_param.ReferenceFrames, iter);
                 }
-                FrameType::I | FrameType::IDR => {
+                FrameType::I | FrameType::Idr => {
                     // No references to add
                 }
             }
@@ -687,7 +734,7 @@ impl VaH264Encoder {
             pic_param
                 .pic_fields
                 .bits
-                .set_idr_pic_flag((frame_type == FrameType::IDR) as u32);
+                .set_idr_pic_flag((frame_type == FrameType::Idr) as u32);
             pic_param
                 .pic_fields
                 .bits
@@ -727,7 +774,7 @@ impl VaH264Encoder {
             slice_params.slice_type = match frame_type {
                 FrameType::P => 0,
                 FrameType::B => 1,
-                FrameType::IDR | FrameType::I => 2,
+                FrameType::Idr | FrameType::I => 2,
             };
 
             match frame_type {
@@ -745,7 +792,7 @@ impl VaH264Encoder {
                     fill_pic_list(&mut slice_params.RefPicList0, iter);
                 }
                 FrameType::I => {}
-                FrameType::IDR => {
+                FrameType::Idr => {
                     slice_params.idr_pic_id = self.current_idr_display as u16;
                 }
             }
@@ -902,128 +949,128 @@ fn profile_to_profile_and_format(profile: crate::Profile) -> Option<(i32, u32)> 
     Some((profile, format))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ezk_image::resize::ResizeAlg;
-    use ezk_image::{
-        ColorInfo, ColorPrimaries, ColorSpace, ColorTransfer, ImageRef, PixelFormat, YuvColorInfo,
-    };
-    use scap::frame::Frame;
-    use std::fs::OpenOptions;
-    use std::io::Write;
-    use std::time::Instant;
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+//     use ezk_image::resize::ResizeAlg;
+//     use ezk_image::{
+//         ColorInfo, ColorPrimaries, ColorSpace, ColorTransfer, ImageRef, PixelFormat, YuvColorInfo,
+//     };
+//     use scap::frame::Frame;
+//     use std::fs::OpenOptions;
+//     use std::io::Write;
+//     use std::time::Instant;
 
-    #[test]
-    fn haha() {
-        env_logger::init();
-        let display = Display::open_drm("/dev/dri/renderD128").unwrap();
+//     #[test]
+//     fn haha() {
+//         env_logger::init();
+//         let display = Display::open_drm("/dev/dri/renderD128").unwrap();
 
-        println!("profile: {:?}", display.profiles());
+//         println!("profile: {:?}", display.profiles());
 
-        let mut encoder = VaH264Encoder::new(
-            &display,
-            H264EncoderConfig {
-                profile: crate::Profile::High,
-                level: crate::Level::Level_4_1,
-                resolution: (1920, 1080),
-                qp: Some((20, 28)),
-                gop: Some(60),
-                bitrate: Some(800_000),
-                max_bitrate: Some(800_000),
-                max_slice_len: None,
-            },
-        );
+//         let mut encoder = VaH264Encoder::new(
+//             &display,
+//             H264EncoderConfig {
+//                 profile: crate::Profile::High,
+//                 level: crate::Level::Level_4_1,
+//                 resolution: (1920, 1080),
+//                 qp: Some((20, 28)),
+//                 gop: Some(60),
+//                 bitrate: Some(6_000_000),
+//                 max_bitrate: Some(6_000_000),
+//                 max_slice_len: None,
+//             },
+//         );
 
-        if scap::has_permission() {
-            scap::request_permission();
-        }
+//         if scap::has_permission() {
+//             scap::request_permission();
+//         }
 
-        let mut resizer = ezk_image::resize::Resizer::new(ResizeAlg::Nearest);
+//         let mut resizer = ezk_image::resize::Resizer::new(ResizeAlg::Nearest);
 
-        let mut capturer = scap::capturer::Capturer::build(scap::capturer::Options {
-            fps: 30,
-            ..Default::default()
-        })
-        .unwrap();
+//         let mut capturer = scap::capturer::Capturer::build(scap::capturer::Options {
+//             fps: 30,
+//             ..Default::default()
+//         })
+//         .unwrap();
 
-        capturer.start_capture();
+//         capturer.start_capture();
 
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open("lol.h264")
-            .unwrap();
+//         let mut file = OpenOptions::new()
+//             .write(true)
+//             .create(true)
+//             .truncate(true)
+//             .open("lol.h264")
+//             .unwrap();
 
-        let mut bgrx_target = ezk_image::Image::blank(
-            PixelFormat::BGRA,
-            1920,
-            1080,
-            ColorInfo::YUV(YuvColorInfo {
-                transfer: ColorTransfer::Linear,
-                full_range: false,
-                primaries: ColorPrimaries::BT709,
-                space: ColorSpace::BT709,
-            }),
-        );
+//         let mut bgrx_target = ezk_image::Image::blank(
+//             PixelFormat::BGRA,
+//             1920,
+//             1080,
+//             ColorInfo::YUV(YuvColorInfo {
+//                 transfer: ColorTransfer::Linear,
+//                 full_range: false,
+//                 primaries: ColorPrimaries::BT709,
+//                 space: ColorSpace::BT709,
+//             }),
+//         );
 
-        let mut nv12 = ezk_image::Image::blank(
-            PixelFormat::NV12,
-            1920,
-            1080,
-            ColorInfo::YUV(YuvColorInfo {
-                transfer: ColorTransfer::Linear,
-                full_range: false,
-                primaries: ColorPrimaries::BT709,
-                space: ColorSpace::BT709,
-            }),
-        );
+//         let mut nv12 = ezk_image::Image::blank(
+//             PixelFormat::NV12,
+//             1920,
+//             1080,
+//             ColorInfo::YUV(YuvColorInfo {
+//                 transfer: ColorTransfer::Linear,
+//                 full_range: false,
+//                 primaries: ColorPrimaries::BT709,
+//                 space: ColorSpace::BT709,
+//             }),
+//         );
 
-        let mut i = 0;
-        let mut last_frame = Instant::now();
-        while let Ok(frame) = capturer.get_next_frame() {
-            let now = Instant::now();
-            println!("Time since last frame: {:?}", now - last_frame);
-            last_frame = now;
-            i += 1;
-            if i > 2500 {
-                break;
-            }
+//         let mut i = 0;
+//         let mut last_frame = Instant::now();
+//         while let Ok(frame) = capturer.get_next_frame() {
+//             let now = Instant::now();
+//             println!("Time since last frame: {:?}", now - last_frame);
+//             last_frame = now;
+//             i += 1;
+//             if i > 2500 {
+//                 break;
+//             }
 
-            let bgrx = match frame {
-                Frame::BGRx(bgrx) => bgrx,
-                _ => todo!(),
-            };
+//             let bgrx = match frame {
+//                 Frame::BGRx(bgrx) => bgrx,
+//                 _ => todo!(),
+//             };
 
-            let bgrx_original = ezk_image::Image::from_buffer(
-                PixelFormat::BGRA,
-                bgrx.data,
-                None,
-                bgrx.width as usize,
-                bgrx.height as usize,
-                ColorInfo::YUV(YuvColorInfo {
-                    transfer: ColorTransfer::Linear,
-                    full_range: false,
-                    primaries: ColorPrimaries::BT709,
-                    space: ColorSpace::BT709,
-                }),
-            )
-            .unwrap();
+//             let bgrx_original = ezk_image::Image::from_buffer(
+//                 PixelFormat::BGRA,
+//                 bgrx.data,
+//                 None,
+//                 bgrx.width as usize,
+//                 bgrx.height as usize,
+//                 ColorInfo::YUV(YuvColorInfo {
+//                     transfer: ColorTransfer::Linear,
+//                     full_range: false,
+//                     primaries: ColorPrimaries::BT709,
+//                     space: ColorSpace::BT709,
+//                 }),
+//             )
+//             .unwrap();
 
-            resizer.resize(&bgrx_original, &mut bgrx_target).unwrap();
+//             resizer.resize(&bgrx_original, &mut bgrx_target).unwrap();
 
-            ezk_image::convert_multi_thread(&bgrx_target, &mut nv12).unwrap();
+//             ezk_image::convert_multi_thread(&bgrx_target, &mut nv12).unwrap();
 
-            let mut planes = nv12.planes();
-            let (y, y_stride) = planes.next().unwrap();
-            let (uv, uv_stride) = planes.next().unwrap();
+//             let mut planes = nv12.planes();
+//             let (y, y_stride) = planes.next().unwrap();
+//             let (uv, uv_stride) = planes.next().unwrap();
 
-            encoder.encode_frame([&y, &uv, &[]], [1920, 1920, 0], 1920, 1080);
+//             encoder.encode_frame([&y, &uv, &[]], [1920, 1920, 0], 1920, 1080);
 
-            while let Some(buf) = encoder.pop_result() {
-                file.write_all(&buf).unwrap();
-            }
-        }
-    }
-}
+//             while let Some(buf) = encoder.poll_result() {
+//                 file.write_all(&buf).unwrap();
+//             }
+//         }
+//     }
+// }
