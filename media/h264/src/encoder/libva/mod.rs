@@ -6,112 +6,16 @@ use std::{
     slice::from_raw_parts,
 };
 
-use crate::encoder::H264EncoderConfig;
+use crate::encoder::{FrameType, H264EncoderConfig};
 
 mod bitstream;
 
 // 16 is the maximum number of reference frames allowed by H.264
 const MAX_SURFACES: usize = 16;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FrameType {
-    // Uses previous frames as reference
-    P,
-    // Uses previous and future frames as reference
-    B,
-    // Intra frame, standalone complete picture, no references
-    I,
-    // Intra Frame preceded by a SPS/PPS set. Clears all reference frames
-    Idr,
-}
-
-/// Describes the pattern in which frames are created
-///
-/// # Examples
-///
-/// ```rust
-/// # use ezk_h264::libva::{FrameType, FrameType::*, FrameTypePattern};
-/// # fn eval<const N: usize>(pattern: FrameTypePattern) -> [FrameType; N] {
-/// #    let mut ret = [P; N];
-/// #    let mut n = 0;
-/// #    while n < N {
-/// #        ret[n] = pattern.frame_type_of_nth_frame(n as _).1;
-/// #        n += 1;
-/// #    }
-/// #    ret
-/// # }
-/// // Only create I Frames
-/// let pattern = FrameTypePattern { intra_idr_period: 32, intra_period: 1, ip_period: 1 };
-/// assert_eq!(eval(pattern), [IDR, I, I, I, I, I, I, I, I, I, I, I, I, I, I, I]);
-///
-/// // Create I & P Frames
-/// let pattern = FrameTypePattern { intra_idr_period: 32, intra_period: 4, ip_period: 1 };
-/// assert_eq!(eval(pattern), [IDR, P, P, P, I, P, P, P, I, P, P, P, I, P, P, P]);
-///
-/// // Insert some IDR frames, required for livestream or video conferences
-/// let pattern = FrameTypePattern { intra_idr_period: 8, intra_period: 4, ip_period: 1 };
-/// assert_eq!(eval(pattern), [IDR, P, P, P, I, P, P, P, IDR, P, P, P, I, P, P, P]);
-///
-/// // B frames are only created if `p_period` is specified
-/// let pattern = FrameTypePattern { intra_idr_period: 32, intra_period: 8, ip_period: 4 };
-/// assert_eq!(eval(pattern), [IDR, P, B, B, B, P, B, B, B, I, B, B, B, P, B, B, B]);
-/// // B frames are only created if `p_period` is specified
-///
-/// let pattern = FrameTypePattern { intra_idr_period: 8, intra_period: 8, ip_period: 4 };
-/// assert_eq!(eval(pattern), [IDR, P, B, B, B, P, B, B, P, IDR, P, B, B, B, P, B, B]);
-/// ```
-struct FrameTypePattern {
-    /// Period in which to create IDR-Frames
-    ///
-    /// Must be a multiple of `i_period` (or `p_period`) if set
-    intra_idr_period: u32,
-
-    /// Period in which to create I-Frames
-    ///
-    /// Must be a multiple of `p_period` if set
-    intra_period: u32,
-
-    /// How often to insert P-Frames, instead of B-Frames
-    ///
-    /// B-Frames are not inserted if this is set to `None` or `Some(1)`
-    ip_period: u32,
-}
-
-impl FrameTypePattern {
-    const fn frame_type_of_nth_frame(&self, n: u32) -> FrameType {
-        // Always start with an IDR frame
-        if n == 0 {
-            return FrameType::Idr;
-        }
-
-        // Emit IDR frame every idr_period frames
-        if n % self.intra_idr_period == 0 {
-            return FrameType::Idr;
-        }
-
-        // Emit I frame every i_period frames
-        if n % self.intra_period == 0 {
-            return FrameType::I;
-        }
-
-        // Emit P frame every p_period frames
-        if n % self.ip_period == 0 {
-            FrameType::P
-        } else {
-            // Emit B-Frame if a P or I frame follows in this GOP, else emit a P-Frame
-            let mut i = n + 1;
-
-            loop {
-                match self.frame_type_of_nth_frame(i) {
-                    FrameType::P | FrameType::I => return FrameType::B,
-                    FrameType::B => i += 1,
-                    FrameType::Idr => return FrameType::P,
-                }
-            }
-        }
-    }
-}
-
+// TODO: resolution changes
+// TODO: rate control
+// TODO: fix B-Frames
 pub struct VaH264Encoder {
     h264_config: H264EncoderConfig,
 
@@ -128,9 +32,6 @@ pub struct VaH264Encoder {
 
     /// Maximum bitrate for rate control
     target_bitrate: u32,
-
-    /// Frame type pattern used to emit frames
-    frame_type_pattern: FrameTypePattern,
 
     /// Number of bits to use for the picture_order_count
     log2_max_pic_order_cnt_lsb: i32,
@@ -203,25 +104,27 @@ impl VaH264Encoder {
             // TODO: rate control
             println!("Rate control available");
 
-            println!("\tNONE: {}", rc_attr.value & ffi::VA_RC_NONE !=0);
-            println!("\tCBR: {}", rc_attr.value & ffi::VA_RC_CBR !=0);
-            println!("\tVBR: {}", rc_attr.value & ffi::VA_RC_VBR !=0);
-            println!("\tVCM: {}", rc_attr.value & ffi::VA_RC_VCM !=0);
-            println!("\tCQP: {}", rc_attr.value & ffi::VA_RC_CQP !=0);
-            println!("\tVBR_CONSTRAINED: {}", rc_attr.value & ffi::VA_RC_VBR_CONSTRAINED !=0);
-            println!("\tICQ: {}", rc_attr.value & ffi::VA_RC_ICQ !=0);
-            println!("\tMB: {}", rc_attr.value & ffi::VA_RC_MB !=0);
-            println!("\tCFS: {}", rc_attr.value & ffi::VA_RC_CFS !=0);
-            println!("\tPARALLEL: {}", rc_attr.value & ffi::VA_RC_PARALLEL !=0);
-            println!("\tQVBR: {}", rc_attr.value & ffi::VA_RC_QVBR !=0);
-            println!("\tAVBR: {}", rc_attr.value & ffi::VA_RC_AVBR !=0);
-            println!("\tTCBRC: {}", rc_attr.value & ffi::VA_RC_TCBRC !=0);
+            println!("\tNONE: {}", rc_attr.value & ffi::VA_RC_NONE != 0);
+            println!("\tCBR: {}", rc_attr.value & ffi::VA_RC_CBR != 0);
+            println!("\tVBR: {}", rc_attr.value & ffi::VA_RC_VBR != 0);
+            println!("\tVCM: {}", rc_attr.value & ffi::VA_RC_VCM != 0);
+            println!("\tCQP: {}", rc_attr.value & ffi::VA_RC_CQP != 0);
+            println!(
+                "\tVBR_CONSTRAINED: {}",
+                rc_attr.value & ffi::VA_RC_VBR_CONSTRAINED != 0
+            );
+            println!("\tICQ: {}", rc_attr.value & ffi::VA_RC_ICQ != 0);
+            println!("\tMB: {}", rc_attr.value & ffi::VA_RC_MB != 0);
+            println!("\tCFS: {}", rc_attr.value & ffi::VA_RC_CFS != 0);
+            println!("\tPARALLEL: {}", rc_attr.value & ffi::VA_RC_PARALLEL != 0);
+            println!("\tQVBR: {}", rc_attr.value & ffi::VA_RC_QVBR != 0);
+            println!("\tAVBR: {}", rc_attr.value & ffi::VA_RC_AVBR != 0);
+            println!("\tTCBRC: {}", rc_attr.value & ffi::VA_RC_TCBRC != 0);
 
             config_attributes.push(ffi::VAConfigAttrib {
                 type_: ffi::VAConfigAttribType_VAConfigAttribRateControl,
                 value: ffi::VA_RC_CBR,
             });
-
         }
 
         // Test if packed headers are available, and enable some if they are
@@ -290,7 +193,7 @@ impl VaH264Encoder {
             })
             .collect();
 
-        let intra_idr_period = h264_config.gop.unwrap_or(60);
+        let intra_idr_period = h264_config.frame_pattern.intra_idr_period;
         let log2_max_pic_order_cnt_lsb =
             ((intra_idr_period as f32).log2().ceil() as i32).clamp(4, 12);
         let max_pic_order_cnt_lsb = 1 << log2_max_pic_order_cnt_lsb;
@@ -304,16 +207,10 @@ impl VaH264Encoder {
             support_packed_header_slice: {support_packed_header_slice}"
         );
 
-        let frame_type_pattern = FrameTypePattern {
-            intra_idr_period,
-            intra_period: 30,
-            ip_period: 1,
-        };
-
         log::trace!(
             "FrameTypePattern: {:?}",
             (0..32)
-                .map(|i| frame_type_pattern.frame_type_of_nth_frame(i))
+                .map(|i| h264_config.frame_pattern.frame_type_of_nth_frame(i))
                 .collect::<Vec<_>>()
         );
 
@@ -326,7 +223,6 @@ impl VaH264Encoder {
             width_mbaligned,
             height_mbaligned,
             target_bitrate: h264_config.bitrate.unwrap_or(6_000_000),
-            frame_type_pattern,
             num_submitted_frames: 0,
             available_src_surfaces: src_surfaces,
             available_ref_surfaces: ref_surfaces,
@@ -428,7 +324,8 @@ impl VaH264Encoder {
         );
 
         let frame_type = self
-            .frame_type_pattern
+            .h264_config
+            .frame_pattern
             .frame_type_of_nth_frame(self.num_submitted_frames);
         let display_index = self.num_submitted_frames;
 
@@ -574,9 +471,9 @@ impl VaH264Encoder {
             seq_param.picture_width_in_mbs = (self.width_mbaligned / 16) as u16;
             seq_param.picture_height_in_mbs = (self.height_mbaligned / 16) as u16;
 
-            seq_param.intra_idr_period = self.frame_type_pattern.intra_idr_period;
-            seq_param.intra_period = self.frame_type_pattern.intra_period;
-            seq_param.ip_period = self.frame_type_pattern.ip_period;
+            seq_param.intra_idr_period = self.h264_config.frame_pattern.intra_idr_period;
+            seq_param.intra_period = self.h264_config.frame_pattern.intra_period;
+            seq_param.ip_period = self.h264_config.frame_pattern.ip_period;
 
             seq_param.max_num_ref_frames = self.max_ref_frames as u32;
             seq_param.time_scale = 900; // TODO: configurable
@@ -761,15 +658,6 @@ impl VaH264Encoder {
         unsafe {
             let mut slice_params = zeroed::<ffi::VAEncSliceParameterBufferH264>();
 
-            for pic in &mut slice_params.RefPicList0 {
-                pic.picture_id = ffi::VA_INVALID_SURFACE;
-                pic.flags = ffi::VA_PICTURE_H264_INVALID;
-            }
-            for pic in &mut slice_params.RefPicList1 {
-                pic.picture_id = ffi::VA_INVALID_SURFACE;
-                pic.flags = ffi::VA_PICTURE_H264_INVALID;
-            }
-
             slice_params.num_macroblocks = self.width_mbaligned * self.height_mbaligned / (16 * 16);
             slice_params.slice_type = match frame_type {
                 FrameType::P => 0,
@@ -788,7 +676,7 @@ impl VaH264Encoder {
 
                     let mut iter = self.reference_frames.iter().rev().take(self.max_ref_frames);
 
-                    fill_pic_list(&mut slice_params.RefPicList1, (&mut iter).take(1));
+                    fill_pic_list(&mut slice_params.RefPicList1, iter.next());
                     fill_pic_list(&mut slice_params.RefPicList0, iter);
                 }
                 FrameType::I => {}
@@ -900,8 +788,9 @@ fn debug_pic_list(list: &[ffi::VAPictureH264]) -> Vec<u32> {
 
 fn fill_pic_list<'a>(
     list: &mut [ffi::VAPictureH264],
-    mut iter: impl Iterator<Item = &'a (Surface, ffi::VAPictureH264)>,
+    iter: impl IntoIterator<Item = &'a (Surface, ffi::VAPictureH264)>,
 ) {
+    let mut iter = iter.into_iter();
     for picture in list {
         if let Some((_, ref_frame)) = iter.next() {
             *picture = *ref_frame;
