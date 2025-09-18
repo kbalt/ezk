@@ -1,10 +1,7 @@
 //! Utility functions for openh264
 
 use super::H264EncoderConfig;
-use crate::{
-    FmtpOptions,  Level, PacketizationMode, Profile,
-    profile_level_id::ProfileLevelId,
-};
+use crate::{FmtpOptions, Level, PacketizationMode, Profile, profile_level_id::ProfileLevelId};
 use openh264::encoder::{BitRate, IntraFramePeriod, QpRange};
 use openh264_sys2::API as _;
 use std::mem::MaybeUninit;
@@ -63,9 +60,9 @@ pub fn openh264_encoder_config(c: H264EncoderConfig) -> openh264::encoder::Encod
         ));
     }
 
-    if let Some(gop) = c.gop {
-        config = config.intra_frame_period(IntraFramePeriod::from_num_frames(gop));
-    }
+    config = config.intra_frame_period(IntraFramePeriod::from_num_frames(
+        c.frame_pattern.intra_idr_period,
+    ));
 
     if let Some(bitrate) = c.bitrate {
         config = config.bitrate(BitRate::from_bps(bitrate))

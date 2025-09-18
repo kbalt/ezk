@@ -1,6 +1,5 @@
-use std::{fmt, num::ParseIntError, str::FromStr};
 use crate::profile_level_id::{ParseProfileLevelIdError, ProfileLevelId};
-
+use std::{fmt, num::ParseIntError, str::FromStr};
 
 /// Specifies the RTP packetization mode
 #[derive(Default, Debug, Clone, Copy, PartialEq, PartialOrd)]
@@ -232,7 +231,6 @@ impl fmt::Display for FmtpOptions {
         Ok(())
     }
 }
-
 
 #[test]
 fn no_panics() {
