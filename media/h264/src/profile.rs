@@ -1,4 +1,3 @@
-
 /// H.264 encoding profile
 #[derive(Debug, Clone, Copy)]
 pub enum Profile {
@@ -49,4 +48,3 @@ impl Profile {
         }
     }
 }
-

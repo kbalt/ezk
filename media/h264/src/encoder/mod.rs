@@ -7,6 +7,10 @@ pub mod libva;
 #[cfg(feature = "openh264")]
 pub mod openh264;
 
+mod frame_pattern;
+
+pub use frame_pattern::{FramePattern, FrameType};
+
 #[derive(Debug, Clone, Copy)]
 pub enum H264RateControlConfig {
     /// CBR (Constant Bit Rate)
@@ -47,8 +51,8 @@ pub struct H264EncoderConfig {
     /// Default is (17..=28) but manual tuning is recommended!
     pub qp: Option<(u32, u32)>,
 
-    /// Keyframe interval in frames.
-    pub gop: Option<u32>,
+    /// Pattern of frames to emit
+    pub frame_pattern: FramePattern,
 
     /// Target bitrate in bits/s
     pub bitrate: Option<u32>,
@@ -70,7 +74,11 @@ impl H264EncoderConfig {
             level: fmtp.profile_level_id.level,
             resolution: fmtp.max_resolution(1, 1),
             qp: None,
-            gop: None,
+            frame_pattern: FramePattern {
+                intra_idr_period: 60,
+                intra_period: 30,
+                ip_period: 1,
+            },
             bitrate: None,
             max_bitrate: Some(fmtp.max_bitrate()),
             max_slice_len: {
