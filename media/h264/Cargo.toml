@@ -6,7 +6,6 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-
 [lints]
 workspace = true
 
@@ -21,7 +20,9 @@ thiserror = "2.0.11"
 rand = "0.9"
 bitstream-io = "4"
 scap = "0.0.8"
-ezk-image = "0.2.4"
+ezk-image = "0.3.0"
+
+ash = { git = "https://github.com/kbalt/ash.git", rev = "cc89f2a9ffc3471d8c1b9ecfa4521801f6a0ec00" }
 
 openh264 = { version = "0.8", optional = true }
 openh264-sys2 = { version = "0.8", optional = true }
@@ -31,3 +32,4 @@ h264-parser = "0.2"
 
 [dev-dependencies]
 env_logger = "0.11"
+

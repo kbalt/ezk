@@ -1,5 +1,7 @@
 //! H.264 tools for use with SDP & RTP
 
+#![allow(unsafe_op_in_unsafe_fn)]
+
 mod fmtp;
 mod level;
 mod payload;
