@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Instance {
-    inner: Arc<InstanceInner>,
+    inner: Arc<Inner>,
 }
 
-struct InstanceInner {
+struct Inner {
     instance: ash::Instance,
     video_queue_instance: video_queue::Instance,
 }
@@ -37,7 +37,7 @@ impl Instance {
             let video_queue_instance = video_queue::Instance::new(entry, &instance);
 
             Self {
-                inner: Arc::new(InstanceInner {
+                inner: Arc::new(Inner {
                     instance,
                     video_queue_instance,
                 }),
@@ -69,7 +69,7 @@ impl Instance {
     }
 }
 
-impl Drop for InstanceInner {
+impl Drop for Inner {
     fn drop(&mut self) {
         unsafe {
             self.instance.destroy_instance(None);

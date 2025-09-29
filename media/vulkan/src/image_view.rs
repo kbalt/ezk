@@ -1,0 +1,41 @@
+use crate::Image;
+use ash::vk;
+
+pub struct ImageView {
+    image: Image,
+    image_view: vk::ImageView,
+}
+
+impl ImageView {
+    pub unsafe fn create(image: &Image, create_info: &vk::ImageViewCreateInfo<'_>) -> Self {
+        let device = image.device();
+
+        let image_view = device
+            .device()
+            .create_image_view(create_info, None)
+            .unwrap();
+
+        Self {
+            image: image.clone(),
+            image_view,
+        }
+    }
+
+    pub fn image(&self) -> &Image {
+        &self.image
+    }
+
+    pub fn image_view(&self) -> vk::ImageView {
+        self.image_view
+    }
+}
+
+impl Drop for ImageView {
+    fn drop(&mut self) {
+        unsafe {
+            let device = self.image.device();
+
+            device.device().destroy_image_view(self.image_view, None);
+        }
+    }
+}

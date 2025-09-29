@@ -1,0 +1,13 @@
+[package]
+name = "ezk-vulkan"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ash = { git = "https://github.com/kbalt/ash.git", rev = "cc89f2a9ffc3471d8c1b9ecfa4521801f6a0ec00" }
+
+[lints]
+workspace = true
