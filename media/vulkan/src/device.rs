@@ -5,11 +5,11 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Device {
-    inner: Arc<DeviceInner>,
+    inner: Arc<Inner>,
 }
 
-struct DeviceInner {
-    _instance: Instance,
+struct Inner {
+    instance: Instance,
     device: ash::Device,
     video_queue_device: video_queue::Device,
     video_encode_queue_device: video_encode_queue::Device,
@@ -22,13 +22,17 @@ impl Device {
             video_encode_queue::Device::new(instance.instance(), &device);
 
         Self {
-            inner: Arc::new(DeviceInner {
-                _instance: instance,
+            inner: Arc::new(Inner {
+                instance,
                 device,
                 video_queue_device,
                 video_encode_queue_device,
             }),
         }
+    }
+
+    pub fn instance(&self) -> &Instance {
+        &self.inner.instance
     }
 
     pub fn device(&self) -> &ash::Device {
@@ -44,7 +48,7 @@ impl Device {
     }
 }
 
-impl Drop for DeviceInner {
+impl Drop for Inner {
     fn drop(&mut self) {
         unsafe {
             self.device.destroy_device(None);
