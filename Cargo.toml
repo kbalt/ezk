@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 
-members = ["sip/*", "media/*", "examples"]
+members = ["sip/*", "media/*", "media-video/*", "examples"]
 
 [workspace.package]
 authors = ["kbalt"]
@@ -23,8 +23,10 @@ stun = { package = "ezk-stun", version = "0.4.0", path = "media/stun" }
 stun-types = { package = "ezk-stun-types", version = "0.3.0", path = "media/stun-types" }
 rtc = { package = "ezk-rtc", version = "0.1.0", path = "media/rtc" }
 srtp = { package = "ezk-srtp", version = "0.1.0", path = "media/srtp" }
-libva = { package = "ezk-libva", version = "0.1.0", path = "media/libva" }
-vulkan = { package = "ezk-vulkan", version = "0.1.0", path = "media/vulkan" }
+
+h264 = { package = "ezk-h264", version = "0.1.0", path = "media-video/h264" }
+libva = { package = "ezk-libva", version = "0.1.0", path = "media-video/libva" }
+vulkan = { package = "ezk-vulkan", version = "0.1.0", path = "media-video/vulkan" }
 
 rustls-pki-types = { version = "1", features = ["std"] }
 tokio-native-tls = { version = "0.3" }
