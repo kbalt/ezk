@@ -5,7 +5,7 @@ use std::{
 
 use ash::vk;
 
-use crate::Device;
+use crate::{Device, VulkanError};
 
 pub struct Buffer {
     device: Device,
@@ -14,37 +14,30 @@ pub struct Buffer {
 }
 
 impl Buffer {
-    pub unsafe fn create(device: &Device, create_info: &vk::BufferCreateInfo<'_>) -> Self {
-        let buffer = device.device().create_buffer(create_info, None).unwrap();
+    pub unsafe fn create(
+        device: &Device,
+        create_info: &vk::BufferCreateInfo<'_>,
+    ) -> Result<Self, VulkanError> {
+        let buffer = device.device().create_buffer(create_info, None)?;
 
         let memory_requirements = device.device().get_buffer_memory_requirements(buffer);
 
         let output_alloc_info = vk::MemoryAllocateInfo::default()
             .allocation_size(memory_requirements.size)
-            .memory_type_index(
-                device
-                    .find_memory_type(
-                        memory_requirements.memory_type_bits,
-                        vk::MemoryPropertyFlags::HOST_VISIBLE,
-                    )
-                    .unwrap(),
-            );
+            .memory_type_index(device.find_memory_type(
+                memory_requirements.memory_type_bits,
+                vk::MemoryPropertyFlags::HOST_VISIBLE,
+            )?);
 
-        let memory = device
-            .device()
-            .allocate_memory(&output_alloc_info, None)
-            .unwrap();
+        let memory = device.device().allocate_memory(&output_alloc_info, None)?;
 
-        device
-            .device()
-            .bind_buffer_memory(buffer, memory, 0)
-            .unwrap();
+        device.device().bind_buffer_memory(buffer, memory, 0)?;
 
-        Self {
+        Ok(Self {
             device: device.clone(),
             buffer,
             memory,
-        }
+        })
     }
 
     pub fn device(&self) -> &Device {
@@ -55,18 +48,17 @@ impl Buffer {
         self.buffer
     }
 
-    pub unsafe fn map(&mut self, size: vk::DeviceSize) -> MappedBuffer<'_> {
-        let ptr = self
-            .device
-            .device()
-            .map_memory(self.memory, 0, size, vk::MemoryMapFlags::empty())
-            .unwrap();
+    pub unsafe fn map(&mut self, size: vk::DeviceSize) -> Result<MappedBuffer<'_>, VulkanError> {
+        let ptr =
+            self.device
+                .device()
+                .map_memory(self.memory, 0, size, vk::MemoryMapFlags::empty())?;
 
-        MappedBuffer {
+        Ok(MappedBuffer {
             buffer: self,
             ptr,
             size,
-        }
+        })
     }
 }
 
@@ -87,11 +79,25 @@ pub struct MappedBuffer<'a> {
 
 impl<'a> MappedBuffer<'a> {
     pub fn data(&self) -> &'a [u8] {
-        unsafe { from_raw_parts(self.ptr.cast(), self.size.try_into().unwrap()) }
+        unsafe {
+            from_raw_parts(
+                self.ptr.cast(),
+                self.size
+                    .try_into()
+                    .expect("vk::DeviceSize must fit into usize"),
+            )
+        }
     }
 
     pub fn data_mut(&self) -> &'a mut [u8] {
-        unsafe { from_raw_parts_mut(self.ptr.cast(), self.size.try_into().unwrap()) }
+        unsafe {
+            from_raw_parts_mut(
+                self.ptr.cast(),
+                self.size
+                    .try_into()
+                    .expect("vk::DeviceSize must fit into usize"),
+            )
+        }
     }
 }
 

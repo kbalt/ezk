@@ -13,7 +13,7 @@ impl Buffer {
         self.buf_id
     }
 
-    pub fn map(&mut self) -> MappedBuffer<'_> {
+    pub fn map(&mut self) -> Result<MappedBuffer<'_>, VaError> {
         unsafe {
             let mut mapped = null_mut();
 
@@ -21,13 +21,12 @@ impl Buffer {
                 self.display.dpy,
                 self.buf_id,
                 &raw mut mapped,
-            ))
-            .unwrap();
+            ))?;
 
-            MappedBuffer {
+            Ok(MappedBuffer {
                 encoded_buffer: self,
                 mapped,
-            }
+            })
         }
     }
 }
