@@ -55,7 +55,7 @@ impl VideoSessionParameters {
         &self.video_session
     }
 
-    pub fn video_session_parameters(&self) -> vk::VideoSessionParametersKHR {
+    pub unsafe fn video_session_parameters(&self) -> vk::VideoSessionParametersKHR {
         self.video_session_parameters
     }
 }

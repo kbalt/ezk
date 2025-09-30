@@ -4,6 +4,7 @@ use ash::vk;
 pub struct ImageView {
     image: Image,
     image_view: vk::ImageView,
+    subresource_range: vk::ImageSubresourceRange,
 }
 
 impl ImageView {
@@ -18,6 +19,7 @@ impl ImageView {
         Self {
             image: image.clone(),
             image_view,
+            subresource_range: create_info.subresource_range,
         }
     }
 
@@ -27,6 +29,10 @@ impl ImageView {
 
     pub fn image_view(&self) -> vk::ImageView {
         self.image_view
+    }
+
+    pub fn subresource_range(&self) -> &vk::ImageSubresourceRange {
+        &self.subresource_range
     }
 }
 
