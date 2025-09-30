@@ -17,7 +17,7 @@ use vulkan::{
     create_dpb,
 };
 
-const NUM_SLOTS: u32 = 16;
+const PARALLEL_ENCODINGS: u32 = 16;
 
 pub struct VkH264Encoder {
     config: H264EncoderConfig,
@@ -207,7 +207,7 @@ impl VkH264Encoder {
         get_video_format_properties(&instance, physical_device, video_profile_info);
 
         let video_encode_feedback_query_pool =
-            VideoFeedbackQueryPool::create(&device, NUM_SLOTS, video_profile_info);
+            VideoFeedbackQueryPool::create(&device, PARALLEL_ENCODINGS, video_profile_info);
 
         // Create video session parameters
         let (video_session_parameters, encoded_video_session_parameters) =
@@ -223,14 +223,14 @@ impl VkH264Encoder {
 
         // Create command buffers
         let mut transfer_command_buffers =
-            CommandBuffer::create(&device, transfer_queue_family_index, NUM_SLOTS);
+            CommandBuffer::create(&device, transfer_queue_family_index, PARALLEL_ENCODINGS);
 
         let mut encode_command_buffers =
-            CommandBuffer::create(&device, encode_queue_family_index, NUM_SLOTS);
+            CommandBuffer::create(&device, encode_queue_family_index, PARALLEL_ENCODINGS);
 
         let mut available_encode_slots = vec![];
 
-        for index in 0..NUM_SLOTS {
+        for index in 0..PARALLEL_ENCODINGS {
             let input_image = create_input_image(
                 &device,
                 video_profile_info,

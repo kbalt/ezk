@@ -1,8 +1,6 @@
-use std::sync::Arc;
-
+use crate::{Device, VulkanError};
 use ash::vk;
-
-use crate::Device;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Image {
@@ -16,38 +14,37 @@ struct Inner {
 }
 
 impl Image {
-    pub unsafe fn create(device: &Device, create_info: &vk::ImageCreateInfo<'_>) -> Self {
-        let image = device.device().create_image(create_info, None).unwrap();
+    pub unsafe fn create(
+        device: &Device,
+        create_info: &vk::ImageCreateInfo<'_>,
+    ) -> Result<Self, VulkanError> {
+        let image = device.device().create_image(create_info, None)?;
         let memory_requirements = device.device().get_image_memory_requirements(image);
 
         let alloc_info = vk::MemoryAllocateInfo::default()
             .allocation_size(memory_requirements.size)
-            .memory_type_index(
-                device
-                    .find_memory_type(
-                        memory_requirements.memory_type_bits,
-                        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                    )
-                    .unwrap(),
-            );
+            .memory_type_index(device.find_memory_type(
+                memory_requirements.memory_type_bits,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            )?);
 
-        let memory = device.device().allocate_memory(&alloc_info, None).unwrap();
-        device.device().bind_image_memory(image, memory, 0).unwrap();
+        let memory = device.device().allocate_memory(&alloc_info, None)?;
+        device.device().bind_image_memory(image, memory, 0)?;
 
-        Self {
+        Ok(Self {
             inner: Arc::new(Inner {
                 device: device.clone(),
                 image,
                 memory,
             }),
-        }
+        })
     }
 
     pub fn device(&self) -> &Device {
         &self.inner.device
     }
 
-    pub fn image(&self) -> vk::Image {
+    pub unsafe fn image(&self) -> vk::Image {
         self.inner.image
     }
 

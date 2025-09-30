@@ -1,6 +1,8 @@
 use ash::{khr::video_queue, vk};
 use std::sync::Arc;
 
+use crate::VulkanError;
+
 #[derive(Clone)]
 pub struct Instance {
     inner: Arc<Inner>,
@@ -12,7 +14,7 @@ struct Inner {
 }
 
 impl Instance {
-    pub fn load(entry: &ash::Entry) -> Self {
+    pub fn load(entry: &ash::Entry) -> Result<Self, VulkanError> {
         unsafe {
             let app_info = vk::ApplicationInfo {
                 api_version: vk::make_api_version(0, 1, 4, 316),
@@ -32,15 +34,15 @@ impl Instance {
             .enabled_layer_names(&instance_layers)
             .enabled_extension_names(&instance_extensions);
 
-            let instance = entry.create_instance(&create_info, None).unwrap();
+            let instance = entry.create_instance(&create_info, None)?;
             let video_queue_instance = video_queue::Instance::new(entry, &instance);
 
-            Self {
+            Ok(Self {
                 inner: Arc::new(Inner {
                     instance,
                     video_queue_instance,
                 }),
-            }
+            })
         }
     }
 

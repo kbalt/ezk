@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ash::vk;
 
-use crate::Device;
+use crate::{Device, VulkanError};
 
 pub struct CommandBuffer {
     inner: Arc<Inner>,
@@ -19,14 +19,13 @@ impl CommandBuffer {
         device: &Device,
         queue_family_index: u32,
         command_buffer_count: u32,
-    ) -> Vec<Self> {
+    ) -> Result<Vec<Self>, VulkanError> {
         let pool_create_info = vk::CommandPoolCreateInfo::default()
             .queue_family_index(queue_family_index)
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
         let pool = device
             .device()
-            .create_command_pool(&pool_create_info, None)
-            .unwrap();
+            .create_command_pool(&pool_create_info, None)?;
 
         let command_buffer_create_info = vk::CommandBufferAllocateInfo::default()
             .command_buffer_count(command_buffer_count)
@@ -35,21 +34,22 @@ impl CommandBuffer {
 
         let command_buffers = device
             .device()
-            .allocate_command_buffers(&command_buffer_create_info)
-            .unwrap();
+            .allocate_command_buffers(&command_buffer_create_info)?;
 
         let inner = Arc::new(Inner {
             device: device.clone(),
             pool,
         });
 
-        command_buffers
+        let command_buffers = command_buffers
             .into_iter()
             .map(|command_buffer| CommandBuffer {
                 inner: inner.clone(),
                 command_buffer,
             })
-            .collect()
+            .collect();
+
+        Ok(command_buffers)
     }
 
     pub fn device(&self) -> &Device {
