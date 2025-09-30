@@ -14,11 +14,7 @@ struct Inner {
 }
 
 impl VideoSession {
-    pub unsafe fn create(
-        device: &Device,
-        physical_device_memory_properties: &vk::PhysicalDeviceMemoryProperties,
-        create_info: &vk::VideoSessionCreateInfoKHR,
-    ) -> Self {
+    pub unsafe fn create(device: &Device, create_info: &vk::VideoSessionCreateInfoKHR) -> Self {
         let video_session = device
             .video_queue_device()
             .create_video_session(create_info, None)
@@ -43,14 +39,14 @@ impl VideoSession {
         let bind_session_memory_infos: Vec<_> = video_session_memory_requirements
             .iter()
             .map(|video_session_memory_requirement| {
-                let memory_type_index = crate::find_memory_type(
-                    video_session_memory_requirement
-                        .memory_requirements
-                        .memory_type_bits,
-                    vk::MemoryPropertyFlags::empty(),
-                    physical_device_memory_properties,
-                )
-                .unwrap();
+                let memory_type_index = device
+                    .find_memory_type(
+                        video_session_memory_requirement
+                            .memory_requirements
+                            .memory_type_bits,
+                        vk::MemoryPropertyFlags::empty(),
+                    )
+                    .unwrap();
 
                 let allocate_info = vk::MemoryAllocateInfo::default()
                     .memory_type_index(memory_type_index)
@@ -91,7 +87,7 @@ impl VideoSession {
         &self.inner.device
     }
 
-    pub fn video_session(&self) -> vk::VideoSessionKHR {
+    pub unsafe fn video_session(&self) -> vk::VideoSessionKHR {
         self.inner.video_session
     }
 }
