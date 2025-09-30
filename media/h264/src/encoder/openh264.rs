@@ -1,8 +1,12 @@
 //! Utility functions for openh264
 
 use super::H264EncoderConfig;
-use crate::{FmtpOptions, Level, PacketizationMode, Profile, profile_level_id::ProfileLevelId};
-use openh264::encoder::{BitRate, IntraFramePeriod, QpRange};
+use crate::{
+    FmtpOptions, Level, PacketizationMode, Profile,
+    encoder::{H264FrameRate, H264RateControlConfig},
+    profile_level_id::ProfileLevelId,
+};
+use openh264::encoder::{BitRate, FrameRate, IntraFramePeriod, QpRange, RateControlMode};
 use openh264_sys2::API as _;
 use std::mem::MaybeUninit;
 
@@ -53,19 +57,50 @@ pub fn openh264_encoder_config(c: H264EncoderConfig) -> openh264::encoder::Encod
         .profile(map_profile(c.profile))
         .level(map_level(c.level));
 
+    if let Some(H264FrameRate {
+        numerator,
+        denominator,
+    }) = c.framerate
+    {
+        config = config.max_frame_rate(FrameRate::from_hz(numerator as f32 / denominator as f32));
+    }
+
     if let Some((qmin, qmax)) = c.qp {
-        config = config.qp(QpRange::new(
-            qmin.try_into().expect("qmin must be 0..=51"),
-            qmax.try_into().expect("qmax must be 0..=51"),
-        ));
+        config = config.qp(QpRange::new(qmin, qmax));
     }
 
     config = config.intra_frame_period(IntraFramePeriod::from_num_frames(
         c.frame_pattern.intra_idr_period,
     ));
 
-    if let Some(bitrate) = c.bitrate {
-        config = config.bitrate(BitRate::from_bps(bitrate))
+    match c.rate_control {
+        H264RateControlConfig::ConstantBitRate { bitrate } => {
+            config = config
+                .rate_control_mode(RateControlMode::Bitrate)
+                .bitrate(BitRate::from_bps(bitrate));
+        }
+        H264RateControlConfig::VariableBitRate {
+            average_bitrate,
+            max_bitrate,
+        } => {
+            // TODO: make the distinction between max & target bitrate in openh264
+            let _ = average_bitrate;
+            config = config
+                .rate_control_mode(RateControlMode::Bitrate)
+                .bitrate(BitRate::from_bps(max_bitrate));
+        }
+        H264RateControlConfig::ConstantQuality {
+            const_qp,
+            max_bitrate,
+        } => {
+            config = config
+                .rate_control_mode(RateControlMode::Quality)
+                .qp(QpRange::new(const_qp, const_qp));
+
+            if let Some(max_bitrate) = max_bitrate {
+                config = config.bitrate(BitRate::from_bps(max_bitrate));
+            }
+        }
     }
 
     if let Some(max_slice_len) = c.max_slice_len {

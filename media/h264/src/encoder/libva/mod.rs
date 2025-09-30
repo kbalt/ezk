@@ -6,7 +6,10 @@ use std::{
     slice::from_raw_parts,
 };
 
-use crate::encoder::{FrameEncodeInfo, FrameType, H264EncoderConfig, H264EncoderState};
+use crate::encoder::{
+    H264EncoderConfig, H264FrameType, H264RateControlConfig,
+    util::{FrameEncodeInfo, H264EncoderState, macro_block_align},
+};
 
 mod bitstream;
 
@@ -29,9 +32,6 @@ pub struct VaH264Encoder {
     /// Resolution macro block aligned (next 16x16 block boundary)
     width_mbaligned: u32,
     height_mbaligned: u32,
-
-    /// Maximum bitrate for rate control
-    target_bitrate: u32,
 
     state: H264EncoderState,
 
@@ -188,7 +188,6 @@ impl VaH264Encoder {
             support_packed_header_slice,
             width_mbaligned,
             height_mbaligned,
-            target_bitrate: h264_config.bitrate.unwrap_or(6_000_000),
             state: H264EncoderState::new(h264_config.frame_pattern),
             available_src_surfaces: src_surfaces,
             in_flight: VecDeque::new(),
@@ -288,13 +287,13 @@ impl VaH264Encoder {
         log::trace!("Encode frame {frame_info:?}");
 
         // B-Frames are not encoded immediately, they are queued until after an I or P-frame is encoded
-        if frame_info.frame_type == FrameType::B {
+        if frame_info.frame_type == H264FrameType::B {
             self.backlogged_b_frames
                 .push((src_surface, coded_buffer, frame_info));
             return;
         }
 
-        if frame_info.frame_type == FrameType::Idr {
+        if frame_info.frame_type == H264FrameType::Idr {
             assert!(self.backlogged_b_frames.is_empty());
 
             // Just encoded an IDR frame, put all reference surfaces back into the surface pool,
@@ -307,7 +306,7 @@ impl VaH264Encoder {
 
         if matches!(
             frame_info.frame_type,
-            FrameType::Idr | FrameType::I | FrameType::P
+            H264FrameType::Idr | H264FrameType::I | H264FrameType::P
         ) {
             let backlogged_b_frames = take(&mut self.backlogged_b_frames);
 
@@ -340,7 +339,7 @@ impl VaH264Encoder {
         let pic_param = self.create_picture_params(frame_info, &ref_surface, &coded_buffer);
         let slice_param = self.create_slice_params(frame_info);
 
-        if frame_info.frame_type == FrameType::Idr {
+        if frame_info.frame_type == H264FrameType::Idr {
             // Render sequence params
             let rc_params_buf = self.create_rate_control_params();
             bufs.push(self.context.create_buffer_with_data(
@@ -407,7 +406,7 @@ impl VaH264Encoder {
 
         if matches!(
             frame_info.frame_type,
-            FrameType::Idr | FrameType::I | FrameType::P
+            H264FrameType::Idr | H264FrameType::I | H264FrameType::P
         ) {
             self.reference_frames.push((ref_surface, pic_param.CurrPic));
         } else {
@@ -481,17 +480,40 @@ impl VaH264Encoder {
 
             *rate_control_params = zeroed();
 
-            // TODO: more rate control options
-            rate_control_params.bits_per_second = self.target_bitrate;
-            rate_control_params.target_percentage = 66;
-            rate_control_params.window_size = 1000;
-            rate_control_params.initial_qp = 26;
-            rate_control_params.min_qp = 26;
-            rate_control_params.rc_flags.value = ffi::VA_RC_CBR;
+            rate_control_params.window_size = 100;
 
             if let Some((min_qp, max_qp)) = self.h264_config.qp {
-                rate_control_params.min_qp = min_qp;
-                rate_control_params.max_qp = max_qp;
+                rate_control_params.min_qp = min_qp.into();
+                rate_control_params.max_qp = max_qp.into();
+            }
+
+            match self.h264_config.rate_control {
+                H264RateControlConfig::ConstantBitRate { bitrate } => {
+                    rate_control_params.rc_flags.value = ffi::VA_RC_CBR;
+                    rate_control_params.bits_per_second = bitrate;
+                    rate_control_params.target_percentage = 100;
+                }
+                H264RateControlConfig::VariableBitRate {
+                    average_bitrate,
+                    max_bitrate,
+                } => {
+                    rate_control_params.rc_flags.value = ffi::VA_RC_VBR;
+                    rate_control_params.bits_per_second = max_bitrate;
+                    rate_control_params.target_percentage = (average_bitrate * 10) / max_bitrate;
+                }
+                H264RateControlConfig::ConstantQuality {
+                    const_qp,
+                    max_bitrate,
+                } => {
+                    rate_control_params.rc_flags.value = ffi::VA_RC_CQP;
+                    rate_control_params.initial_qp = const_qp.into();
+                    rate_control_params.min_qp = const_qp.into();
+                    rate_control_params.max_qp = const_qp.into();
+
+                    if let Some(max_bitrate) = max_bitrate {
+                        rate_control_params.bits_per_second = max_bitrate;
+                    }
+                }
             }
 
             drop(mapped);
@@ -515,7 +537,7 @@ impl VaH264Encoder {
 
             pic_param.CurrPic.flags = if matches!(
                 frame_info.frame_type,
-                FrameType::Idr | FrameType::I | FrameType::P
+                H264FrameType::Idr | H264FrameType::I | H264FrameType::P
             ) {
                 ffi::VA_PICTURE_H264_SHORT_TERM_REFERENCE
             } else {
@@ -536,11 +558,11 @@ impl VaH264Encoder {
             );
 
             match frame_info.frame_type {
-                FrameType::P | FrameType::B => {
+                H264FrameType::P | H264FrameType::B => {
                     let iter = self.reference_frames.iter().rev().take(self.max_ref_frames);
                     fill_pic_list(&mut pic_param.ReferenceFrames, iter);
                 }
-                FrameType::I | FrameType::Idr => {
+                H264FrameType::I | H264FrameType::Idr => {
                     // No references to add
                 }
             }
@@ -553,11 +575,11 @@ impl VaH264Encoder {
             pic_param
                 .pic_fields
                 .bits
-                .set_idr_pic_flag((frame_info.frame_type == FrameType::Idr) as u32);
+                .set_idr_pic_flag((frame_info.frame_type == H264FrameType::Idr) as u32);
             pic_param
                 .pic_fields
                 .bits
-                .set_reference_pic_flag((frame_info.frame_type != FrameType::B) as u32);
+                .set_reference_pic_flag((frame_info.frame_type != H264FrameType::B) as u32);
             pic_param.pic_fields.bits.set_entropy_coding_mode_flag(1);
             pic_param
                 .pic_fields
@@ -581,18 +603,18 @@ impl VaH264Encoder {
 
             slice_params.num_macroblocks = self.width_mbaligned * self.height_mbaligned / (16 * 16);
             slice_params.slice_type = match frame_info.frame_type {
-                FrameType::P => 0,
-                FrameType::B => 1,
-                FrameType::Idr | FrameType::I => 2,
+                H264FrameType::P => 0,
+                H264FrameType::B => 1,
+                H264FrameType::Idr | H264FrameType::I => 2,
             };
 
             match frame_info.frame_type {
-                FrameType::P => {
+                H264FrameType::P => {
                     let iter = self.reference_frames.iter().rev().take(self.max_ref_frames);
 
                     fill_pic_list(&mut slice_params.RefPicList0, iter);
                 }
-                FrameType::B => {
+                H264FrameType::B => {
                     assert!(self.max_ref_frames >= 2);
 
                     let mut iter = self.reference_frames.iter().rev().take(self.max_ref_frames);
@@ -600,8 +622,8 @@ impl VaH264Encoder {
                     fill_pic_list(&mut slice_params.RefPicList1, iter.next());
                     fill_pic_list(&mut slice_params.RefPicList0, iter);
                 }
-                FrameType::I => {}
-                FrameType::Idr => {
+                H264FrameType::I => {}
+                H264FrameType::Idr => {
                     slice_params.idr_pic_id = frame_info.idr_pic_id;
                 }
             }
@@ -695,10 +717,6 @@ fn upload_yuv_to_surface(
     }
 }
 
-fn macro_block_align(v: u32) -> u32 {
-    (v + 0xF) & !0xF
-}
-
 fn debug_pic_list(list: &[ffi::VAPictureH264]) -> Vec<u32> {
     list.iter()
         .take_while(|p| p.flags != ffi::VA_PICTURE_H264_INVALID)
@@ -760,10 +778,10 @@ fn profile_to_profile_and_format(profile: crate::Profile) -> Option<(i32, u32)> 
 
 #[cfg(test)]
 mod tests {
-    use crate::encoder::FramePattern;
+    use crate::encoder::H264FramePattern;
 
     use super::*;
-    use ezk_image::resize::ResizeAlg;
+    use ezk_image::resize::{FilterType, ResizeAlg};
     use ezk_image::{
         ColorInfo, ColorPrimaries, ColorSpace, ColorTransfer, ImageRef, PixelFormat, YuvColorInfo,
     };
@@ -783,16 +801,19 @@ mod tests {
             &display,
             H264EncoderConfig {
                 profile: crate::Profile::High,
-                level: crate::Level::Level_4_1,
+                level: crate::Level::Level_4_2,
                 resolution: (1920, 1080),
-                qp: Some((20, 28)),
-                frame_pattern: FramePattern {
+                framerate: None,
+                qp: None,
+                frame_pattern: H264FramePattern {
                     intra_idr_period: 60,
                     intra_period: 30,
-                    ip_period: 4,
+                    ip_period: 1,
                 },
-                bitrate: Some(6_000_000),
-                max_bitrate: Some(6_000_000),
+                rate_control: H264RateControlConfig::ConstantQuality {
+                    const_qp: 1,
+                    max_bitrate: None,
+                },
                 max_slice_len: None,
             },
         );
@@ -801,7 +822,8 @@ mod tests {
             scap::request_permission();
         }
 
-        let mut resizer = ezk_image::resize::Resizer::new(ResizeAlg::Nearest);
+        let mut resizer =
+            ezk_image::resize::Resizer::new(ResizeAlg::Interpolation(FilterType::Bilinear));
 
         let mut capturer = scap::capturer::Capturer::build(scap::capturer::Options {
             fps: 30,

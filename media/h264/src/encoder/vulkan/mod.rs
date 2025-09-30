@@ -1,20 +1,26 @@
 use crate::{
     Level, Profile,
-    encoder::{FrameEncodeInfo, FrameType, H264EncoderConfig, H264EncoderState},
+    encoder::{
+        H264EncoderConfig, H264FrameRate, H264FrameType, H264RateControlConfig,
+        util::{FrameEncodeInfo, H264EncoderState, macro_block_align},
+    },
 };
 use std::{collections::VecDeque, error::Error, mem::zeroed, ptr::null_mut};
 use vulkan::{
-    Buffer, Device, Image, ImageView, Instance, VideoFeedbackQueryPool, VideoSession,
+    Buffer, CommandBuffer, Device, Fence, Image, ImageView, Instance, REQUIRED_EXTENSIONS_BASE,
+    REQUIRED_EXTENSIONS_ENCODE, Semaphore, VideoFeedbackQueryPool, VideoSession,
     VideoSessionParameters,
     ash::{
         Entry,
-        vk::{self, Extent2D, Handle, TaggedStructure},
+        vk::{self, Handle, TaggedStructure},
     },
+    create_dpb,
 };
 
 const NUM_SLOTS: u32 = 16;
 
 pub struct VkH264Encoder {
+    config: H264EncoderConfig,
     state: H264EncoderState,
 
     width: u32,
@@ -42,11 +48,9 @@ pub struct VkH264Encoder {
     max_l0_b_ref_images: u32,
     max_l1_b_ref_images: u32,
 
-    /// DPB image resource
-    dpb_image: Image,
-
     /// Unused reference slots
     available_ref_images: Vec<DpbSlot>,
+    dpb_in_correct_layout: bool,
 
     /// Active (in use) reference slots
     ///
@@ -68,12 +72,12 @@ struct EncodeSlot {
 
     output_buffer: Buffer,
 
-    transfer_semaphore: vk::Semaphore,
+    transfer_semaphore: Semaphore,
 
-    transfer_command_buffer: vk::CommandBuffer,
-    encode_command_buffer: vk::CommandBuffer,
+    transfer_command_buffer: CommandBuffer,
+    encode_command_buffer: CommandBuffer,
 
-    completion_fence: vk::Fence,
+    completion_fence: Fence,
 }
 
 struct DpbSlot {
@@ -85,7 +89,7 @@ struct DpbSlot {
 impl VkH264Encoder {
     #[allow(unsafe_op_in_unsafe_fn, clippy::missing_safety_doc)]
     pub unsafe fn new(config: H264EncoderConfig) -> Result<Self, Box<dyn Error>> {
-        let entry = Entry::load().unwrap();
+        let entry = unsafe { Entry::load().unwrap() };
 
         let instance = Instance::load(&entry);
 
@@ -93,17 +97,9 @@ impl VkH264Encoder {
 
         let physical_device = devices[1];
 
-        let physical_device_memory_properties = dbg!(Box::new(
-            instance
-                .instance()
-                .get_physical_device_memory_properties(physical_device)
-        ));
-
-        let queue_family_properties = dbg!(
-            instance
-                .instance()
-                .get_physical_device_queue_family_properties(physical_device)
-        );
+        let queue_family_properties = instance
+            .instance()
+            .get_physical_device_queue_family_properties(physical_device);
 
         // TODO: check if theres a single queue with both TRANSFER & ENCODE and encode using a single queue
         let transfer_queue_family_index = queue_family_properties
@@ -124,17 +120,15 @@ impl VkH264Encoder {
             .unwrap() as u32;
 
         // Create device
-        let extensions = [
-            c"VK_KHR_sampler_ycbcr_conversion".as_ptr(),
-            c"VK_KHR_maintenance1".as_ptr(),
-            c"VK_KHR_synchronization2".as_ptr(),
-            c"VK_KHR_bind_memory2".as_ptr(),
-            c"VK_KHR_get_memory_requirements2".as_ptr(),
-            c"VK_KHR_synchronization2".as_ptr(),
-            c"VK_KHR_video_queue".as_ptr(),
-            c"VK_KHR_video_encode_queue".as_ptr(),
-            c"VK_KHR_video_encode_h264".as_ptr(),
-        ];
+        let extensions: Vec<_> = [
+            REQUIRED_EXTENSIONS_BASE,
+            REQUIRED_EXTENSIONS_ENCODE,
+            &[c"VK_KHR_video_encode_h264"],
+        ]
+        .iter()
+        .flat_map(|l| l.iter())
+        .map(|str| str.as_ptr())
+        .collect();
 
         let mut sync2_features_enable =
             vk::PhysicalDeviceSynchronization2Features::default().synchronization2(true);
@@ -151,7 +145,7 @@ impl VkH264Encoder {
             .queue_create_infos(&queue_create_flags)
             .push(&mut sync2_features_enable);
 
-        let device = instance.create_device(physical_device, &create_device_info);
+        let device = Device::create(&instance, physical_device, &create_device_info).unwrap();
 
         let encode_queue = device
             .device()
@@ -167,6 +161,8 @@ impl VkH264Encoder {
             panic!();
         }
 
+        let state = H264EncoderState::new(config.frame_pattern);
+        let (width, height) = config.resolution;
         let profile_idc = map_profile(config.profile).unwrap();
         let level_idc = map_level(config.level).unwrap();
 
@@ -197,10 +193,7 @@ impl VkH264Encoder {
         // Create Video session
 
         let create_info = vk::VideoSessionCreateInfoKHR::default()
-            .max_coded_extent(vk::Extent2D {
-                width: 1920,
-                height: 1080,
-            })
+            .max_coded_extent(vk::Extent2D { width, height })
             .queue_family_index(encode_queue_family_index)
             .max_active_reference_pictures(max_active_ref_images)
             .max_dpb_slots(max_dpb_slots)
@@ -209,8 +202,7 @@ impl VkH264Encoder {
             .video_profile(&video_profile_info)
             .std_header_version(&video_capabilities.std_header_version);
 
-        let video_session =
-            VideoSession::create(&device, &physical_device_memory_properties, &create_info);
+        let video_session = VideoSession::create(&device, &create_info);
 
         get_video_format_properties(&instance, physical_device, video_profile_info);
 
@@ -218,10 +210,9 @@ impl VkH264Encoder {
             VideoFeedbackQueryPool::create(&device, NUM_SLOTS, video_profile_info);
 
         // Create video session parameters
-        let (width, height) = config.resolution;
-
         let (video_session_parameters, encoded_video_session_parameters) =
             create_video_session_parameters(
+                &state,
                 &video_session,
                 width,
                 height,
@@ -231,26 +222,16 @@ impl VkH264Encoder {
             );
 
         // Create command buffers
-        let (transfer_command_pool, mut transfer_command_buffers) =
-            create_command_pool(&device, transfer_queue_family_index, NUM_SLOTS);
+        let mut transfer_command_buffers =
+            CommandBuffer::create(&device, transfer_queue_family_index, NUM_SLOTS);
 
-        let (encode_command_pool, mut encode_command_buffers) =
-            create_command_pool(&device, encode_queue_family_index, NUM_SLOTS);
-
-        let dpb_image = create_dpb_image(
-            &physical_device_memory_properties,
-            &device,
-            video_profile_info,
-            max_dpb_slots,
-            config.resolution.0,
-            config.resolution.1,
-        );
+        let mut encode_command_buffers =
+            CommandBuffer::create(&device, encode_queue_family_index, NUM_SLOTS);
 
         let mut available_encode_slots = vec![];
 
         for index in 0..NUM_SLOTS {
             let input_image = create_input_image(
-                &physical_device_memory_properties,
                 &device,
                 video_profile_info,
                 config.resolution.0,
@@ -265,30 +246,13 @@ impl VkH264Encoder {
                     .usage(vk::BufferUsageFlags::TRANSFER_SRC)
                     .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
-                Buffer::create(&device, &physical_device_memory_properties, &create_info)
+                Buffer::create(&device, &create_info)
             };
 
-            let output_buffer = create_output_buffer(
-                &device,
-                &physical_device_memory_properties,
-                video_profile_info,
-            );
+            let output_buffer = create_output_buffer(&device, video_profile_info);
 
-            let transfer_semaphore = device
-                .device()
-                .create_semaphore(
-                    &vk::SemaphoreCreateInfo::default().flags(vk::SemaphoreCreateFlags::empty()),
-                    None,
-                )
-                .unwrap();
-            if transfer_semaphore.is_null() {
-                panic!();
-            }
-
-            let fence = device
-                .device()
-                .create_fence(&vk::FenceCreateInfo::default(), None)
-                .unwrap();
+            let transfer_semaphore = Semaphore::create(&device).unwrap();
+            let completion_fence = Fence::create(&device).unwrap();
 
             available_encode_slots.push(EncodeSlot {
                 index,
@@ -299,23 +263,24 @@ impl VkH264Encoder {
                 transfer_semaphore,
                 transfer_command_buffer: transfer_command_buffers.pop().unwrap(),
                 encode_command_buffer: encode_command_buffers.pop().unwrap(),
-                completion_fence: fence,
+                completion_fence,
             });
         }
 
-        let mut available_ref_images = vec![];
-        for i in (0..max_dpb_slots).rev() {
-            let image_view = create_image_view(&dpb_image, vk::ImageAspectFlags::COLOR, i);
-
-            available_ref_images.push(DpbSlot {
-                slot_index: i,
-                image_view,
-                h264_reference_info: zeroed(),
-            });
-        }
+        let available_ref_images =
+            create_dpb(&device, video_profile_info, max_dpb_slots, width, height)
+                .into_iter()
+                .enumerate()
+                .map(|(i, image_view)| DpbSlot {
+                    slot_index: i as u32,
+                    image_view,
+                    h264_reference_info: zeroed(),
+                })
+                .collect();
 
         Ok(VkH264Encoder {
-            state: H264EncoderState::new(config.frame_pattern),
+            config,
+            state,
             width,
             height,
             device,
@@ -332,8 +297,8 @@ impl VkH264Encoder {
             max_l0_p_ref_images,
             max_l0_b_ref_images,
             max_l1_b_ref_images,
-            dpb_image,
             available_ref_images,
+            dpb_in_correct_layout: false,
             active_ref_images: VecDeque::new(),
             output: VecDeque::new(),
         })
@@ -345,28 +310,12 @@ impl VkH264Encoder {
             .get_bytes_written(encode_slot.index);
 
         let mapped_buffer = encode_slot.output_buffer.map(bytes_written);
-
-        {
-            let output = std::slice::from_raw_parts(
-                mapped_buffer.ptr().cast::<u8>(),
-                bytes_written.try_into().unwrap(),
-            );
-
-            println!("H.264 Output: {:?}", &output[..32]);
-
-            self.output.push_back(output.to_vec());
-        }
+        self.output.push_back(mapped_buffer.data().to_vec());
     }
 
     unsafe fn wait_for_slot_completion(&mut self, encode_slot: &mut EncodeSlot) {
-        self.device
-            .device()
-            .wait_for_fences(&[encode_slot.completion_fence], true, u64::MAX)
-            .unwrap();
-        self.device
-            .device()
-            .reset_fences(&[encode_slot.completion_fence])
-            .unwrap();
+        encode_slot.completion_fence.wait(u64::MAX).unwrap();
+        encode_slot.completion_fence.reset().unwrap();
     }
 
     #[allow(unsafe_op_in_unsafe_fn, clippy::missing_safety_doc)]
@@ -391,20 +340,12 @@ impl VkH264Encoder {
         }
 
         if let Some(encode_slot) = self.in_flight.front() {
-            match self
-                .device
-                .device()
-                .wait_for_fences(&[encode_slot.completion_fence], true, 0)
-            {
-                Ok(()) => {}
-                Err(e) if e == vk::Result::TIMEOUT => return None,
-                Err(e) => panic!("wait for fence failed with: {e:?}"),
+            let completed = encode_slot.completion_fence.wait(0).unwrap();
+            if !completed {
+                return None;
             }
 
-            self.device
-                .device()
-                .reset_fences(&[encode_slot.completion_fence])
-                .unwrap();
+            encode_slot.completion_fence.reset().unwrap();
             let mut encode_slot = self.in_flight.pop_front().unwrap();
 
             self.read_out_coded_buffer(&mut encode_slot);
@@ -421,11 +362,11 @@ impl VkH264Encoder {
 
         log::debug!("Encode {frame_info:?}");
 
-        if frame_info.frame_type == FrameType::B {
+        if frame_info.frame_type == H264FrameType::B {
             todo!("B-Frames not yet implemented");
         }
 
-        if frame_info.frame_type == FrameType::Idr {
+        if frame_info.frame_type == H264FrameType::Idr {
             self.output
                 .push_back(self.encoded_video_session_parameters.clone());
             self.available_ref_images
@@ -463,12 +404,7 @@ impl VkH264Encoder {
 
     unsafe fn upload_yuv_to_stage(&mut self, encode_slot: &mut EncodeSlot, yuv_data: &[u8]) {
         let mapped_buffer = encode_slot.input_staging_buffer.map(yuv_data.len() as u64);
-
-        std::ptr::copy_nonoverlapping(
-            yuv_data.as_ptr(),
-            mapped_buffer.ptr().cast::<u8>(),
-            yuv_data.len(),
-        );
+        mapped_buffer.data_mut().copy_from_slice(yuv_data);
     }
 
     unsafe fn record_transfer_queue(&mut self, encode_slot: &mut EncodeSlot) {
@@ -476,16 +412,14 @@ impl VkH264Encoder {
         self.device
             .device()
             .begin_command_buffer(
-                encode_slot.transfer_command_buffer,
+                encode_slot.transfer_command_buffer.command_buffer(),
                 &vk::CommandBufferBeginInfo::default(),
             )
             .unwrap();
 
         // Change image type
-        transition_image_layout_raw(
-            &self.device,
-            encode_slot.transfer_command_buffer,
-            encode_slot.input_image.image(),
+        encode_slot.input_image.cmd_memory_barrier2(
+            encode_slot.transfer_command_buffer.command_buffer(),
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             vk::QUEUE_FAMILY_IGNORED,
@@ -494,6 +428,7 @@ impl VkH264Encoder {
             vk::AccessFlags2::empty(),
             vk::PipelineStageFlags2::TRANSFER,
             vk::AccessFlags2::TRANSFER_WRITE,
+            0,
         );
 
         // Copy
@@ -507,17 +442,15 @@ impl VkH264Encoder {
         );
 
         self.device.device().cmd_copy_buffer_to_image(
-            encode_slot.transfer_command_buffer,
+            encode_slot.transfer_command_buffer.command_buffer(),
             encode_slot.input_staging_buffer.buffer(),
             encode_slot.input_image.image(),
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             &[buffer_image_copy_plane0, buffer_image_copy_plane1],
         );
 
-        transition_image_layout_raw(
-            &self.device,
-            encode_slot.transfer_command_buffer,
-            encode_slot.input_image.image(),
+        encode_slot.input_image.cmd_memory_barrier2(
+            encode_slot.transfer_command_buffer.command_buffer(),
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             vk::ImageLayout::VIDEO_ENCODE_SRC_KHR,
             self.transfer_queue_family_index,
@@ -526,16 +459,18 @@ impl VkH264Encoder {
             vk::AccessFlags2::TRANSFER_WRITE,
             vk::PipelineStageFlags2::NONE,
             vk::AccessFlags2::empty(),
+            0,
         );
 
         self.device
             .device()
-            .end_command_buffer(encode_slot.transfer_command_buffer)
+            .end_command_buffer(encode_slot.transfer_command_buffer.command_buffer())
             .unwrap();
 
-        let signal_semaphores = [encode_slot.transfer_semaphore];
+        let signal_semaphores = [encode_slot.transfer_semaphore.semaphore()];
+        let command_buffers = [encode_slot.transfer_command_buffer.command_buffer()];
         let submit_info = vk::SubmitInfo::default()
-            .command_buffers(std::slice::from_ref(&encode_slot.transfer_command_buffer))
+            .command_buffers(&command_buffers)
             .signal_semaphores(&signal_semaphores);
 
         self.device
@@ -550,18 +485,54 @@ impl VkH264Encoder {
         frame_info: FrameEncodeInfo,
         setup_reference: &mut DpbSlot,
     ) {
+        // Begin recording the encode queue
+        self.device
+            .device()
+            .begin_command_buffer(
+                encode_slot.encode_command_buffer.command_buffer(),
+                &vk::CommandBufferBeginInfo::default(),
+            )
+            .unwrap();
+
+        if !self.dpb_in_correct_layout {
+            self.dpb_in_correct_layout = true;
+
+            assert!(self.active_ref_images.is_empty());
+
+            for dpb_slot in self
+                .available_ref_images
+                .iter_mut()
+                .chain(Some(&mut *setup_reference))
+            {
+                dpb_slot.image_view.image().cmd_memory_barrier2(
+                    encode_slot.encode_command_buffer.command_buffer(),
+                    vk::ImageLayout::UNDEFINED,
+                    vk::ImageLayout::VIDEO_ENCODE_DPB_KHR,
+                    vk::QUEUE_FAMILY_IGNORED,
+                    vk::QUEUE_FAMILY_IGNORED,
+                    vk::PipelineStageFlags2::TOP_OF_PIPE,
+                    vk::AccessFlags2::empty(),
+                    vk::PipelineStageFlags2::VIDEO_ENCODE_KHR,
+                    vk::AccessFlags2::VIDEO_ENCODE_WRITE_KHR,
+                    dpb_slot.image_view.subresource_range().base_array_layer,
+                );
+            }
+        }
+
         let setup_ref_image_resource_info = vk::VideoPictureResourceInfoKHR::default()
             .image_view_binding(setup_reference.image_view.image_view())
-            .coded_extent(Extent2D {
+            .coded_extent(vk::Extent2D {
                 width: self.width,
                 height: self.height,
             });
 
         let primary_pic_type = match frame_info.frame_type {
-            FrameType::P => vk::native::StdVideoH264PictureType_STD_VIDEO_H264_PICTURE_TYPE_P,
-            FrameType::B => vk::native::StdVideoH264PictureType_STD_VIDEO_H264_PICTURE_TYPE_B,
-            FrameType::I => vk::native::StdVideoH264PictureType_STD_VIDEO_H264_PICTURE_TYPE_I,
-            FrameType::Idr => vk::native::StdVideoH264PictureType_STD_VIDEO_H264_PICTURE_TYPE_IDR,
+            H264FrameType::P => vk::native::StdVideoH264PictureType_STD_VIDEO_H264_PICTURE_TYPE_P,
+            H264FrameType::B => vk::native::StdVideoH264PictureType_STD_VIDEO_H264_PICTURE_TYPE_B,
+            H264FrameType::I => vk::native::StdVideoH264PictureType_STD_VIDEO_H264_PICTURE_TYPE_I,
+            H264FrameType::Idr => {
+                vk::native::StdVideoH264PictureType_STD_VIDEO_H264_PICTURE_TYPE_IDR
+            }
         };
 
         setup_reference.h264_reference_info.FrameNum = frame_info.frame_num.into();
@@ -578,9 +549,9 @@ impl VkH264Encoder {
 
         // Prepare active reference images stuff
         let max_use_reference_slots = match frame_info.frame_type {
-            FrameType::P => self.max_l0_p_ref_images as usize,
-            FrameType::B => (self.max_l0_b_ref_images + self.max_l1_b_ref_images) as usize,
-            FrameType::Idr | FrameType::I => 0,
+            H264FrameType::P => self.max_l0_p_ref_images as usize,
+            H264FrameType::B => (self.max_l0_b_ref_images + self.max_l1_b_ref_images) as usize,
+            H264FrameType::Idr | H264FrameType::I => 0,
         };
 
         let mut active_ref_image_resource_infos: Vec<_> = self
@@ -592,7 +563,7 @@ impl VkH264Encoder {
                     .std_reference_info(&slot.h264_reference_info);
                 let picture_resource_info = vk::VideoPictureResourceInfoKHR::default()
                     .image_view_binding(slot.image_view.image_view())
-                    .coded_extent(Extent2D {
+                    .coded_extent(vk::Extent2D {
                         width: self.width,
                         height: self.height,
                     });
@@ -610,23 +581,14 @@ impl VkH264Encoder {
             })
             .collect();
 
-        // Begin recording the encode queue
-        self.device
-            .device()
-            .begin_command_buffer(
-                encode_slot.encode_command_buffer,
-                &vk::CommandBufferBeginInfo::default(),
-            )
-            .unwrap();
-
         // Reset query for this encode
-        self.video_feedback_query_pool
-            .cmd_begin_query(encode_slot.encode_command_buffer, encode_slot.index);
+        self.video_feedback_query_pool.cmd_reset_query(
+            encode_slot.encode_command_buffer.command_buffer(),
+            encode_slot.index,
+        );
 
-        transition_image_layout_raw(
-            &self.device,
-            encode_slot.encode_command_buffer,
-            encode_slot.input_image.image(),
+        encode_slot.input_image.cmd_memory_barrier2(
+            encode_slot.encode_command_buffer.command_buffer(),
             vk::ImageLayout::VIDEO_ENCODE_SRC_KHR,
             vk::ImageLayout::VIDEO_ENCODE_SRC_KHR,
             self.transfer_queue_family_index,
@@ -635,6 +597,7 @@ impl VkH264Encoder {
             vk::AccessFlags2::empty(),
             vk::PipelineStageFlags2::VIDEO_ENCODE_KHR,
             vk::AccessFlags2::VIDEO_ENCODE_READ_KHR,
+            0,
         );
 
         // Build the reference slots list for the begin video coding command
@@ -649,26 +612,13 @@ impl VkH264Encoder {
             .reference_slots(&use_reference_slots);
 
         // Issue the begin video coding command
-        self.device
-            .video_queue_device()
-            .cmd_begin_video_coding(encode_slot.encode_command_buffer, &begin_info);
+        self.device.video_queue_device().cmd_begin_video_coding(
+            encode_slot.encode_command_buffer.command_buffer(),
+            &begin_info,
+        );
 
-        if frame_info.frame_num == 0 {
-            let mut video_encode_h264_rate_control_info =
-                vk::VideoEncodeH264RateControlInfoKHR::default();
-            let mut video_encode_quality_level_info = vk::VideoEncodeQualityLevelInfoKHR::default();
-            let mut video_encode_rate_control_info = vk::VideoEncodeRateControlInfoKHR::default();
-
-            let video_coding_control_info = vk::VideoCodingControlInfoKHR::default()
-                .flags(vk::VideoCodingControlFlagsKHR::RESET)
-                .push(&mut video_encode_h264_rate_control_info)
-                .push(&mut video_encode_quality_level_info)
-                .push(&mut video_encode_rate_control_info);
-
-            self.device.video_queue_device().cmd_control_video_coding(
-                encode_slot.encode_command_buffer,
-                &video_coding_control_info,
-            );
+        if frame_info.frame_num == 0 && frame_info.idr_pic_id == 1 {
+            self.control_video_coding(encode_slot);
         }
 
         let src_picture_resource_plane0 = vk::VideoPictureResourceInfoKHR::default()
@@ -682,10 +632,10 @@ impl VkH264Encoder {
 
         let mut std_slice_header = zeroed::<vk::native::StdVideoEncodeH264SliceHeader>();
         std_slice_header.slice_type = match frame_info.frame_type {
-            FrameType::P => vk::native::StdVideoH264SliceType_STD_VIDEO_H264_SLICE_TYPE_P,
-            FrameType::B => vk::native::StdVideoH264SliceType_STD_VIDEO_H264_SLICE_TYPE_B,
-            FrameType::I => vk::native::StdVideoH264SliceType_STD_VIDEO_H264_SLICE_TYPE_I,
-            FrameType::Idr => vk::native::StdVideoH264SliceType_STD_VIDEO_H264_SLICE_TYPE_I,
+            H264FrameType::P => vk::native::StdVideoH264SliceType_STD_VIDEO_H264_SLICE_TYPE_P,
+            H264FrameType::B => vk::native::StdVideoH264SliceType_STD_VIDEO_H264_SLICE_TYPE_B,
+            H264FrameType::I => vk::native::StdVideoH264SliceType_STD_VIDEO_H264_SLICE_TYPE_I,
+            H264FrameType::Idr => vk::native::StdVideoH264SliceType_STD_VIDEO_H264_SLICE_TYPE_I,
         };
         std_slice_header.flags.set_direct_spatial_mv_pred_flag(1);
 
@@ -710,10 +660,10 @@ impl VkH264Encoder {
         h264_picture_info.primary_pic_type = primary_pic_type;
         h264_picture_info
             .flags
-            .set_IdrPicFlag((frame_info.frame_type == FrameType::Idr) as u32);
+            .set_IdrPicFlag((frame_info.frame_type == H264FrameType::Idr) as u32);
         h264_picture_info
             .flags
-            .set_is_reference((frame_info.frame_type != FrameType::B) as u32);
+            .set_is_reference((frame_info.frame_type != H264FrameType::B) as u32);
 
         let mut h264_encode_info = vk::VideoEncodeH264PictureInfoKHR::default()
             .generate_prefix_nalu(false)
@@ -729,31 +679,36 @@ impl VkH264Encoder {
             .setup_reference_slot(&setup_ref_image_slot_info)
             .push(&mut h264_encode_info);
 
-        self.video_feedback_query_pool
-            .cmd_begin_query(encode_slot.encode_command_buffer, encode_slot.index);
+        self.video_feedback_query_pool.cmd_begin_query(
+            encode_slot.encode_command_buffer.command_buffer(),
+            encode_slot.index,
+        );
 
-        self.device
-            .video_encode_queue_device()
-            .cmd_encode_video(encode_slot.encode_command_buffer, &encode_info);
+        self.device.video_encode_queue_device().cmd_encode_video(
+            encode_slot.encode_command_buffer.command_buffer(),
+            &encode_info,
+        );
 
-        self.video_feedback_query_pool
-            .cmd_end_query(encode_slot.encode_command_buffer, encode_slot.index);
+        self.video_feedback_query_pool.cmd_end_query(
+            encode_slot.encode_command_buffer.command_buffer(),
+            encode_slot.index,
+        );
 
         self.device.video_queue_device().cmd_end_video_coding(
-            encode_slot.encode_command_buffer,
+            encode_slot.encode_command_buffer.command_buffer(),
             &vk::VideoEndCodingInfoKHR::default(),
         );
 
         // Finish up everything
         self.device
             .device()
-            .end_command_buffer(encode_slot.encode_command_buffer)
+            .end_command_buffer(encode_slot.encode_command_buffer.command_buffer())
             .unwrap();
 
         let command_buffer_infos = [vk::CommandBufferSubmitInfo::default()
-            .command_buffer(encode_slot.encode_command_buffer)];
+            .command_buffer(encode_slot.encode_command_buffer.command_buffer())];
         let wait_semaphore_infos = [vk::SemaphoreSubmitInfo::default()
-            .semaphore(encode_slot.transfer_semaphore)
+            .semaphore(encode_slot.transfer_semaphore.semaphore())
             .stage_mask(vk::PipelineStageFlags2::VIDEO_ENCODE_KHR)];
         let submit_info = vk::SubmitInfo2::default()
             .command_buffer_infos(&command_buffer_infos)
@@ -763,36 +718,100 @@ impl VkH264Encoder {
             .queue_submit2(
                 self.encode_queue,
                 &[submit_info],
-                encode_slot.completion_fence,
+                encode_slot.completion_fence.fence(),
             )
             .unwrap();
     }
+
+    unsafe fn control_video_coding(&self, encode_slot: &mut EncodeSlot) {
+        let mut h264_layer_rate_control_info =
+            vk::VideoEncodeH264RateControlLayerInfoKHR::default();
+        let mut layer_rate_control_info = vk::VideoEncodeRateControlLayerInfoKHR::default();
+
+        let mut h264_rate_control_info = vk::VideoEncodeH264RateControlInfoKHR::default();
+        let mut rate_control_info = vk::VideoEncodeRateControlInfoKHR::default();
+
+        if let Some(H264FrameRate {
+            numerator,
+            denominator,
+        }) = self.config.framerate
+        {
+            layer_rate_control_info.frame_rate_numerator = numerator;
+            layer_rate_control_info.frame_rate_denominator = denominator;
+        }
+
+        if let Some((min_qp, max_qp)) = self.config.qp {
+            set_qp(&mut h264_layer_rate_control_info, min_qp, max_qp);
+        }
+
+        match self.config.rate_control {
+            H264RateControlConfig::ConstantBitRate { bitrate } => {
+                rate_control_info.rate_control_mode = vk::VideoEncodeRateControlModeFlagsKHR::CBR;
+                layer_rate_control_info.average_bitrate = bitrate.into();
+                layer_rate_control_info.max_bitrate = bitrate.into();
+            }
+            H264RateControlConfig::VariableBitRate {
+                average_bitrate,
+                max_bitrate,
+            } => {
+                rate_control_info.rate_control_mode = vk::VideoEncodeRateControlModeFlagsKHR::VBR;
+                layer_rate_control_info.average_bitrate = average_bitrate.into();
+                layer_rate_control_info.max_bitrate = max_bitrate.into();
+            }
+            H264RateControlConfig::ConstantQuality {
+                const_qp,
+                max_bitrate,
+            } => {
+                if let Some(max_bitrate) = max_bitrate {
+                    // TODO: Trying to limit the bitrate using VBR, vulkan doesn't do CQP currently
+                    rate_control_info.rate_control_mode =
+                        vk::VideoEncodeRateControlModeFlagsKHR::VBR;
+                    layer_rate_control_info.max_bitrate = max_bitrate.into();
+                } else {
+                    rate_control_info.rate_control_mode =
+                        vk::VideoEncodeRateControlModeFlagsKHR::DISABLED;
+                }
+
+                set_qp(&mut h264_layer_rate_control_info, const_qp, const_qp);
+            }
+        }
+
+        let layers = [layer_rate_control_info.push(&mut h264_layer_rate_control_info)];
+        let mut video_encode_rate_control_info = rate_control_info.layers(&layers);
+
+        let video_coding_control_info = vk::VideoCodingControlInfoKHR::default()
+            .flags(
+                vk::VideoCodingControlFlagsKHR::RESET
+                    | vk::VideoCodingControlFlagsKHR::ENCODE_RATE_CONTROL,
+            )
+            .push(&mut h264_rate_control_info)
+            .push(&mut video_encode_rate_control_info);
+
+        self.device.video_queue_device().cmd_control_video_coding(
+            encode_slot.encode_command_buffer.command_buffer(),
+            &video_coding_control_info,
+        );
+    }
 }
 
-unsafe fn create_command_pool(
-    device: &Device,
-    encode_queue_family_index: u32,
-    command_buffer_count: u32,
-) -> (vk::CommandPool, Vec<vk::CommandBuffer>) {
-    let command_pool_create_info = vk::CommandPoolCreateInfo::default()
-        .queue_family_index(encode_queue_family_index)
-        .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
-    let command_pool = device
-        .device()
-        .create_command_pool(&command_pool_create_info, None)
-        .unwrap();
+fn set_qp(
+    h264_layer_rate_control_info: &mut vk::VideoEncodeH264RateControlLayerInfoKHR<'_>,
+    min_qp: u8,
+    max_qp: u8,
+) {
+    h264_layer_rate_control_info.min_qp = vk::VideoEncodeH264QpKHR {
+        qp_i: min_qp.into(),
+        qp_p: min_qp.into(),
+        qp_b: min_qp.into(),
+    };
+    h264_layer_rate_control_info.max_qp = vk::VideoEncodeH264QpKHR {
+        qp_i: max_qp.into(),
+        qp_p: max_qp.into(),
+        qp_b: max_qp.into(),
+    };
 
-    let command_buffer_create_info = vk::CommandBufferAllocateInfo::default()
-        .command_buffer_count(command_buffer_count)
-        .command_pool(command_pool)
-        .level(vk::CommandBufferLevel::PRIMARY);
-
-    let command_buffers = device
-        .device()
-        .allocate_command_buffers(&command_buffer_create_info)
-        .unwrap();
-
-    (command_pool, command_buffers)
+    h264_layer_rate_control_info.use_min_qp = 1;
+    h264_layer_rate_control_info.use_max_qp = 1;
 }
 
 unsafe fn create_image_view(
@@ -814,51 +833,6 @@ unsafe fn create_image_view(
         });
 
     ImageView::create(image, &create_info)
-}
-
-#[allow(clippy::too_many_arguments)]
-unsafe fn transition_image_layout_raw(
-    device: &Device,
-    command_buffer: vk::CommandBuffer,
-
-    input_image: vk::Image,
-
-    old_layout: vk::ImageLayout,
-    new_layout: vk::ImageLayout,
-
-    src_queue_family_index: u32,
-    dst_queue_family_index: u32,
-
-    src_stage_mask: vk::PipelineStageFlags2,
-    src_access_mask: vk::AccessFlags2,
-
-    dst_stage_mask: vk::PipelineStageFlags2,
-    dst_access_mask: vk::AccessFlags2,
-) {
-    let barrier = vk::ImageMemoryBarrier2::default()
-        .image(input_image)
-        .old_layout(old_layout)
-        .new_layout(new_layout)
-        .src_queue_family_index(src_queue_family_index)
-        .dst_queue_family_index(dst_queue_family_index)
-        .src_stage_mask(src_stage_mask)
-        .src_access_mask(src_access_mask)
-        .dst_stage_mask(dst_stage_mask)
-        .dst_access_mask(dst_access_mask)
-        .subresource_range(vk::ImageSubresourceRange {
-            aspect_mask: vk::ImageAspectFlags::COLOR,
-            base_mip_level: 0,
-            level_count: 1,
-            base_array_layer: 0,
-            layer_count: 1,
-        });
-
-    let barriers = [barrier];
-    let dependency_info = vk::DependencyInfoKHR::default().image_memory_barriers(&barriers);
-
-    device
-        .device()
-        .cmd_pipeline_barrier2(command_buffer, &dependency_info);
 }
 
 fn buffer_image_copy(
@@ -889,7 +863,6 @@ fn buffer_image_copy(
 
 unsafe fn create_output_buffer(
     device: &Device,
-    physical_device_memory_properties: &vk::PhysicalDeviceMemoryProperties,
     video_profile_info: vk::VideoProfileInfoKHR<'_>,
 ) -> Buffer {
     let profiles = [video_profile_info];
@@ -900,41 +873,10 @@ unsafe fn create_output_buffer(
         .usage(vk::BufferUsageFlags::VIDEO_ENCODE_DST_KHR | vk::BufferUsageFlags::TRANSFER_SRC)
         .push(&mut video_profile_list_info);
 
-    Buffer::create(device, physical_device_memory_properties, &create_info)
-}
-
-unsafe fn create_dpb_image(
-    physical_device_memory_properties: &vk::PhysicalDeviceMemoryProperties,
-    device: &Device,
-    video_profile_info: vk::VideoProfileInfoKHR<'_>,
-    num_dpb_entries: u32,
-    width: u32,
-    height: u32,
-) -> Image {
-    let profiles = [video_profile_info];
-    let mut video_profile_list_info = vk::VideoProfileListInfoKHR::default().profiles(&profiles);
-    let input_image_info = vk::ImageCreateInfo::default()
-        .image_type(vk::ImageType::TYPE_2D)
-        .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
-        .extent(vk::Extent3D {
-            width,
-            height,
-            depth: 1,
-        })
-        .mip_levels(1)
-        .array_layers(num_dpb_entries)
-        .tiling(vk::ImageTiling::OPTIMAL)
-        .sharing_mode(vk::SharingMode::EXCLUSIVE)
-        .initial_layout(vk::ImageLayout::UNDEFINED)
-        .samples(vk::SampleCountFlags::TYPE_1)
-        .usage(vk::ImageUsageFlags::VIDEO_ENCODE_DPB_KHR)
-        .push(&mut video_profile_list_info);
-
-    Image::create(device, physical_device_memory_properties, &input_image_info)
+    Buffer::create(device, &create_info)
 }
 
 unsafe fn create_input_image(
-    physical_device_memory_properties: &vk::PhysicalDeviceMemoryProperties,
     device: &Device,
     video_profile_info: vk::VideoProfileInfoKHR<'_>,
     width: u32,
@@ -959,10 +901,11 @@ unsafe fn create_input_image(
         .usage(vk::ImageUsageFlags::VIDEO_ENCODE_SRC_KHR | vk::ImageUsageFlags::TRANSFER_DST)
         .push(&mut video_profile_list_info);
 
-    Image::create(device, physical_device_memory_properties, &create_info)
+    Image::create(device, &create_info)
 }
 
 unsafe fn create_video_session_parameters(
+    state: &H264EncoderState,
     video_session: &VideoSession,
     width: u32,
     height: u32,
@@ -978,7 +921,8 @@ unsafe fn create_video_session_parameters(
     seq_params.chroma_format_idc = chrome_format_idc;
 
     seq_params.log2_max_frame_num_minus4 = 16 - 4;
-    seq_params.log2_max_pic_order_cnt_lsb_minus4 = 16 - 4; // TODO: calculate
+    seq_params.log2_max_pic_order_cnt_lsb_minus4 =
+        state.log2_max_pic_order_cnt_lsb.try_into().unwrap();
     seq_params.max_num_ref_frames = 2; // TODO: configure
     seq_params.pic_width_in_mbs_minus1 = (width_mbaligned / 16) - 1;
     seq_params.pic_height_in_map_units_minus1 = (height_mbaligned / 16) - 1;
@@ -1026,8 +970,6 @@ unsafe fn create_video_session_parameters(
 
     let encoded_video_session_parameters =
         video_session_parameters.get_encoded_video_session_parameters(&mut h264_get_encoded_params);
-
-    println!("SPS/PPS: {encoded_video_session_parameters:?}");
 
     (video_session_parameters, encoded_video_session_parameters)
 }
@@ -1095,10 +1037,6 @@ unsafe fn get_video_capabilities(
     (caps, encode_caps, h264_caps)
 }
 
-fn macro_block_align(v: u32) -> u32 {
-    (v + 0xF) & !0xF
-}
-
 fn map_profile(profile: Profile) -> Option<vk::native::StdVideoH264ProfileIdc> {
     match profile {
         Profile::Baseline => {
@@ -1160,7 +1098,7 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
-    use crate::encoder::FramePattern;
+    use crate::encoder::{H264FramePattern, H264RateControlConfig};
     use ezk_image::resize::{FilterType, ResizeAlg};
     use ezk_image::{
         ColorInfo, ColorPrimaries, ColorSpace, ColorTransfer, PixelFormat, YuvColorInfo,
@@ -1176,14 +1114,14 @@ mod tests {
                 profile: crate::Profile::High,
                 level: crate::Level::Level_4_2,
                 resolution: (1920, 1080),
-                qp: Some((20, 28)),
-                frame_pattern: FramePattern {
+                framerate: None,
+                qp: None,
+                frame_pattern: H264FramePattern {
                     intra_idr_period: 120,
                     intra_period: 120,
                     ip_period: 1,
                 },
-                bitrate: Some(6_000_000),
-                max_bitrate: Some(6_000_000),
+                rate_control: H264RateControlConfig::ConstantBitRate { bitrate: 320_000 },
                 max_slice_len: None,
             })
             .unwrap();

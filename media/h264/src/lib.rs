@@ -8,6 +8,7 @@ mod payload;
 mod profile;
 pub mod profile_level_id;
 
+pub mod decoder;
 pub mod encoder;
 
 pub use fmtp::{FmtpOptions, PacketizationMode, ParseFmtpOptionsError};

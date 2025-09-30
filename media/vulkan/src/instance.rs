@@ -1,4 +1,3 @@
-use super::Device;
 use ash::{khr::video_queue, vk};
 use std::sync::Arc;
 
@@ -42,21 +41,6 @@ impl Instance {
                     video_queue_instance,
                 }),
             }
-        }
-    }
-
-    pub fn create_device(
-        &self,
-        physical_device: vk::PhysicalDevice,
-        create_device_info: &vk::DeviceCreateInfo,
-    ) -> Device {
-        unsafe {
-            let device = self
-                .instance()
-                .create_device(physical_device, create_device_info, None)
-                .unwrap();
-
-            Device::new(self.clone(), device)
         }
     }
 
