@@ -1,6 +1,8 @@
-use ash::khr::{video_encode_queue, video_queue};
-
 use super::Instance;
+use ash::{
+    khr::{video_encode_queue, video_queue},
+    vk,
+};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -13,22 +15,63 @@ struct Inner {
     device: ash::Device,
     video_queue_device: video_queue::Device,
     video_encode_queue_device: video_encode_queue::Device,
+
+    physical_device_memory_properties: vk::PhysicalDeviceMemoryProperties,
 }
 
 impl Device {
-    pub fn new(instance: Instance, device: ash::Device) -> Self {
-        let video_queue_device = ash::khr::video_queue::Device::new(instance.instance(), &device);
-        let video_encode_queue_device =
-            video_encode_queue::Device::new(instance.instance(), &device);
+    pub unsafe fn create(
+        instance: &Instance,
+        physical_device: vk::PhysicalDevice,
+        create_device_info: &vk::DeviceCreateInfo,
+    ) -> Result<Device, vk::Result> {
+        unsafe {
+            let device = instance
+                .instance()
+                .create_device(physical_device, create_device_info, None)
+                .unwrap();
 
-        Self {
-            inner: Arc::new(Inner {
-                instance,
-                device,
-                video_queue_device,
-                video_encode_queue_device,
-            }),
+            let video_queue_device =
+                ash::khr::video_queue::Device::new(instance.instance(), &device);
+            let video_encode_queue_device =
+                video_encode_queue::Device::new(instance.instance(), &device);
+
+            let physical_device_memory_properties = instance
+                .instance()
+                .get_physical_device_memory_properties(physical_device);
+
+            Ok(Self {
+                inner: Arc::new(Inner {
+                    instance: instance.clone(),
+                    device,
+                    video_queue_device,
+                    video_encode_queue_device,
+                    physical_device_memory_properties,
+                }),
+            })
         }
+    }
+
+    pub(crate) fn find_memory_type(
+        &self,
+        memory_type_bits: u32,
+        properties: vk::MemoryPropertyFlags,
+    ) -> Option<u32> {
+        for (i, memory_type) in self
+            .inner
+            .physical_device_memory_properties
+            .memory_types
+            .iter()
+            .enumerate()
+        {
+            let type_supported = (memory_type_bits & (1 << i)) != 0;
+            let has_properties = memory_type.property_flags.contains(properties);
+            if type_supported && has_properties {
+                return Some(i as u32);
+            }
+        }
+
+        None
     }
 
     pub fn instance(&self) -> &Instance {
@@ -51,6 +94,10 @@ impl Device {
 impl Drop for Inner {
     fn drop(&mut self) {
         unsafe {
+            if let Err(e) = self.device.device_wait_idle() {
+                log::warn!("device_wait_idle failed: {e:?}");
+            }
+
             self.device.destroy_device(None);
         }
     }
