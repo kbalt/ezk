@@ -1,4 +1,4 @@
-use crate::Device;
+use crate::{Device, VulkanError};
 use ash::vk::{self, TaggedStructure};
 
 pub struct VideoFeedbackQueryPool {
@@ -11,7 +11,7 @@ impl VideoFeedbackQueryPool {
         device: &Device,
         query_count: u32,
         video_profile_info: vk::VideoProfileInfoKHR,
-    ) -> Self {
+    ) -> Result<Self, VulkanError> {
         unsafe {
             let mut query_pool_video_encode_feedback_create_info =
                 vk::QueryPoolVideoEncodeFeedbackCreateInfoKHR::default().encode_feedback_flags(
@@ -27,30 +27,26 @@ impl VideoFeedbackQueryPool {
 
             let query_pool = device
                 .device()
-                .create_query_pool(&query_create_info, None)
-                .unwrap();
+                .create_query_pool(&query_create_info, None)?;
 
-            Self {
+            Ok(Self {
                 device: device.clone(),
                 query_pool,
-            }
+            })
         }
     }
 
-    pub unsafe fn get_bytes_written(&mut self, index: u32) -> u64 {
+    pub unsafe fn get_bytes_written(&mut self, index: u32) -> Result<u64, VulkanError> {
         let mut bytes_written = [[0u64; 2]; 1];
 
-        self.device
-            .device()
-            .get_query_pool_results(
-                self.query_pool,
-                index,
-                &mut bytes_written,
-                vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT,
-            )
-            .unwrap();
+        self.device.device().get_query_pool_results(
+            self.query_pool,
+            index,
+            &mut bytes_written,
+            vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT,
+        )?;
 
-        bytes_written[0][1]
+        Ok(bytes_written[0][1])
     }
 
     pub unsafe fn cmd_reset_query(&mut self, command_buffer: vk::CommandBuffer, index: u32) {
