@@ -53,7 +53,7 @@ impl VideoFeedbackQueryPool {
         bytes_written[0][1]
     }
 
-    pub unsafe fn cmd_reset(&mut self, command_buffer: vk::CommandBuffer, index: u32) {
+    pub unsafe fn cmd_reset_query(&mut self, command_buffer: vk::CommandBuffer, index: u32) {
         self.device
             .device()
             .cmd_reset_query_pool(command_buffer, self.query_pool, index, 1);

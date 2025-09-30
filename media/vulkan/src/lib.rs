@@ -1,39 +1,46 @@
 //! Some convenience types for working with vulkan, not intended for use outside of ezk's use
 
 #![allow(unsafe_op_in_unsafe_fn, clippy::missing_safety_doc)]
-use ash::vk;
 
 mod buffer;
+mod command_buffer;
 mod device;
+mod dpb;
+mod fence;
 mod image;
 mod image_view;
 mod instance;
+mod semaphore;
 mod video_feedback_query_pool;
 mod video_session;
 mod video_session_parameters;
 
 pub use buffer::Buffer;
+pub use command_buffer::CommandBuffer;
 pub use device::Device;
+pub use dpb::create_dpb;
+pub use fence::Fence;
 pub use image::Image;
 pub use image_view::ImageView;
 pub use instance::Instance;
+pub use semaphore::Semaphore;
 pub use video_feedback_query_pool::VideoFeedbackQueryPool;
 pub use video_session::VideoSession;
 pub use video_session_parameters::VideoSessionParameters;
 
 pub use ash;
 
-fn find_memory_type(
-    memory_type_bits: u32,
-    properties: vk::MemoryPropertyFlags,
-    mem_properties: &vk::PhysicalDeviceMemoryProperties,
-) -> Option<u32> {
-    for (i, memory_type) in mem_properties.memory_types.iter().enumerate() {
-        let type_supported = (memory_type_bits & (1 << i)) != 0;
-        let has_properties = memory_type.property_flags.contains(properties);
-        if type_supported && has_properties {
-            return Some(i as u32);
-        }
-    }
-    None
-}
+use std::ffi::CStr;
+
+pub const REQUIRED_EXTENSIONS_BASE: &[&CStr] = &[
+    c"VK_KHR_sampler_ycbcr_conversion",
+    c"VK_KHR_maintenance1",
+    c"VK_KHR_synchronization2",
+    c"VK_KHR_bind_memory2",
+    c"VK_KHR_get_memory_requirements2",
+    c"VK_KHR_synchronization2",
+    c"VK_KHR_video_queue",
+];
+
+pub const REQUIRED_EXTENSIONS_ENCODE: &[&CStr] = &[c"VK_KHR_video_encode_queue"];
+pub const REQUIRED_EXTENSIONS_DECODE: &[&CStr] = &[c"VK_KHR_video_decode_queue"];
