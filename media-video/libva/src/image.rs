@@ -12,7 +12,7 @@ impl Image {
         &self.image
     }
 
-    pub fn map(&mut self) -> MappedImage<'_> {
+    pub fn map(&mut self) -> Result<MappedImage<'_>, VaError> {
         unsafe {
             let mut mapped = null_mut();
 
@@ -20,13 +20,12 @@ impl Image {
                 self.display.dpy,
                 self.image.buf,
                 &raw mut mapped,
-            ))
-            .unwrap();
+            ))?;
 
-            MappedImage {
+            Ok(MappedImage {
                 image: self,
                 mapped,
-            }
+            })
         }
     }
 }
