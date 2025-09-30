@@ -8,7 +8,11 @@ pub struct Context {
 }
 
 impl Context {
-    pub fn create_buffer_empty(&self, type_: ffi::VABufferType, size: usize) -> Buffer {
+    pub fn create_buffer_empty(
+        &self,
+        type_: ffi::VABufferType,
+        size: usize,
+    ) -> Result<Buffer, VaError> {
         unsafe {
             let mut buf_id = ffi::VA_INVALID_ID;
 
@@ -20,17 +24,20 @@ impl Context {
                 1,
                 null_mut(),
                 &raw mut buf_id,
-            ))
-            .unwrap();
+            ))?;
 
-            Buffer {
+            Ok(Buffer {
                 display: self.display.clone(),
                 buf_id,
-            }
+            })
         }
     }
 
-    pub fn create_buffer_with_data<T: Copy>(&self, type_: ffi::VABufferType, data: &T) -> Buffer {
+    pub fn create_buffer_with_data<T: Copy>(
+        &self,
+        type_: ffi::VABufferType,
+        data: &T,
+    ) -> Result<Buffer, VaError> {
         unsafe {
             let mut buf_id = ffi::VA_INVALID_ID;
 
@@ -42,17 +49,20 @@ impl Context {
                 1,
                 data as *const T as *mut c_void,
                 &raw mut buf_id,
-            ))
-            .unwrap();
+            ))?;
 
-            Buffer {
+            Ok(Buffer {
                 display: self.display.clone(),
                 buf_id,
-            }
+            })
         }
     }
 
-    pub fn create_buffer_from_bytes(&self, type_: ffi::VABufferType, bytes: &[u8]) -> Buffer {
+    pub fn create_buffer_from_bytes(
+        &self,
+        type_: ffi::VABufferType,
+        bytes: &[u8],
+    ) -> Result<Buffer, VaError> {
         unsafe {
             let mut buf_id = ffi::VA_INVALID_ID;
 
@@ -64,17 +74,16 @@ impl Context {
                 1,
                 bytes.as_ptr().cast_mut().cast(),
                 &raw mut buf_id,
-            ))
-            .unwrap();
+            ))?;
 
-            Buffer {
+            Ok(Buffer {
                 display: self.display.clone(),
                 buf_id,
-            }
+            })
         }
     }
 
-    pub fn begin_picture(&self, render_target: &Surface) {
+    pub fn begin_picture(&self, render_target: &Surface) -> Result<(), VaError> {
         debug_assert!(Arc::ptr_eq(&self.display, &render_target.display));
 
         unsafe {
@@ -83,11 +92,13 @@ impl Context {
                 self.context_id,
                 render_target.surface_id,
             ))
-            .unwrap();
         }
     }
 
-    pub fn render_picture<'a>(&self, buffers: impl IntoIterator<Item = &'a Buffer>) {
+    pub fn render_picture<'a>(
+        &self,
+        buffers: impl IntoIterator<Item = &'a Buffer>,
+    ) -> Result<(), VaError> {
         unsafe {
             let buffers: Vec<ffi::VABufferID> = buffers.into_iter().map(|b| b.buf_id).collect();
 
@@ -97,14 +108,11 @@ impl Context {
                 buffers.as_ptr().cast_mut(),
                 buffers.len() as _,
             ))
-            .unwrap();
         }
     }
 
-    pub fn end_picture(&self) {
-        unsafe {
-            VaError::try_(ffi::vaEndPicture(self.display.dpy, self.context_id)).unwrap();
-        }
+    pub fn end_picture(&self) -> Result<(), VaError> {
+        unsafe { VaError::try_(ffi::vaEndPicture(self.display.dpy, self.context_id)) }
     }
 }
 

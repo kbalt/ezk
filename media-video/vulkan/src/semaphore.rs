@@ -1,4 +1,4 @@
-use crate::Device;
+use crate::{Device, VulkanError};
 use ash::vk;
 
 pub struct Semaphore {
@@ -7,7 +7,7 @@ pub struct Semaphore {
 }
 
 impl Semaphore {
-    pub fn create(device: &Device) -> Result<Self, vk::Result> {
+    pub fn create(device: &Device) -> Result<Self, VulkanError> {
         unsafe {
             let semaphore = device
                 .device()

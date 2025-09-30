@@ -1,3 +1,5 @@
+use crate::VulkanError;
+
 use super::Instance;
 use ash::{
     khr::{video_encode_queue, video_queue},
@@ -24,12 +26,12 @@ impl Device {
         instance: &Instance,
         physical_device: vk::PhysicalDevice,
         create_device_info: &vk::DeviceCreateInfo,
-    ) -> Result<Device, vk::Result> {
+    ) -> Result<Device, VulkanError> {
         unsafe {
-            let device = instance
-                .instance()
-                .create_device(physical_device, create_device_info, None)
-                .unwrap();
+            let device =
+                instance
+                    .instance()
+                    .create_device(physical_device, create_device_info, None)?;
 
             let video_queue_device =
                 ash::khr::video_queue::Device::new(instance.instance(), &device);
@@ -56,7 +58,7 @@ impl Device {
         &self,
         memory_type_bits: u32,
         properties: vk::MemoryPropertyFlags,
-    ) -> Option<u32> {
+    ) -> Result<u32, VulkanError> {
         for (i, memory_type) in self
             .inner
             .physical_device_memory_properties
@@ -67,11 +69,14 @@ impl Device {
             let type_supported = (memory_type_bits & (1 << i)) != 0;
             let has_properties = memory_type.property_flags.contains(properties);
             if type_supported && has_properties {
-                return Some(i as u32);
+                return Ok(i as u32);
             }
         }
 
-        None
+        Err(VulkanError::CannotFindMemoryType {
+            memory_type_bits,
+            properties,
+        })
     }
 
     pub fn instance(&self) -> &Instance {

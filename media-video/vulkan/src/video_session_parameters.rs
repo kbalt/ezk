@@ -1,6 +1,6 @@
 use std::mem::{MaybeUninit, transmute};
 
-use crate::VideoSession;
+use crate::{VideoSession, VulkanError};
 use ash::vk::{self, Extends, TaggedStructure};
 
 pub struct VideoSessionParameters {
@@ -12,21 +12,23 @@ impl VideoSessionParameters {
     pub unsafe fn create(
         video_session: &VideoSession,
         create_info: &vk::VideoSessionParametersCreateInfoKHR<'_>,
-    ) -> Self {
+    ) -> Result<Self, VulkanError> {
         let device = video_session.device();
 
         let video_session_parameters = device
             .video_queue_device()
-            .create_video_session_parameters(create_info, None)
-            .unwrap();
+            .create_video_session_parameters(create_info, None)?;
 
-        Self {
+        Ok(Self {
             video_session: video_session.clone(),
             video_session_parameters,
-        }
+        })
     }
 
-    pub unsafe fn get_encoded_video_session_parameters<'a, T>(&self, ext: &'a mut T) -> Vec<u8>
+    pub unsafe fn get_encoded_video_session_parameters<'a, T>(
+        &self,
+        ext: &'a mut T,
+    ) -> Result<Vec<u8>, VulkanError>
     where
         T: TaggedStructure<'a>,
         T: Extends<vk::VideoEncodeSessionParametersGetInfoKHR<'a>>,
@@ -39,16 +41,14 @@ impl VideoSessionParameters {
 
         let len = device
             .video_encode_queue_device()
-            .get_encoded_video_session_parameters_len(&session_parameters_info, None)
-            .unwrap();
+            .get_encoded_video_session_parameters_len(&session_parameters_info, None)?;
 
         let mut buf = vec![MaybeUninit::uninit(); len];
         device
             .video_encode_queue_device()
-            .get_encoded_video_session_parameters(&session_parameters_info, None, &mut buf)
-            .unwrap();
+            .get_encoded_video_session_parameters(&session_parameters_info, None, &mut buf)?;
 
-        transmute::<Vec<MaybeUninit<u8>>, Vec<u8>>(buf)
+        Ok(transmute::<Vec<MaybeUninit<u8>>, Vec<u8>>(buf))
     }
 
     pub fn video_session(&self) -> &VideoSession {

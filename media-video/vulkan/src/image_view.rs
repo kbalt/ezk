@@ -1,4 +1,4 @@
-use crate::Image;
+use crate::{Image, VulkanError};
 use ash::vk;
 
 pub struct ImageView {
@@ -8,26 +8,26 @@ pub struct ImageView {
 }
 
 impl ImageView {
-    pub unsafe fn create(image: &Image, create_info: &vk::ImageViewCreateInfo<'_>) -> Self {
+    pub unsafe fn create(
+        image: &Image,
+        create_info: &vk::ImageViewCreateInfo<'_>,
+    ) -> Result<Self, VulkanError> {
         let device = image.device();
 
-        let image_view = device
-            .device()
-            .create_image_view(create_info, None)
-            .unwrap();
+        let image_view = device.device().create_image_view(create_info, None)?;
 
-        Self {
+        Ok(Self {
             image: image.clone(),
             image_view,
             subresource_range: create_info.subresource_range,
-        }
+        })
     }
 
     pub fn image(&self) -> &Image {
         &self.image
     }
 
-    pub fn image_view(&self) -> vk::ImageView {
+    pub unsafe fn image_view(&self) -> vk::ImageView {
         self.image_view
     }
 

@@ -47,7 +47,7 @@ impl Display {
     }
 
     /// Query all available profiles
-    pub fn profiles(&self) -> Vec<ffi::VAProfile> {
+    pub fn profiles(&self) -> Result<Vec<ffi::VAProfile>, VaError> {
         let mut num_profiles = unsafe { ffi::vaMaxNumProfiles(self.handle.dpy) };
 
         let mut profiles: Vec<ffi::VAProfile> = vec![0; num_profiles as usize];
@@ -58,16 +58,15 @@ impl Display {
                 profiles.as_mut_ptr().cast(),
                 &raw mut num_profiles,
             )
-        })
-        .unwrap();
+        })?;
 
         profiles.truncate(num_profiles as usize);
 
-        profiles
+        Ok(profiles)
     }
 
     /// Query all available entrypoints for the given profile
-    pub fn entrypoints(&self, profile: ffi::VAProfile) -> Vec<ffi::VAEntrypoint> {
+    pub fn entrypoints(&self, profile: ffi::VAProfile) -> Result<Vec<ffi::VAEntrypoint>, VaError> {
         let mut num_entrypoint = unsafe { ffi::vaMaxNumEntrypoints(self.handle.dpy) };
 
         let mut entrypoints: Vec<ffi::VAEntrypoint> = vec![0; num_entrypoint as usize];
@@ -79,19 +78,18 @@ impl Display {
                 entrypoints.as_mut_ptr().cast(),
                 &raw mut num_entrypoint,
             )
-        })
-        .unwrap();
+        })?;
 
         entrypoints.truncate(num_entrypoint as usize);
 
-        entrypoints
+        Ok(entrypoints)
     }
 
     pub fn get_config_attributes(
         &self,
         profile: ffi::VAProfile,
         entrypoint: ffi::VAEntrypoint,
-    ) -> Vec<ffi::VAConfigAttrib> {
+    ) -> Result<Vec<ffi::VAConfigAttrib>, VaError> {
         unsafe {
             const MAX_ATTRIBUTES: usize = ffi::VAConfigAttribType_VAConfigAttribTypeMax as usize;
 
@@ -108,12 +106,11 @@ impl Display {
                 entrypoint,
                 attrib_list.as_mut_ptr(),
                 MAX_ATTRIBUTES as _,
-            ))
-            .unwrap();
+            ))?;
 
             attrib_list.set_len(MAX_ATTRIBUTES);
 
-            attrib_list
+            Ok(attrib_list)
         }
     }
 
@@ -142,7 +139,10 @@ impl Display {
         })
     }
 
-    pub fn query_surface_attributes(&self, config: &Config) -> Vec<ffi::VASurfaceAttrib> {
+    pub fn query_surface_attributes(
+        &self,
+        config: &Config,
+    ) -> Result<Vec<ffi::VASurfaceAttrib>, VaError> {
         unsafe {
             let mut num = 0;
 
@@ -151,8 +151,7 @@ impl Display {
                 config.config_id,
                 null_mut(),
                 &raw mut num,
-            ))
-            .unwrap();
+            ))?;
 
             let mut attrib_list = Vec::with_capacity(num as usize);
 
@@ -161,12 +160,11 @@ impl Display {
                 config.config_id,
                 attrib_list.as_mut_ptr(),
                 &raw mut num,
-            ))
-            .unwrap();
+            ))?;
 
             attrib_list.set_len(num as usize);
 
-            attrib_list
+            Ok(attrib_list)
         }
     }
 
@@ -177,7 +175,7 @@ impl Display {
         height: u32,
         num: usize,
         attributes: &[ffi::VASurfaceAttrib],
-    ) -> Vec<Surface> {
+    ) -> Result<Vec<Surface>, VaError> {
         unsafe {
             let mut surfaces: Vec<ffi::VASurfaceID> = vec![ffi::VA_INVALID_ID; num];
 
@@ -190,16 +188,17 @@ impl Display {
                 num as _,
                 attributes.as_ptr().cast_mut(),
                 attributes.len() as _,
-            ))
-            .unwrap();
+            ))?;
 
-            surfaces
+            let surfaces = surfaces
                 .into_iter()
                 .map(|surface_id| Surface {
                     display: self.handle.clone(),
                     surface_id,
                 })
-                .collect()
+                .collect();
+
+            Ok(surfaces)
         }
     }
 
@@ -210,7 +209,7 @@ impl Display {
         picture_height: i32,
         flag: i32,
         render_targets: impl IntoIterator<Item = &'a Surface>,
-    ) -> Context {
+    ) -> Result<Context, VaError> {
         unsafe {
             let mut render_targets: Vec<ffi::VASurfaceID> =
                 render_targets.into_iter().map(|c| c.surface_id).collect();
@@ -225,17 +224,16 @@ impl Display {
                 render_targets.as_mut_ptr(),
                 render_targets.len() as _,
                 &raw mut context_id,
-            ))
-            .unwrap();
+            ))?;
 
-            Context {
+            Ok(Context {
                 display: self.handle.clone(),
                 context_id,
-            }
+            })
         }
     }
 
-    pub fn query_image_formats(&self) -> Vec<ffi::VAImageFormat> {
+    pub fn query_image_formats(&self) -> Result<Vec<ffi::VAImageFormat>, VaError> {
         unsafe {
             let mut num_formats = ffi::vaMaxNumImageFormats(self.handle.dpy);
 
@@ -245,16 +243,20 @@ impl Display {
                 self.handle.dpy,
                 formats.as_mut_ptr(),
                 &raw mut num_formats,
-            ))
-            .unwrap();
+            ))?;
 
             formats.set_len(num_formats as usize);
 
-            formats
+            Ok(formats)
         }
     }
 
-    pub fn create_image(&self, mut format: ffi::VAImageFormat, width: i32, height: i32) -> Image {
+    pub fn create_image(
+        &self,
+        mut format: ffi::VAImageFormat,
+        width: i32,
+        height: i32,
+    ) -> Result<Image, VaError> {
         unsafe {
             let mut image = MaybeUninit::uninit();
 
@@ -264,13 +266,12 @@ impl Display {
                 width,
                 height,
                 image.as_mut_ptr(),
-            ))
-            .unwrap();
+            ))?;
 
-            Image {
+            Ok(Image {
                 display: self.handle.clone(),
                 image: image.assume_init(),
-            }
+            })
         }
     }
 }
