@@ -1,4 +1,4 @@
-use crate::{Device, Image, ImageView};
+use crate::{Device, Image, ImageView, VulkanError};
 use ash::vk::{self, TaggedStructure};
 
 pub fn create_dpb(
@@ -7,7 +7,7 @@ pub fn create_dpb(
     num_slots: u32,
     width: u32,
     height: u32,
-) -> Vec<ImageView> {
+) -> Result<Vec<ImageView>, VulkanError> {
     let profiles = [video_profile_info];
 
     let mut video_profile_list_info = vk::VideoProfileListInfoKHR::default().profiles(&profiles);
@@ -28,13 +28,13 @@ pub fn create_dpb(
         .usage(vk::ImageUsageFlags::VIDEO_ENCODE_DPB_KHR)
         .push(&mut video_profile_list_info);
 
-    let image = unsafe { Image::create(device, &input_image_info) };
+    let image = unsafe { Image::create(device, &input_image_info)? };
 
     let mut slots = Vec::with_capacity(num_slots as usize);
 
     for array_layer in 0..num_slots {
         let create_info = vk::ImageViewCreateInfo::default()
-            .image(image.image())
+            .image(unsafe { image.image() })
             .view_type(vk::ImageViewType::TYPE_2D)
             .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
             .components(vk::ComponentMapping::default())
@@ -46,10 +46,10 @@ pub fn create_dpb(
                 layer_count: 1,
             });
 
-        let image_view = unsafe { ImageView::create(&image, &create_info) };
+        let image_view = unsafe { ImageView::create(&image, &create_info)? };
 
         slots.push(image_view)
     }
 
-    slots
+    Ok(slots)
 }

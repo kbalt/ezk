@@ -15,7 +15,7 @@ impl Surface {
         self.surface_id
     }
 
-    pub fn derive_image(&mut self) -> SurfaceImage<'_> {
+    pub fn derive_image(&mut self) -> Result<SurfaceImage<'_>, VaError> {
         unsafe {
             let mut image = MaybeUninit::uninit();
 
@@ -23,38 +23,35 @@ impl Surface {
                 self.display.dpy,
                 self.surface_id,
                 image.as_mut_ptr(),
-            ))
-            .unwrap();
+            ))?;
 
             let image = Image {
                 display: self.display.clone(),
                 image: image.assume_init(),
             };
 
-            SurfaceImage {
+            Ok(SurfaceImage {
                 _surface: self,
                 image,
-            }
+            })
         }
     }
 
-    pub fn sync(&mut self) {
-        unsafe {
-            VaError::try_(ffi::vaSyncSurface(self.display.dpy, self.surface_id)).unwrap();
-        }
+    pub fn sync(&mut self) -> Result<(), VaError> {
+        unsafe { VaError::try_(ffi::vaSyncSurface(self.display.dpy, self.surface_id)) }
     }
 
-    pub fn try_sync(&mut self) -> bool {
+    pub fn try_sync(&mut self) -> Result<bool, VaError> {
         unsafe {
             if let Err(e) = VaError::try_(ffi::vaSyncSurface2(self.display.dpy, self.surface_id, 0))
             {
                 if e.status == ffi::VA_STATUS_ERROR_TIMEDOUT as ffi::VAStatus {
-                    false
+                    Ok(false)
                 } else {
-                    panic!("vaSyncSurface2 failed: {:?}", e);
+                    Err(e)
                 }
             } else {
-                true
+                Ok(true)
             }
         }
     }

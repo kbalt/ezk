@@ -1,4 +1,4 @@
-use libva::{Buffer, Context, Display, Surface, ffi};
+use libva::{Buffer, Context, Display, Surface, VaError, ffi};
 use std::{
     collections::VecDeque,
     mem::{take, zeroed},
@@ -6,19 +6,51 @@ use std::{
     slice::from_raw_parts,
 };
 
-use crate::encoder::{
-    H264EncoderConfig, H264FrameType, H264RateControlConfig,
-    util::{FrameEncodeInfo, H264EncoderState, macro_block_align},
+use crate::{
+    Profile,
+    encoder::{
+        H264EncoderConfig, H264FrameType, H264RateControlConfig,
+        util::{FrameEncodeInfo, H264EncoderState, macro_block_align},
+    },
 };
 
 mod bitstream;
+
+#[derive(Debug, thiserror::Error)]
+pub enum CreateVaH264EncoderError {
+    #[error("Profile {0:?} is not supported")]
+    UnsupportedProfile(Profile),
+
+    #[error("No encode entrypoint for profile {0:?}")]
+    UnsupportedEncodeProfile(Profile),
+
+    #[error("Failed to get config attributed {0}")]
+    FailedToGetConfigAttributes(#[source] VaError),
+
+    #[error("Image format derived from profile is not support")]
+    UnsupportedImageFormat,
+
+    #[error("Configured rate control is not supported")]
+    UnsupportedRateControl,
+
+    #[error("Failed to create va config")]
+    FailedToCreateConfig(#[source] VaError),
+
+    #[error("Failed to create va surfaces")]
+    FailedToCreateSurfaces(#[source] VaError),
+
+    #[error("Failed to create va context")]
+    FailedToCreateContext(#[source] VaError),
+
+    #[error("Failed to create coded buffer")]
+    FailedToCreateCodedBuffer(#[source] VaError),
+}
 
 // 16 is the maximum number of reference frames allowed by H.264
 const MAX_SURFACES: usize = 16;
 
 // TODO: resolution changes
-// TODO: rate control
-// TODO: fix B-Frames
+
 pub struct VaH264Encoder {
     h264_config: H264EncoderConfig,
 
@@ -56,28 +88,38 @@ pub struct VaH264Encoder {
 }
 
 impl VaH264Encoder {
-    pub fn new(display: &Display, h264_config: H264EncoderConfig) -> Self {
+    pub fn new(
+        display: &Display,
+        h264_config: H264EncoderConfig,
+    ) -> Result<Self, CreateVaH264EncoderError> {
         let width_mbaligned = macro_block_align(h264_config.resolution.0);
         let height_mbaligned = macro_block_align(h264_config.resolution.1);
 
-        let (profile, format) = profile_to_profile_and_format(h264_config.profile).unwrap();
+        let (profile, format) = profile_to_profile_and_format(h264_config.profile).ok_or(
+            CreateVaH264EncoderError::UnsupportedProfile(h264_config.profile),
+        )?;
 
         let entrypoint = display
             .entrypoints(profile)
+            .unwrap()
             .into_iter()
             .find(|&e| {
                 e == ffi::VAEntrypoint_VAEntrypointEncSlice
                     || e == ffi::VAEntrypoint_VAEntrypointEncSliceLP
             })
-            .unwrap();
+            .ok_or(CreateVaH264EncoderError::UnsupportedEncodeProfile(
+                h264_config.profile,
+            ))?;
 
         let mut config_attributes = Vec::new();
 
-        let attributes = display.get_config_attributes(profile, entrypoint);
+        let attributes = display
+            .get_config_attributes(profile, entrypoint)
+            .map_err(CreateVaH264EncoderError::FailedToGetConfigAttributes)?;
 
         // Test the requested format is available
         if attributes[ffi::VAConfigAttribType_VAConfigAttribRTFormat as usize].value & format == 0 {
-            todo!("Format not available");
+            return Err(CreateVaH264EncoderError::UnsupportedImageFormat);
         }
 
         config_attributes.push(ffi::VAConfigAttrib {
@@ -88,29 +130,19 @@ impl VaH264Encoder {
         // Test if rate control is available
         let rc_attr = attributes[ffi::VAConfigAttribType_VAConfigAttribRateControl as usize];
         if rc_attr.value != ffi::VA_ATTRIB_NOT_SUPPORTED {
-            // TODO: rate control
-            println!("Rate control available");
+            let rc_flag = match h264_config.rate_control {
+                H264RateControlConfig::ConstantBitRate { .. } => ffi::VA_RC_CBR,
+                H264RateControlConfig::VariableBitRate { .. } => ffi::VA_RC_VBR,
+                H264RateControlConfig::ConstantQuality { .. } => ffi::VA_RC_CQP,
+            };
 
-            println!("\tNONE: {}", rc_attr.value & ffi::VA_RC_NONE != 0);
-            println!("\tCBR: {}", rc_attr.value & ffi::VA_RC_CBR != 0);
-            println!("\tVBR: {}", rc_attr.value & ffi::VA_RC_VBR != 0);
-            println!("\tVCM: {}", rc_attr.value & ffi::VA_RC_VCM != 0);
-            println!("\tCQP: {}", rc_attr.value & ffi::VA_RC_CQP != 0);
-            println!(
-                "\tVBR_CONSTRAINED: {}",
-                rc_attr.value & ffi::VA_RC_VBR_CONSTRAINED != 0
-            );
-            println!("\tICQ: {}", rc_attr.value & ffi::VA_RC_ICQ != 0);
-            println!("\tMB: {}", rc_attr.value & ffi::VA_RC_MB != 0);
-            println!("\tCFS: {}", rc_attr.value & ffi::VA_RC_CFS != 0);
-            println!("\tPARALLEL: {}", rc_attr.value & ffi::VA_RC_PARALLEL != 0);
-            println!("\tQVBR: {}", rc_attr.value & ffi::VA_RC_QVBR != 0);
-            println!("\tAVBR: {}", rc_attr.value & ffi::VA_RC_AVBR != 0);
-            println!("\tTCBRC: {}", rc_attr.value & ffi::VA_RC_TCBRC != 0);
+            if rc_attr.value & rc_flag == 0 {
+                return Err(CreateVaH264EncoderError::UnsupportedRateControl);
+            }
 
             config_attributes.push(ffi::VAConfigAttrib {
                 type_: ffi::VAConfigAttribType_VAConfigAttribRateControl,
-                value: ffi::VA_RC_CBR,
+                value: rc_flag,
             });
         }
 
@@ -140,47 +172,53 @@ impl VaH264Encoder {
 
         let max_ref_frames =
             attributes[ffi::VAConfigAttribType_VAConfigAttribEncMaxRefFrames as usize];
-        if max_ref_frames.value != ffi::VA_ATTRIB_NOT_SUPPORTED {
-            println!("max ref frames: {}", max_ref_frames.value);
-        }
-
-        let max_slices = attributes[ffi::VAConfigAttribType_VAConfigAttribEncMaxSlices as usize];
-        if max_slices.value != ffi::VA_ATTRIB_NOT_SUPPORTED {
-            println!("max slices: {}", max_slices.value);
-        }
+        let max_ref_frames = if max_ref_frames.value != ffi::VA_ATTRIB_NOT_SUPPORTED {
+            max_ref_frames.value
+        } else {
+            // Limit the maximum reference frames to 2 by default
+            2
+        };
 
         let config = display
             .create_config(profile, entrypoint, &config_attributes)
-            .unwrap();
+            .map_err(CreateVaH264EncoderError::FailedToCreateConfig)?;
 
-        let src_surfaces =
-            display.create_surfaces(format, width_mbaligned, height_mbaligned, MAX_SURFACES, &[]);
-        let ref_surfaces =
-            display.create_surfaces(format, width_mbaligned, height_mbaligned, MAX_SURFACES, &[]);
+        let src_surfaces = display
+            .create_surfaces(format, width_mbaligned, height_mbaligned, MAX_SURFACES, &[])
+            .map_err(CreateVaH264EncoderError::FailedToCreateSurfaces)?;
 
-        let context = display.create_context(
-            &config,
-            width_mbaligned as _,
-            height_mbaligned as _,
-            ffi::VA_PROGRESSIVE as _,
-            src_surfaces.iter().chain(ref_surfaces.iter()),
-        );
+        let ref_surfaces = display
+            .create_surfaces(format, width_mbaligned, height_mbaligned, MAX_SURFACES, &[])
+            .map_err(CreateVaH264EncoderError::FailedToCreateSurfaces)?;
+
+        let context = display
+            .create_context(
+                &config,
+                width_mbaligned as _,
+                height_mbaligned as _,
+                ffi::VA_PROGRESSIVE as _,
+                src_surfaces.iter().chain(ref_surfaces.iter()),
+            )
+            .map_err(CreateVaH264EncoderError::FailedToCreateContext)?;
 
         // EncCodec buffer size is estimated from the input image resolution. Currently using a higher value to ensure
         // proper output even with worst case input
-        let coded_buffer_size = (width_mbaligned as f64 * height_mbaligned as f64 * 2.5) as usize;
+        let coded_buffer_size = (width_mbaligned as f64 * height_mbaligned as f64 * 1.5) as usize;
 
         let src_surfaces = src_surfaces
             .into_iter()
-            .map(|src_surface| {
-                let coded_buffer = context
-                    .create_buffer_empty(ffi::VABufferType_VAEncCodedBufferType, coded_buffer_size);
+            .map(|src_surface| -> Result<_, VaError> {
+                let coded_buffer = context.create_buffer_empty(
+                    ffi::VABufferType_VAEncCodedBufferType,
+                    coded_buffer_size,
+                )?;
 
-                (src_surface, coded_buffer)
+                Ok((src_surface, coded_buffer))
             })
-            .collect();
+            .collect::<Result<Vec<_>, VaError>>()
+            .map_err(CreateVaH264EncoderError::FailedToCreateCodedBuffer)?;
 
-        VaH264Encoder {
+        Ok(VaH264Encoder {
             h264_config,
             context,
             support_packed_header_sequence,
@@ -193,14 +231,14 @@ impl VaH264Encoder {
             in_flight: VecDeque::new(),
             available_ref_surfaces: ref_surfaces,
             reference_frames: Vec::new(),
-            max_ref_frames: 2,
+            max_ref_frames: max_ref_frames as usize,
             backlogged_b_frames: Vec::new(),
             output: VecDeque::new(),
-        }
+        })
     }
 
-    fn read_out_coded_buffer(&mut self, coded_buffer: &mut Buffer) {
-        let mut codec_buffer_mapped = coded_buffer.map();
+    fn read_out_coded_buffer(&mut self, coded_buffer: &mut Buffer) -> Result<(), VaError> {
+        let mut codec_buffer_mapped = coded_buffer.map()?;
         let mut ptr = codec_buffer_mapped.data();
 
         while !ptr.is_null() {
@@ -212,46 +250,48 @@ impl VaH264Encoder {
 
             self.output.push_back(buf.to_vec());
         }
+
+        Ok(())
     }
 
     /// Poll for encoded frame to be completed
     ///
     /// Returns `None` if nothing is ready yet, or no work has been submitted
-    pub fn poll_result(&mut self) -> Option<Vec<u8>> {
+    pub fn poll_result(&mut self) -> Result<Option<Vec<u8>>, VaError> {
         if let Some(buf) = self.output.pop_front() {
-            return Some(buf);
+            return Ok(Some(buf));
         }
 
         if let Some((src_surface, _)) = self.in_flight.front_mut()
-            && src_surface.try_sync()
+            && src_surface.try_sync()?
         {
             let (src_surface, mut coded_buffer) = self.in_flight.pop_front().unwrap();
             self.read_out_coded_buffer(&mut coded_buffer);
             self.available_src_surfaces
                 .push((src_surface, coded_buffer));
 
-            self.output.pop_front()
+            Ok(self.output.pop_front())
         } else {
-            None
+            Ok(None)
         }
     }
 
     /// Wait for encoded frame to be completed
     ///
     /// Returns `None` if work has been submitted
-    pub fn wait_result(&mut self) -> Option<Vec<u8>> {
+    pub fn wait_result(&mut self) -> Result<Option<Vec<u8>>, VaError> {
         if let Some(buf) = self.output.pop_front() {
-            return Some(buf);
+            return Ok(Some(buf));
         }
 
         if let Some((mut src_surface, mut coded_buffer)) = self.in_flight.pop_front() {
-            src_surface.sync();
+            src_surface.sync()?;
             self.read_out_coded_buffer(&mut coded_buffer);
             self.available_src_surfaces
                 .push((src_surface, coded_buffer));
         }
 
-        self.output.pop_front()
+        Ok(self.output.pop_front())
     }
 
     /// Submit a frame to be encoded
@@ -261,14 +301,14 @@ impl VaH264Encoder {
         src_strides: [usize; 3],
         src_width: u32,
         src_height: u32,
-    ) {
+    ) -> Result<(), VaError> {
         let (mut src_surface, coded_buffer) =
             if let Some(src_surface) = self.available_src_surfaces.pop() {
                 src_surface
             } else if let Some((mut src_surface, mut coded_buffer)) = self.in_flight.pop_front() {
                 // Wait for the src_surface to be ready
-                src_surface.sync();
-                self.read_out_coded_buffer(&mut coded_buffer);
+                src_surface.sync()?;
+                self.read_out_coded_buffer(&mut coded_buffer)?;
                 (src_surface, coded_buffer)
             } else {
                 panic!("ran out of source surfaces to use");
@@ -290,7 +330,7 @@ impl VaH264Encoder {
         if frame_info.frame_type == H264FrameType::B {
             self.backlogged_b_frames
                 .push((src_surface, coded_buffer, frame_info));
-            return;
+            return Ok(());
         }
 
         if frame_info.frame_type == H264FrameType::Idr {
@@ -312,9 +352,11 @@ impl VaH264Encoder {
 
             // Process backlogged B-Frames
             for (src_surface, coded_buffer, frame_info) in backlogged_b_frames {
-                self.encode_surface(&frame_info, src_surface, coded_buffer);
+                self.encode_surface(&frame_info, src_surface, coded_buffer)?;
             }
         }
+
+        Ok(())
     }
 
     fn encode_surface(
@@ -322,7 +364,7 @@ impl VaH264Encoder {
         frame_info: &FrameEncodeInfo,
         src_surface: Surface,
         coded_buffer: Buffer,
-    ) {
+    ) -> Result<(), VaError> {
         log::trace!("Encode surface {frame_info:?}");
 
         let ref_surface = if let Some(ref_surface) = self.available_ref_surfaces.pop() {
@@ -341,11 +383,11 @@ impl VaH264Encoder {
 
         if frame_info.frame_type == H264FrameType::Idr {
             // Render sequence params
-            let rc_params_buf = self.create_rate_control_params();
+            let rc_params_buf = self.create_rate_control_params()?;
             bufs.push(self.context.create_buffer_with_data(
                 ffi::VABufferType_VAEncSequenceParameterBufferType,
                 &seq_param,
-            ));
+            )?);
             bufs.push(rc_params_buf);
 
             // Render packed sequence
@@ -357,7 +399,7 @@ impl VaH264Encoder {
                     ffi::VAEncPackedHeaderTypeH264_VAEncPackedHeaderH264_SPS,
                     &packed_sequence_param,
                     &mut bufs,
-                );
+                )?;
             }
 
             // Render packed picture
@@ -367,7 +409,7 @@ impl VaH264Encoder {
                     ffi::VAEncPackedHeaderTypeH264_VAEncPackedHeaderH264_PPS,
                     &packed_picture_param,
                     &mut bufs,
-                );
+                )?;
             }
         }
 
@@ -375,7 +417,7 @@ impl VaH264Encoder {
         bufs.push(self.context.create_buffer_with_data(
             ffi::VABufferType_VAEncPictureParameterBufferType,
             &pic_param,
-        ));
+        )?);
 
         // Render packed slice
         if self.support_packed_header_slice {
@@ -393,7 +435,7 @@ impl VaH264Encoder {
         bufs.push(self.context.create_buffer_with_data(
             ffi::VABufferType_VAEncSliceParameterBufferType,
             &slice_param,
-        ));
+        )?);
 
         self.context.render_picture(&bufs);
 
@@ -412,6 +454,8 @@ impl VaH264Encoder {
         } else {
             self.available_ref_surfaces.insert(0, ref_surface);
         }
+
+        Ok(())
     }
 
     fn create_seq_params(&mut self) -> ffi::VAEncSequenceParameterBufferH264 {
@@ -453,7 +497,7 @@ impl VaH264Encoder {
         }
     }
 
-    fn create_rate_control_params(&mut self) -> Buffer {
+    fn create_rate_control_params(&mut self) -> Result<Buffer, VaError> {
         unsafe {
             // Build rate control parameter buffer
             //
@@ -463,8 +507,8 @@ impl VaH264Encoder {
                 ffi::VABufferType_VAEncMiscParameterBufferType,
                 size_of::<ffi::VAEncMiscParameterBuffer>()
                     + size_of::<ffi::VAEncMiscParameterRateControl>(),
-            );
-            let mut mapped = rate_control_params_buffer.map();
+            )?;
+            let mut mapped = rate_control_params_buffer.map()?;
             let misc_param = mapped
                 .data()
                 .cast::<ffi::VAEncMiscParameterBuffer>()
@@ -518,7 +562,7 @@ impl VaH264Encoder {
 
             drop(mapped);
 
-            rate_control_params_buffer
+            Ok(rate_control_params_buffer)
         }
     }
 
@@ -653,7 +697,12 @@ impl VaH264Encoder {
         }
     }
 
-    fn create_packed_param(&self, type_: u32, buf: &[u8], bufs: &mut Vec<Buffer>) {
+    fn create_packed_param(
+        &self,
+        type_: u32,
+        buf: &[u8],
+        bufs: &mut Vec<Buffer>,
+    ) -> Result<(), VaError> {
         let params = ffi::VAEncPackedHeaderParameterBuffer {
             type_,
             bit_length: (buf.len() * 8) as _,
@@ -664,30 +713,33 @@ impl VaH264Encoder {
         let packed_header_params = self.context.create_buffer_with_data(
             ffi::VABufferType_VAEncPackedHeaderParameterBufferType,
             &params,
-        );
+        )?;
 
         let b = self
             .context
-            .create_buffer_from_bytes(ffi::VABufferType_VAEncPackedHeaderDataBufferType, buf);
+            .create_buffer_from_bytes(ffi::VABufferType_VAEncPackedHeaderDataBufferType, buf)?;
 
         bufs.push(packed_header_params);
         bufs.push(b);
+
+        Ok(())
     }
 }
 
+// TODO: clean this up
 fn upload_yuv_to_surface(
     src_data: [&[u8]; 3],
     src_strides: [usize; 3],
     src_width: u32,
     src_height: u32,
     src_surface: &mut Surface,
-) {
-    let mut src_image = src_surface.derive_image();
+) -> Result<(), VaError> {
+    let mut src_image = src_surface.derive_image()?;
     let offsets = src_image.ffi().offsets;
     let strides = src_image.ffi().pitches;
     let fourcc = src_image.ffi().format.fourcc;
 
-    let mut mapped_src_image = src_image.map();
+    let mut mapped_src_image = src_image.map()?;
 
     let mapped_data = mapped_src_image.data();
 
@@ -715,6 +767,8 @@ fn upload_yuv_to_surface(
         },
         _ => todo!("unsupported fourcc: {fourcc}"),
     }
+
+    Ok(())
 }
 
 fn debug_pic_list(list: &[ffi::VAPictureH264]) -> Vec<u32> {
@@ -797,26 +851,25 @@ mod tests {
 
         println!("profile: {:?}", display.profiles());
 
-        let mut encoder = VaH264Encoder::new(
-            &display,
-            H264EncoderConfig {
-                profile: crate::Profile::High,
-                level: crate::Level::Level_4_2,
-                resolution: (1920, 1080),
-                framerate: None,
-                qp: None,
-                frame_pattern: H264FramePattern {
-                    intra_idr_period: 60,
-                    intra_period: 30,
-                    ip_period: 1,
-                },
-                rate_control: H264RateControlConfig::ConstantQuality {
-                    const_qp: 1,
-                    max_bitrate: None,
-                },
-                max_slice_len: None,
+        let config = H264EncoderConfig {
+            profile: crate::Profile::High,
+            level: crate::Level::Level_4_2,
+            resolution: (1920, 1080),
+            framerate: None,
+            qp: None,
+            frame_pattern: H264FramePattern {
+                intra_idr_period: 60,
+                intra_period: 30,
+                ip_period: 1,
             },
-        );
+            rate_control: H264RateControlConfig::ConstantQuality {
+                const_qp: 1,
+                max_bitrate: None,
+            },
+            max_slice_len: None,
+        };
+
+        let mut encoder = VaH264Encoder::new(&display, config).unwrap();
 
         if scap::has_permission() {
             scap::request_permission();
@@ -837,7 +890,7 @@ mod tests {
             .write(true)
             .create(true)
             .truncate(true)
-            .open("lol.h264")
+            .open("va.h264")
             .unwrap();
 
         let mut bgrx_target = ezk_image::Image::blank(
@@ -903,9 +956,11 @@ mod tests {
             let (y, y_stride) = planes.next().unwrap();
             let (uv, uv_stride) = planes.next().unwrap();
 
-            encoder.encode_frame([y, uv, &[]], [y_stride, uv_stride, 0], 1920, 1080);
+            encoder
+                .encode_frame([y, uv, &[]], [y_stride, uv_stride, 0], 1920, 1080)
+                .unwrap();
 
-            while let Some(buf) = encoder.poll_result() {
+            while let Some(buf) = encoder.poll_result().unwrap() {
                 println!("buf: {:?}", &buf[..8]);
                 file.write_all(&buf).unwrap();
             }

@@ -1,4 +1,4 @@
-use crate::Device;
+use crate::{Device, VulkanError};
 use ash::vk;
 
 pub struct Fence {
@@ -7,7 +7,7 @@ pub struct Fence {
 }
 
 impl Fence {
-    pub fn create(device: &Device) -> Result<Self, vk::Result> {
+    pub fn create(device: &Device) -> Result<Self, VulkanError> {
         unsafe {
             let fence = device
                 .device()
@@ -38,7 +38,7 @@ impl Fence {
     /// Wait for the fence completion with the given timeout in nanoseconds
     ///
     /// Returns wether `true` if the fence was signalled, and `false` if the timeout elapsed
-    pub fn wait(&self, timeout: u64) -> Result<bool, vk::Result> {
+    pub fn wait(&self, timeout: u64) -> Result<bool, VulkanError> {
         unsafe {
             match self
                 .device
@@ -47,14 +47,14 @@ impl Fence {
             {
                 Ok(()) => Ok(true),
                 Err(result) if result == vk::Result::TIMEOUT => Ok(false),
-                Err(e) => Err(e),
+                Err(e) => Err(e.into()),
             }
         }
     }
 
     /// Reset the fence after it was signalled
-    pub fn reset(&self) -> Result<(), vk::Result> {
-        unsafe { self.device.device().reset_fences(&[self.fence]) }
+    pub fn reset(&self) -> Result<(), VulkanError> {
+        unsafe { Ok(self.device.device().reset_fences(&[self.fence])?) }
     }
 }
 
