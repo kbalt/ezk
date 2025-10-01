@@ -5,7 +5,12 @@ use crate::{
         util::{FrameEncodeInfo, H264EncoderState, macro_block_align},
     },
 };
-use std::{collections::VecDeque, error::Error, mem::zeroed, ptr::null_mut};
+use std::{
+    collections::VecDeque,
+    error::Error,
+    mem::{take, zeroed},
+    ptr::null_mut,
+};
 use vulkan::{
     Buffer, CommandBuffer, Device, Fence, Image, ImageView, Instance, REQUIRED_EXTENSIONS_BASE,
     REQUIRED_EXTENSIONS_ENCODE, Semaphore, VideoFeedbackQueryPool, VideoSession,
@@ -38,8 +43,6 @@ pub struct VkH264Encoder {
 
     video_session: VideoSession,
     video_session_parameters: VideoSessionParameters,
-    // Contains SPS & PPS NAL units
-    encoded_video_session_parameters: Vec<u8>,
 
     available_encode_slots: Vec<EncodeSlot>,
     in_flight: VecDeque<EncodeSlot>,
@@ -57,6 +60,8 @@ pub struct VkH264Encoder {
     /// back contains oldest reference pictures
     /// front contains most recent reference pictures
     active_ref_images: VecDeque<DpbSlot>,
+
+    backlogged_b_frames: Vec<(FrameEncodeInfo, EncodeSlot)>,
 
     output: VecDeque<Vec<u8>>,
 }
@@ -91,7 +96,7 @@ impl VkH264Encoder {
     pub unsafe fn new(config: H264EncoderConfig) -> Result<Self, Box<dyn Error>> {
         let entry = unsafe { Entry::load().unwrap() };
 
-        let instance = Instance::load(&entry);
+        let instance = Instance::load(&entry).unwrap();
 
         let devices = dbg!(instance.instance().enumerate_physical_devices().unwrap());
 
@@ -126,8 +131,8 @@ impl VkH264Encoder {
             &[c"VK_KHR_video_encode_h264"],
         ]
         .iter()
-        .flat_map(|l| l.iter())
-        .map(|str| str.as_ptr())
+        .flat_map(|exts| exts.iter())
+        .map(|ext| ext.as_ptr())
         .collect();
 
         let mut sync2_features_enable =
@@ -202,31 +207,32 @@ impl VkH264Encoder {
             .video_profile(&video_profile_info)
             .std_header_version(&video_capabilities.std_header_version);
 
-        let video_session = VideoSession::create(&device, &create_info);
+        let video_session = VideoSession::create(&device, &create_info).unwrap();
 
         get_video_format_properties(&instance, physical_device, video_profile_info);
 
-        let video_encode_feedback_query_pool =
-            VideoFeedbackQueryPool::create(&device, PARALLEL_ENCODINGS, video_profile_info);
+        let video_feedback_query_pool =
+            VideoFeedbackQueryPool::create(&device, PARALLEL_ENCODINGS, video_profile_info)
+                .unwrap();
 
         // Create video session parameters
-        let (video_session_parameters, encoded_video_session_parameters) =
-            create_video_session_parameters(
-                &state,
-                &video_session,
-                width,
-                height,
-                profile_idc,
-                level_idc,
-                vk::native::StdVideoH264ChromaFormatIdc_STD_VIDEO_H264_CHROMA_FORMAT_IDC_420,
-            );
+        let video_session_parameters = create_video_session_parameters(
+            &state,
+            &video_session,
+            width,
+            height,
+            profile_idc,
+            level_idc,
+            vk::native::StdVideoH264ChromaFormatIdc_STD_VIDEO_H264_CHROMA_FORMAT_IDC_420,
+        );
 
         // Create command buffers
         let mut transfer_command_buffers =
-            CommandBuffer::create(&device, transfer_queue_family_index, PARALLEL_ENCODINGS);
+            CommandBuffer::create(&device, transfer_queue_family_index, PARALLEL_ENCODINGS)
+                .unwrap();
 
         let mut encode_command_buffers =
-            CommandBuffer::create(&device, encode_queue_family_index, PARALLEL_ENCODINGS);
+            CommandBuffer::create(&device, encode_queue_family_index, PARALLEL_ENCODINGS).unwrap();
 
         let mut available_encode_slots = vec![];
 
@@ -238,7 +244,22 @@ impl VkH264Encoder {
                 config.resolution.1,
             );
 
-            let input_image_view = create_image_view(&input_image, vk::ImageAspectFlags::COLOR, 0);
+            let input_image_view = {
+                let create_info = vk::ImageViewCreateInfo::default()
+                    .image(input_image.image())
+                    .view_type(vk::ImageViewType::TYPE_2D)
+                    .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
+                    .components(vk::ComponentMapping::default())
+                    .subresource_range(vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    });
+
+                ImageView::create(&input_image, &create_info).unwrap()
+            };
 
             let input_staging_buffer = {
                 let create_info = vk::BufferCreateInfo::default()
@@ -246,10 +267,24 @@ impl VkH264Encoder {
                     .usage(vk::BufferUsageFlags::TRANSFER_SRC)
                     .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
-                Buffer::create(&device, &create_info)
+                Buffer::create(&device, &create_info).unwrap()
             };
 
-            let output_buffer = create_output_buffer(&device, video_profile_info);
+            let output_buffer = {
+                let profiles = [video_profile_info];
+                let mut video_profile_list_info =
+                    vk::VideoProfileListInfoKHR::default().profiles(&profiles);
+
+                let create_info = vk::BufferCreateInfo::default()
+                    .size(1024 * 1024)
+                    .usage(
+                        vk::BufferUsageFlags::VIDEO_ENCODE_DST_KHR
+                            | vk::BufferUsageFlags::TRANSFER_SRC,
+                    )
+                    .push(&mut video_profile_list_info);
+
+                Buffer::create(&device, &create_info).unwrap()
+            };
 
             let transfer_semaphore = Semaphore::create(&device).unwrap();
             let completion_fence = Fence::create(&device).unwrap();
@@ -269,6 +304,7 @@ impl VkH264Encoder {
 
         let available_ref_images =
             create_dpb(&device, video_profile_info, max_dpb_slots, width, height)
+                .unwrap()
                 .into_iter()
                 .enumerate()
                 .map(|(i, image_view)| DpbSlot {
@@ -288,10 +324,9 @@ impl VkH264Encoder {
             encode_queue_family_index,
             transfer_queue,
             encode_queue,
-            video_feedback_query_pool: video_encode_feedback_query_pool,
+            video_feedback_query_pool,
             video_session,
             video_session_parameters,
-            encoded_video_session_parameters,
             available_encode_slots,
             in_flight: VecDeque::new(),
             max_l0_p_ref_images,
@@ -301,15 +336,17 @@ impl VkH264Encoder {
             dpb_in_correct_layout: false,
             active_ref_images: VecDeque::new(),
             output: VecDeque::new(),
+            backlogged_b_frames: Vec::new(),
         })
     }
 
     unsafe fn read_out_coded_buffer(&mut self, encode_slot: &mut EncodeSlot) {
         let bytes_written = self
             .video_feedback_query_pool
-            .get_bytes_written(encode_slot.index);
+            .get_bytes_written(encode_slot.index)
+            .unwrap();
 
-        let mapped_buffer = encode_slot.output_buffer.map(bytes_written);
+        let mapped_buffer = encode_slot.output_buffer.map(bytes_written).unwrap();
         self.output.push_back(mapped_buffer.data().to_vec());
     }
 
@@ -359,19 +396,7 @@ impl VkH264Encoder {
     #[allow(unsafe_op_in_unsafe_fn, clippy::missing_safety_doc)]
     pub unsafe fn encode_frame(&mut self, yuv_data: &[u8]) {
         let frame_info = self.state.next();
-
-        log::debug!("Encode {frame_info:?}");
-
-        if frame_info.frame_type == H264FrameType::B {
-            todo!("B-Frames not yet implemented");
-        }
-
-        if frame_info.frame_type == H264FrameType::Idr {
-            self.output
-                .push_back(self.encoded_video_session_parameters.clone());
-            self.available_ref_images
-                .extend(self.active_ref_images.drain(..));
-        }
+        log::debug!("Submit {frame_info:?}");
 
         let mut encode_slot = if let Some(encode_slot) = self.available_encode_slots.pop() {
             encode_slot
@@ -383,7 +408,61 @@ impl VkH264Encoder {
             unreachable!()
         };
 
-        self.upload_yuv_to_stage(&mut encode_slot, yuv_data);
+        self.upload_yuv_to_encode_slot(&mut encode_slot, yuv_data);
+
+        // B-Frames are not encoded immediately, they are queued until after an I or P-frame is encoded
+        if frame_info.frame_type == H264FrameType::B {
+            log::trace!("\tDeferring encode for later until a P or I frame has been encoded");
+            self.backlogged_b_frames.push((frame_info, encode_slot));
+            return;
+        }
+
+        if frame_info.frame_type == H264FrameType::Idr {
+            assert!(self.backlogged_b_frames.is_empty());
+
+            // Write out SPS & PPS to bitstream
+            let mut h264_get_encoded_params =
+                vk::VideoEncodeH264SessionParametersGetInfoKHR::default()
+                    .write_std_sps(true)
+                    .write_std_pps(true);
+
+            self.output.push_back(
+                self.video_session_parameters
+                    .get_encoded_video_session_parameters(&mut h264_get_encoded_params)
+                    .unwrap(),
+            );
+
+            // Reset DPB
+            self.available_ref_images
+                .extend(self.active_ref_images.drain(..));
+        }
+
+        self.process_encode_slot(frame_info, encode_slot);
+
+        if matches!(frame_info.frame_type, H264FrameType::I | H264FrameType::P) {
+            let backlogged_b_frames = take(&mut self.backlogged_b_frames);
+
+            // Process backlogged B-Frames
+            for (frame_info, encode_slot) in backlogged_b_frames {
+                self.process_encode_slot(frame_info, encode_slot);
+            }
+        }
+    }
+
+    unsafe fn upload_yuv_to_encode_slot(&mut self, encode_slot: &mut EncodeSlot, yuv_data: &[u8]) {
+        let mapped_buffer = encode_slot
+            .input_staging_buffer
+            .map(yuv_data.len() as u64)
+            .unwrap();
+        mapped_buffer.data_mut().copy_from_slice(yuv_data);
+    }
+
+    unsafe fn process_encode_slot(
+        &mut self,
+        frame_info: FrameEncodeInfo,
+        mut encode_slot: EncodeSlot,
+    ) {
+        log::trace!("Encode frame {frame_info:?}");
 
         self.record_transfer_queue(&mut encode_slot);
 
@@ -396,15 +475,17 @@ impl VkH264Encoder {
             unreachable!()
         };
 
+        log::trace!("\tUsing dpb slot: {}", setup_reference.slot_index);
+
         self.record_encode_queue(&mut encode_slot, frame_info, &mut setup_reference);
 
-        self.active_ref_images.push_front(setup_reference);
         self.in_flight.push_back(encode_slot);
-    }
 
-    unsafe fn upload_yuv_to_stage(&mut self, encode_slot: &mut EncodeSlot, yuv_data: &[u8]) {
-        let mapped_buffer = encode_slot.input_staging_buffer.map(yuv_data.len() as u64);
-        mapped_buffer.data_mut().copy_from_slice(yuv_data);
+        if frame_info.frame_type == H264FrameType::B {
+            self.available_ref_images.push(setup_reference);
+        } else {
+            self.active_ref_images.push_front(setup_reference);
+        }
     }
 
     unsafe fn record_transfer_queue(&mut self, encode_slot: &mut EncodeSlot) {
@@ -497,11 +578,10 @@ impl VkH264Encoder {
         if !self.dpb_in_correct_layout {
             self.dpb_in_correct_layout = true;
 
-            assert!(self.active_ref_images.is_empty());
-
             for dpb_slot in self
                 .available_ref_images
                 .iter_mut()
+                .chain(self.active_ref_images.iter_mut())
                 .chain(Some(&mut *setup_reference))
             {
                 dpb_slot.image_view.image().cmd_memory_barrier2(
@@ -519,13 +599,6 @@ impl VkH264Encoder {
             }
         }
 
-        let setup_ref_image_resource_info = vk::VideoPictureResourceInfoKHR::default()
-            .image_view_binding(setup_reference.image_view.image_view())
-            .coded_extent(vk::Extent2D {
-                width: self.width,
-                height: self.height,
-            });
-
         let primary_pic_type = match frame_info.frame_type {
             H264FrameType::P => vk::native::StdVideoH264PictureType_STD_VIDEO_H264_PICTURE_TYPE_P,
             H264FrameType::B => vk::native::StdVideoH264PictureType_STD_VIDEO_H264_PICTURE_TYPE_B,
@@ -534,6 +607,13 @@ impl VkH264Encoder {
                 vk::native::StdVideoH264PictureType_STD_VIDEO_H264_PICTURE_TYPE_IDR
             }
         };
+
+        let setup_ref_image_resource_info = vk::VideoPictureResourceInfoKHR::default()
+            .image_view_binding(setup_reference.image_view.image_view())
+            .coded_extent(vk::Extent2D {
+                width: self.width,
+                height: self.height,
+            });
 
         setup_reference.h264_reference_info.FrameNum = frame_info.frame_num.into();
         setup_reference.h264_reference_info.PicOrderCnt = frame_info.pic_order_cnt_lsb.into();
@@ -548,16 +628,16 @@ impl VkH264Encoder {
             .push(&mut setup_ref_image_h264_dpb_slot_info);
 
         // Prepare active reference images stuff
-        let max_use_reference_slots = match frame_info.frame_type {
-            H264FrameType::P => self.max_l0_p_ref_images as usize,
-            H264FrameType::B => (self.max_l0_b_ref_images + self.max_l1_b_ref_images) as usize,
-            H264FrameType::Idr | H264FrameType::I => 0,
+        let (max_l0_ref_slots, max_l1_ref_slots) = match frame_info.frame_type {
+            H264FrameType::P => (self.max_l0_p_ref_images, 0),
+            H264FrameType::B => (self.max_l0_b_ref_images, 1),
+            H264FrameType::I | H264FrameType::Idr => (0, 0),
         };
 
         let mut active_ref_image_resource_infos: Vec<_> = self
             .active_ref_images
             .iter()
-            .take(max_use_reference_slots)
+            .take((max_l0_ref_slots + max_l1_ref_slots) as usize)
             .map(|slot| {
                 let h264_dpb_slot_info = vk::VideoEncodeH264DpbSlotInfoKHR::default()
                     .std_reference_info(&slot.h264_reference_info);
@@ -617,7 +697,10 @@ impl VkH264Encoder {
             &begin_info,
         );
 
-        if frame_info.frame_num == 0 && frame_info.idr_pic_id == 1 {
+        if frame_info.frame_type == H264FrameType::Idr
+            && frame_info.frame_num == 0
+            && frame_info.idr_pic_id == 1
+        {
             self.control_video_coding(encode_slot);
         }
 
@@ -637,21 +720,57 @@ impl VkH264Encoder {
             H264FrameType::I => vk::native::StdVideoH264SliceType_STD_VIDEO_H264_SLICE_TYPE_I,
             H264FrameType::Idr => vk::native::StdVideoH264SliceType_STD_VIDEO_H264_SLICE_TYPE_I,
         };
-        std_slice_header.flags.set_direct_spatial_mv_pred_flag(1);
+        // TODO: add condition if this must be set
+        std_slice_header
+            .flags
+            .set_num_ref_idx_active_override_flag(1);
+        std_slice_header.flags.set_direct_spatial_mv_pred_flag(0);
 
         let nalu_slices = [vk::VideoEncodeH264NaluSliceInfoKHR::default()
             // .constant_qp(26)
             .std_slice_header(&std_slice_header)];
         let mut ref_lists = zeroed::<vk::native::StdVideoEncodeH264ReferenceListsInfo>();
-        let mut l0 = active_ref_image_slot_infos
+
+        // Past references
+        let mut reference_iter = active_ref_image_slot_infos
             .iter()
-            .map(|x| x.slot_index as u8);
-        ref_lists
-            .RefPicList0
-            .fill_with(|| l0.next().unwrap_or(0xFF));
-        ref_lists.RefPicList1[..].fill(0xFF);
-        ref_lists.num_ref_idx_l0_active_minus1 =
-            (active_ref_image_slot_infos.len().saturating_sub(1)) as u8;
+            .map(|slot_info| slot_info.slot_index as u8);
+
+        let l1_count = fill_pic_list(
+            &mut ref_lists.RefPicList1,
+            (&mut reference_iter).take(max_l1_ref_slots as usize),
+        );
+        let l0_count = fill_pic_list(&mut ref_lists.RefPicList0, reference_iter);
+
+        ref_lists.num_ref_idx_l0_active_minus1 = l0_count.saturating_sub(1);
+        ref_lists.num_ref_idx_l1_active_minus1 = l1_count.saturating_sub(1);
+
+        log::trace!("\tRefPicList0: {}", debug_list(&ref_lists.RefPicList0));
+        log::trace!("\tRefPicList1: {}", debug_list(&ref_lists.RefPicList1));
+
+        fn fill_pic_list(list: &mut [u8], iter: impl IntoIterator<Item = u8>) -> u8 {
+            let mut count = 0;
+            let mut iter = iter.into_iter();
+
+            for slot_index in list {
+                if let Some(v) = iter.next() {
+                    count += 1;
+                    *slot_index = v;
+                } else {
+                    *slot_index = 0xFF;
+                }
+            }
+
+            count
+        }
+
+        fn debug_list(list: &[u8]) -> String {
+            format!(
+                "{:?}",
+                list.iter().take_while(|x| **x != 0xFF).collect::<Vec<_>>()
+            )
+        }
+
         let mut h264_picture_info = zeroed::<vk::native::StdVideoEncodeH264PictureInfo>();
         h264_picture_info.PicOrderCnt = frame_info.pic_order_cnt_lsb.into();
         h264_picture_info.frame_num = frame_info.frame_num.into();
@@ -738,6 +857,9 @@ impl VkH264Encoder {
         {
             layer_rate_control_info.frame_rate_numerator = numerator;
             layer_rate_control_info.frame_rate_denominator = denominator;
+        } else {
+            layer_rate_control_info.frame_rate_numerator = 1;
+            layer_rate_control_info.frame_rate_denominator = 1;
         }
 
         if let Some((min_qp, max_qp)) = self.config.qp {
@@ -776,16 +898,17 @@ impl VkH264Encoder {
             }
         }
 
+        rate_control_info.virtual_buffer_size_in_ms = 100;
+
         let layers = [layer_rate_control_info.push(&mut h264_layer_rate_control_info)];
-        let mut video_encode_rate_control_info = rate_control_info.layers(&layers);
+        let mut rate_control_info = rate_control_info.layers(&layers);
 
         let video_coding_control_info = vk::VideoCodingControlInfoKHR::default()
             .flags(
-                vk::VideoCodingControlFlagsKHR::RESET
-                    | vk::VideoCodingControlFlagsKHR::ENCODE_RATE_CONTROL,
+                vk::VideoCodingControlFlagsKHR::RESET, // | vk::VideoCodingControlFlagsKHR::ENCODE_RATE_CONTROL, TODO: reenable & fix RC
             )
-            .push(&mut h264_rate_control_info)
-            .push(&mut video_encode_rate_control_info);
+            .push(&mut rate_control_info)
+            .push(&mut h264_rate_control_info);
 
         self.device.video_queue_device().cmd_control_video_coding(
             encode_slot.encode_command_buffer.command_buffer(),
@@ -814,27 +937,6 @@ fn set_qp(
     h264_layer_rate_control_info.use_max_qp = 1;
 }
 
-unsafe fn create_image_view(
-    image: &Image,
-    aspect_mask: vk::ImageAspectFlags,
-    array_layer: u32,
-) -> ImageView {
-    let create_info = vk::ImageViewCreateInfo::default()
-        .image(image.image())
-        .view_type(vk::ImageViewType::TYPE_2D)
-        .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
-        .components(vk::ComponentMapping::default())
-        .subresource_range(vk::ImageSubresourceRange {
-            aspect_mask,
-            base_mip_level: 0,
-            level_count: 1,
-            base_array_layer: array_layer,
-            layer_count: 1,
-        });
-
-    ImageView::create(image, &create_info)
-}
-
 fn buffer_image_copy(
     aspect_mask: vk::ImageAspectFlags,
     width: u32,
@@ -859,21 +961,6 @@ fn buffer_image_copy(
             height,
             depth: 1,
         })
-}
-
-unsafe fn create_output_buffer(
-    device: &Device,
-    video_profile_info: vk::VideoProfileInfoKHR<'_>,
-) -> Buffer {
-    let profiles = [video_profile_info];
-    let mut video_profile_list_info = vk::VideoProfileListInfoKHR::default().profiles(&profiles);
-
-    let create_info = vk::BufferCreateInfo::default()
-        .size(1024 * 1024)
-        .usage(vk::BufferUsageFlags::VIDEO_ENCODE_DST_KHR | vk::BufferUsageFlags::TRANSFER_SRC)
-        .push(&mut video_profile_list_info);
-
-    Buffer::create(device, &create_info)
 }
 
 unsafe fn create_input_image(
@@ -901,7 +988,7 @@ unsafe fn create_input_image(
         .usage(vk::ImageUsageFlags::VIDEO_ENCODE_SRC_KHR | vk::ImageUsageFlags::TRANSFER_DST)
         .push(&mut video_profile_list_info);
 
-    Image::create(device, &create_info)
+    Image::create(device, &create_info).unwrap()
 }
 
 unsafe fn create_video_session_parameters(
@@ -912,7 +999,7 @@ unsafe fn create_video_session_parameters(
     profile_idc: vk::native::StdVideoH264ProfileIdc,
     level_idc: vk::native::StdVideoH264LevelIdc,
     chrome_format_idc: vk::native::StdVideoH264ChromaFormatIdc,
-) -> (VideoSessionParameters, Vec<u8>) {
+) -> VideoSessionParameters {
     let (width_mbaligned, height_mbaligned) = (macro_block_align(width), macro_block_align(height));
 
     let mut seq_params: vk::native::StdVideoH264SequenceParameterSet = zeroed();
@@ -960,18 +1047,7 @@ unsafe fn create_video_session_parameters(
         .video_session(video_session.video_session())
         .push(&mut video_encode_h264_session_parameters_create_info);
 
-    let video_session_parameters =
-        VideoSessionParameters::create(video_session, &video_session_parameters_create_info);
-
-    // Get the encoded parameters
-    let mut h264_get_encoded_params = vk::VideoEncodeH264SessionParametersGetInfoKHR::default()
-        .write_std_sps(true)
-        .write_std_pps(true);
-
-    let encoded_video_session_parameters =
-        video_session_parameters.get_encoded_video_session_parameters(&mut h264_get_encoded_params);
-
-    (video_session_parameters, encoded_video_session_parameters)
+    VideoSessionParameters::create(video_session, &video_session_parameters_create_info).unwrap()
 }
 
 unsafe fn get_video_format_properties(
@@ -1098,6 +1174,9 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
+    use crate::encoder::config::{
+        H264EncodeContentHint, H264EncodeTuningHint, H264EncodeUsageHint,
+    };
     use crate::encoder::{H264FramePattern, H264RateControlConfig};
     use ezk_image::resize::{FilterType, ResizeAlg};
     use ezk_image::{
@@ -1119,9 +1198,12 @@ mod tests {
                 frame_pattern: H264FramePattern {
                     intra_idr_period: 120,
                     intra_period: 120,
-                    ip_period: 1,
+                    ip_period: 4,
                 },
                 rate_control: H264RateControlConfig::ConstantBitRate { bitrate: 320_000 },
+                usage_hint: H264EncodeUsageHint::Default,
+                content_hint: H264EncodeContentHint::Default,
+                tuning_hint: H264EncodeTuningHint::Default,
                 max_slice_len: None,
             })
             .unwrap();
@@ -1213,6 +1295,9 @@ mod tests {
                 encoder.encode_frame(nv12);
 
                 println!("Took: {:?}", now.elapsed());
+                while let Some(buf) = encoder.wait_result() {
+                    file.write_all(&buf).unwrap();
+                }
             }
 
             while let Some(buf) = encoder.wait_result() {
