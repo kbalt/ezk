@@ -87,7 +87,7 @@ impl H264EncoderState {
         if frame_type == H264FrameType::Idr {
             self.current_frame_num = 0;
             self.current_idr_display = self.num_submitted_frames;
-            self.idr_pic_id += 1;
+            self.idr_pic_id = self.idr_pic_id.wrapping_add(1);
         }
 
         let poc_lsb = (self.num_submitted_frames as i32 - self.current_idr_display as i32)
@@ -104,13 +104,14 @@ impl H264EncoderState {
         if frame_type != H264FrameType::B {
             self.current_frame_num += 1;
         }
+
         self.num_submitted_frames += 1;
 
         info
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct FrameEncodeInfo {
     pub(crate) frame_type: H264FrameType,
     pub(crate) frame_num: u16,

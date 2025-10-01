@@ -52,7 +52,8 @@ const MAX_SURFACES: usize = 16;
 // TODO: resolution changes
 
 pub struct VaH264Encoder {
-    h264_config: H264EncoderConfig,
+    config: H264EncoderConfig,
+    state: H264EncoderState,
 
     context: Context,
 
@@ -64,8 +65,6 @@ pub struct VaH264Encoder {
     /// Resolution macro block aligned (next 16x16 block boundary)
     width_mbaligned: u32,
     height_mbaligned: u32,
-
-    state: H264EncoderState,
 
     /// Pool of pre-allocated source surfaces and coded buffers
     available_src_surfaces: Vec<(Surface, Buffer)>,
@@ -90,14 +89,13 @@ pub struct VaH264Encoder {
 impl VaH264Encoder {
     pub fn new(
         display: &Display,
-        h264_config: H264EncoderConfig,
+        config: H264EncoderConfig,
     ) -> Result<Self, CreateVaH264EncoderError> {
-        let width_mbaligned = macro_block_align(h264_config.resolution.0);
-        let height_mbaligned = macro_block_align(h264_config.resolution.1);
+        let width_mbaligned = macro_block_align(config.resolution.0);
+        let height_mbaligned = macro_block_align(config.resolution.1);
 
-        let (profile, format) = profile_to_profile_and_format(h264_config.profile).ok_or(
-            CreateVaH264EncoderError::UnsupportedProfile(h264_config.profile),
-        )?;
+        let (profile, format) = profile_to_profile_and_format(config.profile)
+            .ok_or(CreateVaH264EncoderError::UnsupportedProfile(config.profile))?;
 
         let entrypoint = display
             .entrypoints(profile)
@@ -108,7 +106,7 @@ impl VaH264Encoder {
                     || e == ffi::VAEntrypoint_VAEntrypointEncSliceLP
             })
             .ok_or(CreateVaH264EncoderError::UnsupportedEncodeProfile(
-                h264_config.profile,
+                config.profile,
             ))?;
 
         let mut config_attributes = Vec::new();
@@ -130,7 +128,7 @@ impl VaH264Encoder {
         // Test if rate control is available
         let rc_attr = attributes[ffi::VAConfigAttribType_VAConfigAttribRateControl as usize];
         if rc_attr.value != ffi::VA_ATTRIB_NOT_SUPPORTED {
-            let rc_flag = match h264_config.rate_control {
+            let rc_flag = match config.rate_control {
                 H264RateControlConfig::ConstantBitRate { .. } => ffi::VA_RC_CBR,
                 H264RateControlConfig::VariableBitRate { .. } => ffi::VA_RC_VBR,
                 H264RateControlConfig::ConstantQuality { .. } => ffi::VA_RC_CQP,
@@ -173,13 +171,14 @@ impl VaH264Encoder {
         let max_ref_frames =
             attributes[ffi::VAConfigAttribType_VAConfigAttribEncMaxRefFrames as usize];
         let max_ref_frames = if max_ref_frames.value != ffi::VA_ATTRIB_NOT_SUPPORTED {
-            max_ref_frames.value
+            // max_ref_frames.value
+            2
         } else {
             // Limit the maximum reference frames to 2 by default
             2
         };
 
-        let config = display
+        let va_config = display
             .create_config(profile, entrypoint, &config_attributes)
             .map_err(CreateVaH264EncoderError::FailedToCreateConfig)?;
 
@@ -193,7 +192,7 @@ impl VaH264Encoder {
 
         let context = display
             .create_context(
-                &config,
+                &va_config,
                 width_mbaligned as _,
                 height_mbaligned as _,
                 ffi::VA_PROGRESSIVE as _,
@@ -219,14 +218,14 @@ impl VaH264Encoder {
             .map_err(CreateVaH264EncoderError::FailedToCreateCodedBuffer)?;
 
         Ok(VaH264Encoder {
-            h264_config,
+            config,
+            state: H264EncoderState::new(config.frame_pattern),
             context,
             support_packed_header_sequence,
             support_packed_header_picture,
             support_packed_header_slice,
             width_mbaligned,
             height_mbaligned,
-            state: H264EncoderState::new(h264_config.frame_pattern),
             available_src_surfaces: src_surfaces,
             in_flight: VecDeque::new(),
             available_ref_surfaces: ref_surfaces,
@@ -266,7 +265,7 @@ impl VaH264Encoder {
             && src_surface.try_sync()?
         {
             let (src_surface, mut coded_buffer) = self.in_flight.pop_front().unwrap();
-            self.read_out_coded_buffer(&mut coded_buffer);
+            self.read_out_coded_buffer(&mut coded_buffer)?;
             self.available_src_surfaces
                 .push((src_surface, coded_buffer));
 
@@ -286,7 +285,7 @@ impl VaH264Encoder {
 
         if let Some((mut src_surface, mut coded_buffer)) = self.in_flight.pop_front() {
             src_surface.sync()?;
-            self.read_out_coded_buffer(&mut coded_buffer);
+            self.read_out_coded_buffer(&mut coded_buffer)?;
             self.available_src_surfaces
                 .push((src_surface, coded_buffer));
         }
@@ -302,6 +301,9 @@ impl VaH264Encoder {
         src_width: u32,
         src_height: u32,
     ) -> Result<(), VaError> {
+        let frame_info = self.state.next();
+        log::debug!("Submit frame {frame_info:?}");
+
         let (mut src_surface, coded_buffer) =
             if let Some(src_surface) = self.available_src_surfaces.pop() {
                 src_surface
@@ -320,11 +322,7 @@ impl VaH264Encoder {
             src_width,
             src_height,
             &mut src_surface,
-        );
-
-        let frame_info = self.state.next();
-
-        log::trace!("Encode frame {frame_info:?}");
+        )?;
 
         // B-Frames are not encoded immediately, they are queued until after an I or P-frame is encoded
         if frame_info.frame_type == H264FrameType::B {
@@ -342,7 +340,7 @@ impl VaH264Encoder {
             }
         }
 
-        self.encode_surface(&frame_info, src_surface, coded_buffer);
+        self.encode_surface(&frame_info, src_surface, coded_buffer)?;
 
         if matches!(
             frame_info.frame_type,
@@ -365,7 +363,7 @@ impl VaH264Encoder {
         src_surface: Surface,
         coded_buffer: Buffer,
     ) -> Result<(), VaError> {
-        log::trace!("Encode surface {frame_info:?}");
+        log::trace!("Encode frame {frame_info:?}");
 
         let ref_surface = if let Some(ref_surface) = self.available_ref_surfaces.pop() {
             ref_surface
@@ -373,7 +371,7 @@ impl VaH264Encoder {
             self.reference_frames.remove(0).0
         };
 
-        self.context.begin_picture(&src_surface);
+        self.context.begin_picture(&src_surface)?;
 
         let mut bufs = Vec::new();
 
@@ -392,8 +390,7 @@ impl VaH264Encoder {
 
             // Render packed sequence
             if self.support_packed_header_sequence {
-                let packed_sequence_param =
-                    bitstream::write_sps_rbsp(&self.h264_config, &seq_param);
+                let packed_sequence_param = bitstream::write_sps_rbsp(&self.config, &seq_param);
 
                 self.create_packed_param(
                     ffi::VAEncPackedHeaderTypeH264_VAEncPackedHeaderH264_SPS,
@@ -428,7 +425,7 @@ impl VaH264Encoder {
                 ffi::VAEncPackedHeaderTypeH264_VAEncPackedHeaderH264_Slice,
                 &packed_slice_params,
                 &mut bufs,
-            );
+            )?;
         }
 
         // Render slice
@@ -437,9 +434,9 @@ impl VaH264Encoder {
             &slice_param,
         )?);
 
-        self.context.render_picture(&bufs);
+        self.context.render_picture(&bufs)?;
 
-        self.context.end_picture();
+        self.context.end_picture()?;
 
         // explicitly drop bufs after `render_picture` to ensure them not being dropped before
         drop(bufs);
@@ -462,13 +459,13 @@ impl VaH264Encoder {
         unsafe {
             let mut seq_param = zeroed::<ffi::VAEncSequenceParameterBufferH264>();
 
-            seq_param.level_idc = self.h264_config.level.level_idc();
+            seq_param.level_idc = self.config.level.level_idc();
             seq_param.picture_width_in_mbs = (self.width_mbaligned / 16) as u16;
             seq_param.picture_height_in_mbs = (self.height_mbaligned / 16) as u16;
 
-            seq_param.intra_idr_period = self.h264_config.frame_pattern.intra_idr_period;
-            seq_param.intra_period = self.h264_config.frame_pattern.intra_period;
-            seq_param.ip_period = self.h264_config.frame_pattern.ip_period;
+            seq_param.intra_idr_period = self.config.frame_pattern.intra_idr_period.into();
+            seq_param.intra_period = self.config.frame_pattern.intra_period.into();
+            seq_param.ip_period = self.config.frame_pattern.ip_period.into();
 
             seq_param.max_num_ref_frames = self.max_ref_frames as u32;
             seq_param.time_scale = 900; // TODO: configurable
@@ -485,7 +482,7 @@ impl VaH264Encoder {
             seq_fields.set_chroma_format_idc(1); // TODO: configurable this is currently harcoded to yuv420
             seq_fields.set_direct_8x8_inference_flag(1);
 
-            let (width, height) = self.h264_config.resolution;
+            let (width, height) = self.config.resolution;
 
             if width != self.width_mbaligned || height != self.height_mbaligned {
                 seq_param.frame_cropping_flag = 1;
@@ -509,29 +506,24 @@ impl VaH264Encoder {
                     + size_of::<ffi::VAEncMiscParameterRateControl>(),
             )?;
             let mut mapped = rate_control_params_buffer.map()?;
-            let misc_param = mapped
-                .data()
-                .cast::<ffi::VAEncMiscParameterBuffer>()
-                .as_mut()
-                .unwrap();
+            let misc_param = &mut *mapped.data().cast::<ffi::VAEncMiscParameterBuffer>();
             misc_param.type_ = ffi::VAEncMiscParameterType_VAEncMiscParameterTypeRateControl;
-            let rate_control_params = misc_param
+
+            let rate_control_params = &mut *misc_param
                 .data
                 .as_mut_ptr()
-                .cast::<ffi::VAEncMiscParameterRateControl>()
-                .as_mut()
-                .unwrap();
+                .cast::<ffi::VAEncMiscParameterRateControl>();
 
             *rate_control_params = zeroed();
 
             rate_control_params.window_size = 100;
 
-            if let Some((min_qp, max_qp)) = self.h264_config.qp {
+            if let Some((min_qp, max_qp)) = self.config.qp {
                 rate_control_params.min_qp = min_qp.into();
                 rate_control_params.max_qp = max_qp.into();
             }
 
-            match self.h264_config.rate_control {
+            match self.config.rate_control {
                 H264RateControlConfig::ConstantBitRate { bitrate } => {
                     rate_control_params.rc_flags.value = ffi::VA_RC_CBR;
                     rate_control_params.bits_per_second = bitrate;
@@ -860,12 +852,15 @@ mod tests {
             frame_pattern: H264FramePattern {
                 intra_idr_period: 60,
                 intra_period: 30,
-                ip_period: 1,
+                ip_period: 4,
             },
             rate_control: H264RateControlConfig::ConstantQuality {
                 const_qp: 1,
                 max_bitrate: None,
             },
+            usage_hint: Default::default(),
+            content_hint: Default::default(),
+            tuning_hint: Default::default(),
             max_slice_len: None,
         };
 
