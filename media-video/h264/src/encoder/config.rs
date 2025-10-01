@@ -33,6 +33,15 @@ pub struct H264EncoderConfig {
     /// Rate control configuration
     pub rate_control: H264RateControlConfig,
 
+    /// Hint for the encoder what the H.264 stream is used for
+    pub usage_hint: H264EncodeUsageHint,
+
+    /// Hint about the video content
+    pub content_hint: H264EncodeContentHint,
+
+    /// Hint about the video encode tuning mode to use
+    pub tuning_hint: H264EncodeTuningHint,
+
     /// Limit the output slice size.
     ///
     /// Required if the packetization mode is SingleNAL which doesn't support fragmentation units.
@@ -56,6 +65,9 @@ impl H264EncoderConfig {
             rate_control: H264RateControlConfig::ConstantBitRate {
                 bitrate: fmtp.max_bitrate(),
             },
+            usage_hint: H264EncodeUsageHint::Default,
+            content_hint: H264EncodeContentHint::Default,
+            tuning_hint: H264EncodeTuningHint::Default,
             max_slice_len: {
                 match fmtp.packetization_mode {
                     PacketizationMode::SingleNAL => Some(mtu),
@@ -120,17 +132,17 @@ pub struct H264FramePattern {
     /// Period in which to create IDR-Frames
     ///
     /// Must be a multiple of `i_period` (or `p_period`) if set
-    pub intra_idr_period: u32,
+    pub intra_idr_period: u16,
 
     /// Period in which to create I-Frames
     ///
     /// Must be a multiple of `ip_period` if set
-    pub intra_period: u32,
+    pub intra_period: u16,
 
     /// How often to insert P-Frames, instead of B-Frames
     ///
     /// B-Frames are not inserted if this is set to `None` or `Some(1)`
-    pub ip_period: u32,
+    pub ip_period: u16,
 }
 
 impl Default for H264FramePattern {
@@ -146,26 +158,26 @@ impl Default for H264FramePattern {
 impl H264FramePattern {
     // public for doc test
     #[doc(hidden)]
-    pub const fn frame_type_of_nth_frame(&self, n: u32) -> H264FrameType {
+    pub fn frame_type_of_nth_frame(&self, n: u32) -> H264FrameType {
         // Always start with an IDR frame
         if n == 0 {
             return H264FrameType::Idr;
         }
 
         // Emit IDR frame every idr_period frames
-        if n.is_multiple_of(self.intra_idr_period) {
+        if n.is_multiple_of(self.intra_idr_period.into()) {
             return H264FrameType::Idr;
         }
 
         // Emit I frame every i_period frames
-        if n.is_multiple_of(self.intra_period) {
+        if n.is_multiple_of(self.intra_period.into()) {
             return H264FrameType::I;
         }
 
         // Emit P frame every ip_period frames
-        if n.is_multiple_of(self.ip_period) {
+        if n.is_multiple_of(self.ip_period.into()) {
             H264FrameType::P
-        } else if (n + 1).is_multiple_of(self.intra_idr_period) {
+        } else if (n + 1).is_multiple_of(self.intra_idr_period.into()) {
             // This should have been a B-Frame, but the next on is an IDR Frame.
             // Since B-Frames cannot be used as references for other B-Frames (yet), emit an P-Frame instead.
             H264FrameType::P
@@ -206,4 +218,33 @@ impl H264FrameRate {
             denominator: 1,
         }
     }
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+pub enum H264EncodeUsageHint {
+    #[default]
+    Default,
+    Transcoding,
+    Streaming,
+    Recording,
+    Conferencing,
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+pub enum H264EncodeContentHint {
+    #[default]
+    Default,
+    Camera,
+    Desktop,
+    Rendered,
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+pub enum H264EncodeTuningHint {
+    #[default]
+    Default,
+    HighQuality,
+    LowLatency,
+    UltraLowLatency,
+    Lossless,
 }
