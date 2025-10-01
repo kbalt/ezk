@@ -1,5 +1,10 @@
+#![cfg(target_os = "linux")]
+
 use std::{
+    backtrace::{Backtrace, BacktraceStatus},
+    error::Error,
     ffi::{CStr, c_void},
+    fmt,
     fs::File,
 };
 
@@ -23,14 +28,23 @@ pub use display::{Display, DisplayOpenDrmError};
 pub use image::{Image, MappedImage};
 pub use surface::Surface;
 
-#[derive(Debug, thiserror::Error)]
-#[error("VAError, status={status}, text={text:?}")]
+struct Handle {
+    _drm_file: File,
+    dpy: *mut c_void,
+}
+
+unsafe impl Send for Handle {}
+unsafe impl Sync for Handle {}
+
+#[derive(Debug)]
 pub struct VaError {
     status: ffi::VAStatus,
     text: Option<&'static CStr>,
+    backtrace: Backtrace,
 }
 
 impl VaError {
+    #[track_caller]
     fn try_(status: ffi::VAStatus) -> Result<(), Self> {
         if status == ffi::VA_STATUS_SUCCESS as ffi::VAStatus {
             Ok(())
@@ -43,15 +57,29 @@ impl VaError {
                 Some(unsafe { CStr::from_ptr(error_str) })
             };
 
-            Err(Self { status, text })
+            let backtrace = Backtrace::capture();
+
+            Err(Self {
+                status,
+                text,
+                backtrace,
+            })
         }
     }
 }
 
-struct Handle {
-    _drm_file: File,
-    dpy: *mut c_void,
+impl fmt::Display for VaError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(text) = self.text {
+            write!(f, " description={:?}", text)?;
+        }
+
+        if self.backtrace.status() != BacktraceStatus::Disabled {
+            write!(f, " backtrace={}", self.backtrace)?;
+        }
+
+        Ok(())
+    }
 }
 
-unsafe impl Send for Handle {}
-unsafe impl Sync for Handle {}
+impl Error for VaError {}

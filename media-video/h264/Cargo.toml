@@ -22,13 +22,15 @@ bitstream-io = "4"
 scap = "0.0.8"
 ezk-image = "0.3.0"
 
-
 openh264 = { version = "0.8", optional = true }
 openh264-sys2 = { version = "0.8", optional = true }
 log = "0.4"
-libva.workspace = true
 vulkan.workspace = true
 h264-parser = "0.2"
+bitflags = "2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libva.workspace = true
 
 [dev-dependencies]
 env_logger = "0.11"

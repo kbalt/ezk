@@ -70,7 +70,7 @@ pub fn openh264_encoder_config(c: H264EncoderConfig) -> openh264::encoder::Encod
     }
 
     config = config.intra_frame_period(IntraFramePeriod::from_num_frames(
-        c.frame_pattern.intra_idr_period,
+        c.frame_pattern.intra_idr_period.into(),
     ));
 
     match c.rate_control {

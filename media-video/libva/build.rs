@@ -1,6 +1,10 @@
 use std::env;
 
 fn main() {
+    if cfg!(not(target_os = "linux")) {
+        return;
+    }
+
     let libva = pkg_config::probe_library("libva").unwrap();
     let libva_drm = pkg_config::probe_library("libva-drm").unwrap();
 
