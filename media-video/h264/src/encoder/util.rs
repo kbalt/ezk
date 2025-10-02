@@ -92,12 +92,13 @@ impl H264EncoderState {
 
         let poc_lsb = (self.num_submitted_frames as i32 - self.current_idr_display as i32)
             % self.max_pic_order_cnt_lsb;
+
         let poc = self.calc_top_field_order_cnt(frame_type, poc_lsb);
 
         let info = FrameEncodeInfo {
             frame_type,
             frame_num: self.current_frame_num,
-            pic_order_cnt_lsb: poc.try_into().unwrap(),
+            pic_order_cnt_lsb: poc as u16,
             idr_pic_id: self.idr_pic_id,
         };
 

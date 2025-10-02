@@ -87,6 +87,7 @@ struct EncodeSlot {
 
 struct DpbSlot {
     slot_index: u32,
+    pic_order_cnt: Option<u16>,
     image_view: ImageView,
     h264_reference_info: vk::native::StdVideoEncodeH264ReferenceInfo,
 }
@@ -100,7 +101,7 @@ impl VkH264Encoder {
 
         let devices = dbg!(instance.instance().enumerate_physical_devices().unwrap());
 
-        let physical_device = devices[1];
+        let physical_device = devices[0];
 
         let queue_family_properties = instance
             .instance()
@@ -311,7 +312,9 @@ impl VkH264Encoder {
                     slot_index: i as u32,
                     image_view,
                     h264_reference_info: zeroed(),
+                    pic_order_cnt: None,
                 })
+                .rev()
                 .collect();
 
         Ok(VkH264Encoder {
@@ -434,7 +437,10 @@ impl VkH264Encoder {
 
             // Reset DPB
             self.available_ref_images
-                .extend(self.active_ref_images.drain(..));
+                .extend(self.active_ref_images.drain(..).map(|dpb_slot| DpbSlot {
+                    pic_order_cnt: None,
+                    ..dpb_slot
+                }));
         }
 
         self.process_encode_slot(frame_info, encode_slot);
@@ -484,6 +490,8 @@ impl VkH264Encoder {
         if frame_info.frame_type == H264FrameType::B {
             self.available_ref_images.push(setup_reference);
         } else {
+            setup_reference.pic_order_cnt = Some(frame_info.pic_order_cnt_lsb);
+
             self.active_ref_images.push_front(setup_reference);
         }
     }
@@ -575,6 +583,19 @@ impl VkH264Encoder {
             )
             .unwrap();
 
+        encode_slot.input_image.cmd_memory_barrier2(
+            encode_slot.encode_command_buffer.command_buffer(),
+            vk::ImageLayout::VIDEO_ENCODE_SRC_KHR,
+            vk::ImageLayout::VIDEO_ENCODE_SRC_KHR,
+            self.transfer_queue_family_index,
+            self.encode_queue_family_index,
+            vk::PipelineStageFlags2::NONE,
+            vk::AccessFlags2::empty(),
+            vk::PipelineStageFlags2::VIDEO_ENCODE_KHR,
+            vk::AccessFlags2::VIDEO_ENCODE_READ_KHR,
+            0,
+        );
+
         if !self.dpb_in_correct_layout {
             self.dpb_in_correct_layout = true;
 
@@ -599,6 +620,40 @@ impl VkH264Encoder {
             }
         }
 
+        let l0 = self
+            .active_ref_images
+            .iter()
+            .filter(|dpb_slot| dpb_slot.pic_order_cnt.unwrap() < frame_info.pic_order_cnt_lsb);
+        let l1 = self
+            .active_ref_images
+            .iter()
+            .rev()
+            .filter(|dpb_slot| dpb_slot.pic_order_cnt.unwrap() > frame_info.pic_order_cnt_lsb);
+
+        let (l0, l1) = match frame_info.frame_type {
+            H264FrameType::P => (l0.take(self.max_l0_p_ref_images as usize).collect(), vec![]),
+            H264FrameType::B => (
+                l0.take(self.max_l0_b_ref_images as usize).collect(),
+                l1.take(self.max_l1_b_ref_images as usize).collect(),
+            ),
+            H264FrameType::I | H264FrameType::Idr => (vec![], vec![]),
+        };
+
+        for dpb_slot in l0.iter().chain(l1.iter()).chain(Some(&&*setup_reference)) {
+            dpb_slot.image_view.image().cmd_memory_barrier2(
+                encode_slot.encode_command_buffer.command_buffer(),
+                vk::ImageLayout::VIDEO_ENCODE_DPB_KHR,
+                vk::ImageLayout::VIDEO_ENCODE_DPB_KHR,
+                vk::QUEUE_FAMILY_IGNORED,
+                vk::QUEUE_FAMILY_IGNORED,
+                vk::PipelineStageFlags2::VIDEO_ENCODE_KHR,
+                vk::AccessFlags2::VIDEO_ENCODE_WRITE_KHR | vk::AccessFlags2::VIDEO_ENCODE_READ_KHR,
+                vk::PipelineStageFlags2::VIDEO_ENCODE_KHR,
+                vk::AccessFlags2::VIDEO_ENCODE_READ_KHR,
+                dpb_slot.image_view.subresource_range().base_array_layer,
+            );
+        }
+
         let primary_pic_type = match frame_info.frame_type {
             H264FrameType::P => vk::native::StdVideoH264PictureType_STD_VIDEO_H264_PICTURE_TYPE_P,
             H264FrameType::B => vk::native::StdVideoH264PictureType_STD_VIDEO_H264_PICTURE_TYPE_B,
@@ -615,9 +670,21 @@ impl VkH264Encoder {
                 height: self.height,
             });
 
-        setup_reference.h264_reference_info.FrameNum = frame_info.frame_num.into();
-        setup_reference.h264_reference_info.PicOrderCnt = frame_info.pic_order_cnt_lsb.into();
-        setup_reference.h264_reference_info.primary_pic_type = primary_pic_type;
+        setup_reference.h264_reference_info = vk::native::StdVideoEncodeH264ReferenceInfo {
+            flags: vk::native::StdVideoEncodeH264ReferenceInfoFlags {
+                _bitfield_align_1: [0; 0],
+                _bitfield_1: vk::native::StdVideoEncodeH264ReferenceInfoFlags::new_bitfield_1(
+                    0, // used_for_long_term_reference
+                    0, // reserved
+                ),
+            },
+            primary_pic_type,
+            FrameNum: frame_info.frame_num.into(),
+            PicOrderCnt: frame_info.pic_order_cnt_lsb.into(),
+            long_term_pic_num: 0,
+            long_term_frame_idx: 0,
+            temporal_id: 0,
+        };
 
         let mut setup_ref_image_h264_dpb_slot_info = vk::VideoEncodeH264DpbSlotInfoKHR::default()
             .std_reference_info(&setup_reference.h264_reference_info);
@@ -628,16 +695,10 @@ impl VkH264Encoder {
             .push(&mut setup_ref_image_h264_dpb_slot_info);
 
         // Prepare active reference images stuff
-        let (max_l0_ref_slots, max_l1_ref_slots) = match frame_info.frame_type {
-            H264FrameType::P => (self.max_l0_p_ref_images, 0),
-            H264FrameType::B => (self.max_l0_b_ref_images, 1),
-            H264FrameType::I | H264FrameType::Idr => (0, 0),
-        };
 
-        let mut active_ref_image_resource_infos: Vec<_> = self
-            .active_ref_images
+        let mut active_ref_image_resource_infos: Vec<_> = l0
             .iter()
-            .take((max_l0_ref_slots + max_l1_ref_slots) as usize)
+            .chain(l1.iter())
             .map(|slot| {
                 let h264_dpb_slot_info = vk::VideoEncodeH264DpbSlotInfoKHR::default()
                     .std_reference_info(&slot.h264_reference_info);
@@ -651,6 +712,7 @@ impl VkH264Encoder {
                 (slot.slot_index, picture_resource_info, h264_dpb_slot_info)
             })
             .collect();
+
         let active_ref_image_slot_infos: Vec<_> = active_ref_image_resource_infos
             .iter_mut()
             .map(|(slot_index, picture_resource, h264_dpb_slot)| {
@@ -667,24 +729,13 @@ impl VkH264Encoder {
             encode_slot.index,
         );
 
-        encode_slot.input_image.cmd_memory_barrier2(
-            encode_slot.encode_command_buffer.command_buffer(),
-            vk::ImageLayout::VIDEO_ENCODE_SRC_KHR,
-            vk::ImageLayout::VIDEO_ENCODE_SRC_KHR,
-            self.transfer_queue_family_index,
-            self.encode_queue_family_index,
-            vk::PipelineStageFlags2::NONE,
-            vk::AccessFlags2::empty(),
-            vk::PipelineStageFlags2::VIDEO_ENCODE_KHR,
-            vk::AccessFlags2::VIDEO_ENCODE_READ_KHR,
-            0,
-        );
-
         // Build the reference slots list for the begin video coding command
         let mut use_reference_slots = active_ref_image_slot_infos.clone();
         use_reference_slots.push(setup_ref_image_slot_info);
         // TODO: marking setup slot as not active, validation layers are not complaining but not sure if its correct
-        use_reference_slots.last_mut().unwrap().slot_index = -1;
+        if setup_reference.pic_order_cnt.is_none() {
+            use_reference_slots.last_mut().unwrap().slot_index = -1;
+        }
 
         let begin_info = vk::VideoBeginCodingInfoKHR::default()
             .video_session(self.video_session.video_session())
@@ -713,56 +764,56 @@ impl VkH264Encoder {
             })
             .base_array_layer(0);
 
-        let mut std_slice_header = zeroed::<vk::native::StdVideoEncodeH264SliceHeader>();
-        std_slice_header.slice_type = match frame_info.frame_type {
-            H264FrameType::P => vk::native::StdVideoH264SliceType_STD_VIDEO_H264_SLICE_TYPE_P,
-            H264FrameType::B => vk::native::StdVideoH264SliceType_STD_VIDEO_H264_SLICE_TYPE_B,
-            H264FrameType::I => vk::native::StdVideoH264SliceType_STD_VIDEO_H264_SLICE_TYPE_I,
-            H264FrameType::Idr => vk::native::StdVideoH264SliceType_STD_VIDEO_H264_SLICE_TYPE_I,
+        let  std_slice_header = vk::native::StdVideoEncodeH264SliceHeader {
+            flags: vk::native::StdVideoEncodeH264SliceHeaderFlags {
+                _bitfield_align_1: [0; 0],
+                _bitfield_1: vk::native::StdVideoEncodeH264SliceHeaderFlags::new_bitfield_1(
+                    1, // direct_spatial_mv_pred_flag
+                    // TODO: add condition if this must be set
+                    1, // num_ref_idx_active_override_flag
+                    0, // reserved
+                ),
+            },
+            first_mb_in_slice: 0,
+            slice_type: match frame_info.frame_type {
+                H264FrameType::P => vk::native::StdVideoH264SliceType_STD_VIDEO_H264_SLICE_TYPE_P,
+                H264FrameType::B => vk::native::StdVideoH264SliceType_STD_VIDEO_H264_SLICE_TYPE_B,
+                H264FrameType::I => vk::native::StdVideoH264SliceType_STD_VIDEO_H264_SLICE_TYPE_I,
+                H264FrameType::Idr => vk::native::StdVideoH264SliceType_STD_VIDEO_H264_SLICE_TYPE_I,
+            },
+            slice_alpha_c0_offset_div2: 0,
+            slice_beta_offset_div2: 0,
+            slice_qp_delta: 0,
+            reserved1: 0,
+            cabac_init_idc: vk::native::StdVideoH264CabacInitIdc_STD_VIDEO_H264_CABAC_INIT_IDC_0,
+            disable_deblocking_filter_idc: vk::native::StdVideoH264DisableDeblockingFilterIdc_STD_VIDEO_H264_DISABLE_DEBLOCKING_FILTER_IDC_DISABLED,
+            pWeightTable: null_mut(),
         };
-        // TODO: add condition if this must be set
-        std_slice_header
-            .flags
-            .set_num_ref_idx_active_override_flag(1);
-        std_slice_header.flags.set_direct_spatial_mv_pred_flag(0);
 
         let nalu_slices = [vk::VideoEncodeH264NaluSliceInfoKHR::default()
             // .constant_qp(26)
             .std_slice_header(&std_slice_header)];
         let mut ref_lists = zeroed::<vk::native::StdVideoEncodeH264ReferenceListsInfo>();
 
-        // Past references
-        let mut reference_iter = active_ref_image_slot_infos
-            .iter()
-            .map(|slot_info| slot_info.slot_index as u8);
+        let mut l0_iter = l0.iter().map(|dpb_slot| dpb_slot.slot_index as u8);
+        ref_lists
+            .RefPicList0
+            .fill_with(|| l0_iter.next().unwrap_or(0xFF));
 
-        let l1_count = fill_pic_list(
-            &mut ref_lists.RefPicList1,
-            (&mut reference_iter).take(max_l1_ref_slots as usize),
-        );
-        let l0_count = fill_pic_list(&mut ref_lists.RefPicList0, reference_iter);
+        let mut l1_iter = l1.iter().map(|dpb_slot| dpb_slot.slot_index as u8);
+        ref_lists
+            .RefPicList1
+            .fill_with(|| l1_iter.next().unwrap_or(0xFF));
 
-        ref_lists.num_ref_idx_l0_active_minus1 = l0_count.saturating_sub(1);
-        ref_lists.num_ref_idx_l1_active_minus1 = l1_count.saturating_sub(1);
+        ref_lists.num_ref_idx_l0_active_minus1 = l0.len().saturating_sub(1) as u8;
+        ref_lists.num_ref_idx_l1_active_minus1 = l1.len().saturating_sub(1) as u8;
 
+        // ref_lists.flags.set_ref_pic_list_modification_flag_l0(1);
+        // if frame_info.frame_type == H264FrameType::B {
+        //     ref_lists.flags.set_ref_pic_list_modification_flag_l1(1);
+        // }
         log::trace!("\tRefPicList0: {}", debug_list(&ref_lists.RefPicList0));
         log::trace!("\tRefPicList1: {}", debug_list(&ref_lists.RefPicList1));
-
-        fn fill_pic_list(list: &mut [u8], iter: impl IntoIterator<Item = u8>) -> u8 {
-            let mut count = 0;
-            let mut iter = iter.into_iter();
-
-            for slot_index in list {
-                if let Some(v) = iter.next() {
-                    count += 1;
-                    *slot_index = v;
-                } else {
-                    *slot_index = 0xFF;
-                }
-            }
-
-            count
-        }
 
         fn debug_list(list: &[u8]) -> String {
             format!(
@@ -771,18 +822,28 @@ impl VkH264Encoder {
             )
         }
 
-        let mut h264_picture_info = zeroed::<vk::native::StdVideoEncodeH264PictureInfo>();
-        h264_picture_info.PicOrderCnt = frame_info.pic_order_cnt_lsb.into();
-        h264_picture_info.frame_num = frame_info.frame_num.into();
-        h264_picture_info.idr_pic_id = frame_info.idr_pic_id;
-        h264_picture_info.pRefLists = &raw const ref_lists;
-        h264_picture_info.primary_pic_type = primary_pic_type;
-        h264_picture_info
-            .flags
-            .set_IdrPicFlag((frame_info.frame_type == H264FrameType::Idr) as u32);
-        h264_picture_info
-            .flags
-            .set_is_reference((frame_info.frame_type != H264FrameType::B) as u32);
+        let h264_picture_info = vk::native::StdVideoEncodeH264PictureInfo {
+            flags: vk::native::StdVideoEncodeH264PictureInfoFlags {
+                _bitfield_align_1: [0; 0],
+                _bitfield_1: vk::native::StdVideoEncodeH264PictureInfoFlags::new_bitfield_1(
+                    (frame_info.frame_type == H264FrameType::Idr) as u32, // IdrPicFlag
+                    (frame_info.frame_type != H264FrameType::B) as u32,   // is_reference
+                    0, // no_output_of_prior_pics_flag
+                    0, // long_term_reference_flag
+                    0, // adaptive_ref_pic_marking_mode_flag
+                    0, // reserved
+                ),
+            },
+            seq_parameter_set_id: 0,
+            pic_parameter_set_id: 0,
+            idr_pic_id: frame_info.idr_pic_id,
+            primary_pic_type,
+            frame_num: frame_info.frame_num.into(),
+            PicOrderCnt: frame_info.pic_order_cnt_lsb.into(),
+            temporal_id: 0,
+            reserved1: [0; 3],
+            pRefLists: &raw const ref_lists,
+        };
 
         let mut h264_encode_info = vk::VideoEncodeH264PictureInfoKHR::default()
             .generate_prefix_nalu(false)
@@ -792,7 +853,7 @@ impl VkH264Encoder {
         let encode_info = vk::VideoEncodeInfoKHR::default()
             .src_picture_resource(src_picture_resource_plane0)
             .dst_buffer(encode_slot.output_buffer.buffer())
-            .dst_buffer_range(1024 * 1024) // TOD: actually use the value here of the buffer
+            .dst_buffer_range(1024 * 1024) // TODO: actually use the value here of the buffer
             .reference_slots(&active_ref_image_slot_infos)
             .flags(vk::VideoEncodeFlagsKHR::empty())
             .setup_reference_slot(&setup_ref_image_slot_info)
@@ -1013,9 +1074,9 @@ unsafe fn create_video_session_parameters(
     seq_params.max_num_ref_frames = 2; // TODO: configure
     seq_params.pic_width_in_mbs_minus1 = (width_mbaligned / 16) - 1;
     seq_params.pic_height_in_map_units_minus1 = (height_mbaligned / 16) - 1;
+
     seq_params.flags.set_frame_mbs_only_flag(1);
     seq_params.flags.set_direct_8x8_inference_flag(1);
-    seq_params.flags.set_vui_parameters_present_flag(0);
 
     if width != width_mbaligned || height != height_mbaligned {
         seq_params.flags.set_frame_cropping_flag(1);
@@ -1295,9 +1356,6 @@ mod tests {
                 encoder.encode_frame(nv12);
 
                 println!("Took: {:?}", now.elapsed());
-                while let Some(buf) = encoder.wait_result() {
-                    file.write_all(&buf).unwrap();
-                }
             }
 
             while let Some(buf) = encoder.wait_result() {
