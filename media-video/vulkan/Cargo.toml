@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-ash = { git = "https://github.com/kbalt/ash.git", rev = "cc89f2a9ffc3471d8c1b9ecfa4521801f6a0ec00" }
+ash = "0.38.0+1.3.281"
 log = "0.4"
 
 [lints]
