@@ -1325,7 +1325,6 @@ mod tests {
     use ezk_image::{
         ColorInfo, ColorPrimaries, ColorSpace, ColorTransfer, PixelFormat, YuvColorInfo,
     };
-    use scap::frame::Frame;
 
     #[test]
     fn bb() {
@@ -1351,23 +1350,17 @@ mod tests {
             })
             .unwrap();
 
-            if scap::has_permission() {
-                scap::request_permission();
-            }
+            let monitors = xcap::Monitor::all().unwrap();
+
+            let monitor = &monitors[0];
+            let (rec, receiver) = monitor.video_recorder().unwrap();
+            rec.start().unwrap();
 
             let mut resizer =
                 ezk_image::resize::Resizer::new(ResizeAlg::Convolution(FilterType::Bilinear));
 
-            let mut capturer = scap::capturer::Capturer::build(scap::capturer::Options {
-                fps: 60,
-                ..Default::default()
-            })
-            .unwrap();
-
-            capturer.start_capture();
-
             let mut bgrx_target = ezk_image::Image::blank(
-                PixelFormat::BGRA,
+                PixelFormat::RGBA,
                 1920,
                 1080,
                 ColorInfo::YUV(YuvColorInfo {
@@ -1398,23 +1391,19 @@ mod tests {
                 .unwrap();
 
             let mut i = 0;
-            while let Ok(frame) = capturer.get_next_frame() {
+            while i < 500 {
                 i += 1;
-                if i > 500 {
-                    break;
-                }
 
-                let bgrx = match frame {
-                    Frame::BGRx(bgrx) => bgrx,
-                    _ => todo!(),
-                };
+                let image = receiver.recv().unwrap();
+
+                let bgrx = image.raw;
 
                 let bgrx_original = ezk_image::Image::from_buffer(
-                    PixelFormat::BGRA,
-                    bgrx.data,
+                    PixelFormat::RGBA,
+                    bgrx,
                     None,
-                    bgrx.width as usize,
-                    bgrx.height as usize,
+                    image.width as usize,
+                    image.height as usize,
                     ColorInfo::YUV(YuvColorInfo {
                         transfer: ColorTransfer::Linear,
                         full_range: false,
