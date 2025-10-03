@@ -6,6 +6,7 @@ use crate::{
     },
 };
 use std::{
+    cmp,
     collections::VecDeque,
     error::Error,
     mem::{take, zeroed},
@@ -17,7 +18,7 @@ use vulkan::{
     VideoSessionParameters,
     ash::{
         Entry,
-        vk::{self, Handle, TaggedStructure},
+        vk::{self, Handle},
     },
     create_dpb,
 };
@@ -43,6 +44,10 @@ pub struct VkH264Encoder {
 
     video_session: VideoSession,
     video_session_parameters: VideoSessionParameters,
+    video_session_needs_control: bool,
+    video_session_needs_reset: bool,
+
+    rate_control: Box<RateControl>,
 
     available_encode_slots: Vec<EncodeSlot>,
     in_flight: VecDeque<EncodeSlot>,
@@ -90,6 +95,103 @@ struct DpbSlot {
     pic_order_cnt: Option<u16>,
     image_view: ImageView,
     h264_reference_info: vk::native::StdVideoEncodeH264ReferenceInfo,
+}
+
+struct RateControl {
+    h264_layer: vk::VideoEncodeH264RateControlLayerInfoKHR<'static>,
+    layer: vk::VideoEncodeRateControlLayerInfoKHR<'static>,
+
+    h264_info: vk::VideoEncodeH264RateControlInfoKHR<'static>,
+    info: vk::VideoEncodeRateControlInfoKHR<'static>,
+}
+
+impl RateControl {
+    fn default() -> Box<Self> {
+        let mut this = Box::new(RateControl {
+            h264_layer: vk::VideoEncodeH264RateControlLayerInfoKHR::default(),
+            layer: vk::VideoEncodeRateControlLayerInfoKHR::default(),
+            h264_info: vk::VideoEncodeH264RateControlInfoKHR::default(),
+            info: vk::VideoEncodeRateControlInfoKHR::default(),
+        });
+
+        this.info.virtual_buffer_size_in_ms = 100;
+
+        this.layer.p_next = (&raw mut this.h264_layer).cast();
+        this.info.p_next = (&raw mut this.h264_info).cast();
+
+        this.info.p_layers = &raw const this.layer;
+        this.info.layer_count = 1;
+
+        this
+    }
+
+    fn update_from_config(&mut self, config: &H264EncoderConfig) {
+        if let Some(H264FrameRate {
+            numerator,
+            denominator,
+        }) = config.framerate
+        {
+            self.layer.frame_rate_numerator = numerator;
+            self.layer.frame_rate_denominator = denominator;
+        } else {
+            self.layer.frame_rate_numerator = 1;
+            self.layer.frame_rate_denominator = 1;
+        }
+
+        if let Some((min_qp, max_qp)) = config.qp {
+            set_qp(&mut self.h264_layer, min_qp, max_qp);
+        }
+
+        match config.rate_control {
+            H264RateControlConfig::ConstantBitRate { bitrate } => {
+                self.info.rate_control_mode = vk::VideoEncodeRateControlModeFlagsKHR::CBR;
+                self.layer.average_bitrate = bitrate.into();
+                self.layer.max_bitrate = bitrate.into();
+            }
+            H264RateControlConfig::VariableBitRate {
+                average_bitrate,
+                max_bitrate,
+            } => {
+                self.info.rate_control_mode = vk::VideoEncodeRateControlModeFlagsKHR::VBR;
+                self.layer.average_bitrate = average_bitrate.into();
+                self.layer.max_bitrate = max_bitrate.into();
+            }
+            H264RateControlConfig::ConstantQuality {
+                const_qp,
+                max_bitrate,
+            } => {
+                if let Some(max_bitrate) = max_bitrate {
+                    // TODO: Trying to limit the bitrate using VBR, vulkan doesn't do CQP currently
+                    self.info.rate_control_mode = vk::VideoEncodeRateControlModeFlagsKHR::VBR;
+                    self.layer.max_bitrate = max_bitrate.into();
+                } else {
+                    self.info.rate_control_mode = vk::VideoEncodeRateControlModeFlagsKHR::DISABLED;
+                }
+
+                set_qp(&mut self.h264_layer, const_qp, const_qp);
+            }
+        }
+    }
+}
+
+fn set_qp(
+    h264_layer_rate_control_info: &mut vk::VideoEncodeH264RateControlLayerInfoKHR<'_>,
+    min_qp: u8,
+    max_qp: u8,
+) {
+    h264_layer_rate_control_info.min_qp = vk::VideoEncodeH264QpKHR {
+        qp_i: min_qp.into(),
+        qp_p: min_qp.into(),
+        qp_b: min_qp.into(),
+    };
+    h264_layer_rate_control_info.max_qp = vk::VideoEncodeH264QpKHR {
+        qp_i: max_qp.into(),
+        qp_p: max_qp.into(),
+        qp_b: max_qp.into(),
+    };
+
+    h264_layer_rate_control_info.use_min_qp = 1;
+    h264_layer_rate_control_info.use_max_qp = 1;
 }
 
 impl VkH264Encoder {
@@ -149,7 +251,7 @@ impl VkH264Encoder {
         let create_device_info = vk::DeviceCreateInfo::default()
             .enabled_extension_names(&extensions)
             .queue_create_infos(&queue_create_flags)
-            .push(&mut sync2_features_enable);
+            .push_next(&mut sync2_features_enable);
 
         let device = Device::create(&instance, physical_device, &create_device_info).unwrap();
 
@@ -180,7 +282,7 @@ impl VkH264Encoder {
             .chroma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::TYPE_8)
             .luma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::TYPE_8)
             .chroma_subsampling(vk::VideoChromaSubsamplingFlagsKHR::TYPE_420)
-            .push(&mut h264_profile_info);
+            .push_next(&mut h264_profile_info);
 
         // Video Coding Capabilities
         let (video_capabilities, video_encode_capabilities, video_encode_h264_capabilities) =
@@ -222,6 +324,10 @@ impl VkH264Encoder {
             &video_session,
             width,
             height,
+            cmp::max(
+                max_l0_p_ref_images,
+                max_l0_b_ref_images + max_l1_b_ref_images,
+            ) as u8,
             profile_idc,
             level_idc,
             vk::native::StdVideoH264ChromaFormatIdc_STD_VIDEO_H264_CHROMA_FORMAT_IDC_420,
@@ -282,7 +388,7 @@ impl VkH264Encoder {
                         vk::BufferUsageFlags::VIDEO_ENCODE_DST_KHR
                             | vk::BufferUsageFlags::TRANSFER_SRC,
                     )
-                    .push(&mut video_profile_list_info);
+                    .push_next(&mut video_profile_list_info);
 
                 Buffer::create(&device, &create_info).unwrap()
             };
@@ -330,6 +436,9 @@ impl VkH264Encoder {
             video_feedback_query_pool,
             video_session,
             video_session_parameters,
+            video_session_needs_control: true,
+            video_session_needs_reset: true,
+            rate_control: RateControl::default(),
             available_encode_slots,
             in_flight: VecDeque::new(),
             max_l0_p_ref_images,
@@ -338,8 +447,8 @@ impl VkH264Encoder {
             available_ref_images,
             dpb_in_correct_layout: false,
             active_ref_images: VecDeque::new(),
-            output: VecDeque::new(),
             backlogged_b_frames: Vec::new(),
+            output: VecDeque::new(),
         })
     }
 
@@ -692,10 +801,9 @@ impl VkH264Encoder {
         let setup_ref_image_slot_info = vk::VideoReferenceSlotInfoKHR::default()
             .picture_resource(&setup_ref_image_resource_info)
             .slot_index(setup_reference.slot_index as i32)
-            .push(&mut setup_ref_image_h264_dpb_slot_info);
+            .push_next(&mut setup_ref_image_h264_dpb_slot_info);
 
         // Prepare active reference images stuff
-
         let mut active_ref_image_resource_infos: Vec<_> = l0
             .iter()
             .chain(l1.iter())
@@ -719,7 +827,7 @@ impl VkH264Encoder {
                 vk::VideoReferenceSlotInfoKHR::default()
                     .picture_resource(picture_resource)
                     .slot_index(*slot_index as i32)
-                    .push(h264_dpb_slot)
+                    .push_next(h264_dpb_slot)
             })
             .collect();
 
@@ -731,28 +839,37 @@ impl VkH264Encoder {
 
         // Build the reference slots list for the begin video coding command
         let mut use_reference_slots = active_ref_image_slot_infos.clone();
-        use_reference_slots.push(setup_ref_image_slot_info);
+        let mut use_setup_ref_image_slot_info = setup_ref_image_slot_info;
         // TODO: marking setup slot as not active, validation layers are not complaining but not sure if its correct
-        if setup_reference.pic_order_cnt.is_none() {
-            use_reference_slots.last_mut().unwrap().slot_index = -1;
-        }
+        use_setup_ref_image_slot_info.slot_index = -1;
+        use_reference_slots.push(use_setup_ref_image_slot_info);
 
-        let begin_info = vk::VideoBeginCodingInfoKHR::default()
+        let mut begin_info = vk::VideoBeginCodingInfoKHR::default()
             .video_session(self.video_session.video_session())
             .video_session_parameters(self.video_session_parameters.video_session_parameters())
             .reference_slots(&use_reference_slots);
+        begin_info.p_next = (&raw const self.rate_control.info).cast();
 
         // Issue the begin video coding command
-        self.device.video_queue_device().cmd_begin_video_coding(
+        let cmd_begin_video_coding = self
+            .device
+            .video_queue_device()
+            .fp()
+            .cmd_begin_video_coding_khr;
+        (cmd_begin_video_coding)(
             encode_slot.encode_command_buffer.command_buffer(),
-            &begin_info,
+            &raw const begin_info,
         );
 
-        if frame_info.frame_type == H264FrameType::Idr
-            && frame_info.frame_num == 0
-            && frame_info.idr_pic_id == 1
-        {
-            self.control_video_coding(encode_slot);
+        if self.video_session_needs_control {
+            // Update the rate control configs after begin_video_coding, so the rate control passed reflects the current
+            // state of the video session.
+            self.rate_control.update_from_config(&self.config);
+
+            self.control_video_coding(encode_slot, self.video_session_needs_reset);
+
+            self.video_session_needs_reset = false;
+            self.video_session_needs_control = false;
         }
 
         let src_picture_resource_plane0 = vk::VideoPictureResourceInfoKHR::default()
@@ -764,7 +881,7 @@ impl VkH264Encoder {
             })
             .base_array_layer(0);
 
-        let  std_slice_header = vk::native::StdVideoEncodeH264SliceHeader {
+        let std_slice_header = vk::native::StdVideoEncodeH264SliceHeader {
             flags: vk::native::StdVideoEncodeH264SliceHeaderFlags {
                 _bitfield_align_1: [0; 0],
                 _bitfield_1: vk::native::StdVideoEncodeH264SliceHeaderFlags::new_bitfield_1(
@@ -790,9 +907,19 @@ impl VkH264Encoder {
             pWeightTable: null_mut(),
         };
 
-        let nalu_slices = [vk::VideoEncodeH264NaluSliceInfoKHR::default()
-            // .constant_qp(26)
-            .std_slice_header(&std_slice_header)];
+        let mut nalu_slices =
+            [vk::VideoEncodeH264NaluSliceInfoKHR::default().std_slice_header(&std_slice_header)];
+
+        if let H264RateControlConfig::ConstantQuality {
+            const_qp,
+            max_bitrate: _,
+        } = &self.config.rate_control
+        {
+            for nalu_slice in &mut nalu_slices {
+                nalu_slice.constant_qp = (*const_qp).into();
+            }
+        }
+
         let mut ref_lists = zeroed::<vk::native::StdVideoEncodeH264ReferenceListsInfo>();
 
         let mut l0_iter = l0.iter().map(|dpb_slot| dpb_slot.slot_index as u8);
@@ -808,19 +935,8 @@ impl VkH264Encoder {
         ref_lists.num_ref_idx_l0_active_minus1 = l0.len().saturating_sub(1) as u8;
         ref_lists.num_ref_idx_l1_active_minus1 = l1.len().saturating_sub(1) as u8;
 
-        // ref_lists.flags.set_ref_pic_list_modification_flag_l0(1);
-        // if frame_info.frame_type == H264FrameType::B {
-        //     ref_lists.flags.set_ref_pic_list_modification_flag_l1(1);
-        // }
         log::trace!("\tRefPicList0: {}", debug_list(&ref_lists.RefPicList0));
         log::trace!("\tRefPicList1: {}", debug_list(&ref_lists.RefPicList1));
-
-        fn debug_list(list: &[u8]) -> String {
-            format!(
-                "{:?}",
-                list.iter().take_while(|x| **x != 0xFF).collect::<Vec<_>>()
-            )
-        }
 
         let h264_picture_info = vk::native::StdVideoEncodeH264PictureInfo {
             flags: vk::native::StdVideoEncodeH264PictureInfoFlags {
@@ -857,16 +973,21 @@ impl VkH264Encoder {
             .reference_slots(&active_ref_image_slot_infos)
             .flags(vk::VideoEncodeFlagsKHR::empty())
             .setup_reference_slot(&setup_ref_image_slot_info)
-            .push(&mut h264_encode_info);
+            .push_next(&mut h264_encode_info);
 
         self.video_feedback_query_pool.cmd_begin_query(
             encode_slot.encode_command_buffer.command_buffer(),
             encode_slot.index,
         );
 
-        self.device.video_encode_queue_device().cmd_encode_video(
+        let cmd_encode_video = self
+            .device
+            .video_encode_queue_device()
+            .fp()
+            .cmd_encode_video_khr;
+        (cmd_encode_video)(
             encode_slot.encode_command_buffer.command_buffer(),
-            &encode_info,
+            &raw const encode_info,
         );
 
         self.video_feedback_query_pool.cmd_end_query(
@@ -874,9 +995,15 @@ impl VkH264Encoder {
             encode_slot.index,
         );
 
-        self.device.video_queue_device().cmd_end_video_coding(
+        let end_video_coding_info = vk::VideoEndCodingInfoKHR::default();
+        let cmd_end_video_coding = self
+            .device
+            .video_queue_device()
+            .fp()
+            .cmd_end_video_coding_khr;
+        cmd_end_video_coding(
             encode_slot.encode_command_buffer.command_buffer(),
-            &vk::VideoEndCodingInfoKHR::default(),
+            &raw const end_video_coding_info,
         );
 
         // Finish up everything
@@ -893,6 +1020,7 @@ impl VkH264Encoder {
         let submit_info = vk::SubmitInfo2::default()
             .command_buffer_infos(&command_buffer_infos)
             .wait_semaphore_infos(&wait_semaphore_infos);
+
         self.device
             .device()
             .queue_submit2(
@@ -903,99 +1031,36 @@ impl VkH264Encoder {
             .unwrap();
     }
 
-    unsafe fn control_video_coding(&self, encode_slot: &mut EncodeSlot) {
-        let mut h264_layer_rate_control_info =
-            vk::VideoEncodeH264RateControlLayerInfoKHR::default();
-        let mut layer_rate_control_info = vk::VideoEncodeRateControlLayerInfoKHR::default();
-
-        let mut h264_rate_control_info = vk::VideoEncodeH264RateControlInfoKHR::default();
-        let mut rate_control_info = vk::VideoEncodeRateControlInfoKHR::default();
-
-        if let Some(H264FrameRate {
-            numerator,
-            denominator,
-        }) = self.config.framerate
-        {
-            layer_rate_control_info.frame_rate_numerator = numerator;
-            layer_rate_control_info.frame_rate_denominator = denominator;
+    unsafe fn control_video_coding(&self, encode_slot: &mut EncodeSlot, reset: bool) {
+        let maybe_reset_flag = if reset {
+            vk::VideoCodingControlFlagsKHR::RESET
         } else {
-            layer_rate_control_info.frame_rate_numerator = 1;
-            layer_rate_control_info.frame_rate_denominator = 1;
-        }
+            vk::VideoCodingControlFlagsKHR::empty()
+        };
 
-        if let Some((min_qp, max_qp)) = self.config.qp {
-            set_qp(&mut h264_layer_rate_control_info, min_qp, max_qp);
-        }
+        let mut video_coding_control_info = vk::VideoCodingControlInfoKHR::default()
+            .flags(vk::VideoCodingControlFlagsKHR::ENCODE_RATE_CONTROL | maybe_reset_flag);
 
-        match self.config.rate_control {
-            H264RateControlConfig::ConstantBitRate { bitrate } => {
-                rate_control_info.rate_control_mode = vk::VideoEncodeRateControlModeFlagsKHR::CBR;
-                layer_rate_control_info.average_bitrate = bitrate.into();
-                layer_rate_control_info.max_bitrate = bitrate.into();
-            }
-            H264RateControlConfig::VariableBitRate {
-                average_bitrate,
-                max_bitrate,
-            } => {
-                rate_control_info.rate_control_mode = vk::VideoEncodeRateControlModeFlagsKHR::VBR;
-                layer_rate_control_info.average_bitrate = average_bitrate.into();
-                layer_rate_control_info.max_bitrate = max_bitrate.into();
-            }
-            H264RateControlConfig::ConstantQuality {
-                const_qp,
-                max_bitrate,
-            } => {
-                if let Some(max_bitrate) = max_bitrate {
-                    // TODO: Trying to limit the bitrate using VBR, vulkan doesn't do CQP currently
-                    rate_control_info.rate_control_mode =
-                        vk::VideoEncodeRateControlModeFlagsKHR::VBR;
-                    layer_rate_control_info.max_bitrate = max_bitrate.into();
-                } else {
-                    rate_control_info.rate_control_mode =
-                        vk::VideoEncodeRateControlModeFlagsKHR::DISABLED;
-                }
+        video_coding_control_info.p_next = (&raw const self.rate_control.info).cast();
 
-                set_qp(&mut h264_layer_rate_control_info, const_qp, const_qp);
-            }
-        }
+        let cmd_control_video_coding = self
+            .device
+            .video_queue_device()
+            .fp()
+            .cmd_control_video_coding_khr;
 
-        rate_control_info.virtual_buffer_size_in_ms = 100;
-
-        let layers = [layer_rate_control_info.push(&mut h264_layer_rate_control_info)];
-        let mut rate_control_info = rate_control_info.layers(&layers);
-
-        let video_coding_control_info = vk::VideoCodingControlInfoKHR::default()
-            .flags(
-                vk::VideoCodingControlFlagsKHR::RESET, // | vk::VideoCodingControlFlagsKHR::ENCODE_RATE_CONTROL, TODO: reenable & fix RC
-            )
-            .push(&mut rate_control_info)
-            .push(&mut h264_rate_control_info);
-
-        self.device.video_queue_device().cmd_control_video_coding(
+        (cmd_control_video_coding)(
             encode_slot.encode_command_buffer.command_buffer(),
-            &video_coding_control_info,
+            &raw const video_coding_control_info,
         );
     }
 }
 
-fn set_qp(
-    h264_layer_rate_control_info: &mut vk::VideoEncodeH264RateControlLayerInfoKHR<'_>,
-    min_qp: u8,
-    max_qp: u8,
-) {
-    h264_layer_rate_control_info.min_qp = vk::VideoEncodeH264QpKHR {
-        qp_i: min_qp.into(),
-        qp_p: min_qp.into(),
-        qp_b: min_qp.into(),
-    };
-    h264_layer_rate_control_info.max_qp = vk::VideoEncodeH264QpKHR {
-        qp_i: max_qp.into(),
-        qp_p: max_qp.into(),
-        qp_b: max_qp.into(),
-    };
-
-    h264_layer_rate_control_info.use_min_qp = 1;
-    h264_layer_rate_control_info.use_max_qp = 1;
+fn debug_list(list: &[u8]) -> String {
+    format!(
+        "{:?}",
+        list.iter().take_while(|x| **x != 0xFF).collect::<Vec<_>>()
+    )
 }
 
 fn buffer_image_copy(
@@ -1047,16 +1112,18 @@ unsafe fn create_input_image(
         .initial_layout(vk::ImageLayout::UNDEFINED)
         .samples(vk::SampleCountFlags::TYPE_1)
         .usage(vk::ImageUsageFlags::VIDEO_ENCODE_SRC_KHR | vk::ImageUsageFlags::TRANSFER_DST)
-        .push(&mut video_profile_list_info);
+        .push_next(&mut video_profile_list_info);
 
     Image::create(device, &create_info).unwrap()
 }
 
+#[allow(clippy::too_many_arguments)]
 unsafe fn create_video_session_parameters(
     state: &H264EncoderState,
     video_session: &VideoSession,
     width: u32,
     height: u32,
+    max_num_ref_frames: u8,
     profile_idc: vk::native::StdVideoH264ProfileIdc,
     level_idc: vk::native::StdVideoH264LevelIdc,
     chrome_format_idc: vk::native::StdVideoH264ChromaFormatIdc,
@@ -1071,7 +1138,7 @@ unsafe fn create_video_session_parameters(
     seq_params.log2_max_frame_num_minus4 = 16 - 4;
     seq_params.log2_max_pic_order_cnt_lsb_minus4 =
         state.log2_max_pic_order_cnt_lsb.try_into().unwrap();
-    seq_params.max_num_ref_frames = 2; // TODO: configure
+    seq_params.max_num_ref_frames = max_num_ref_frames;
     seq_params.pic_width_in_mbs_minus1 = (width_mbaligned / 16) - 1;
     seq_params.pic_height_in_map_units_minus1 = (height_mbaligned / 16) - 1;
 
@@ -1106,7 +1173,7 @@ unsafe fn create_video_session_parameters(
 
     let video_session_parameters_create_info = vk::VideoSessionParametersCreateInfoKHR::default()
         .video_session(video_session.video_session())
-        .push(&mut video_encode_h264_session_parameters_create_info);
+        .push_next(&mut video_encode_h264_session_parameters_create_info);
 
     VideoSessionParameters::create(video_session, &video_session_parameters_create_info).unwrap()
 }
@@ -1120,25 +1187,32 @@ unsafe fn get_video_format_properties(
     let mut video_profile_list_info = vk::VideoProfileListInfoKHR::default().profiles(&profiles);
     let physical_device_video_format_info = vk::PhysicalDeviceVideoFormatInfoKHR::default()
         .image_usage(vk::ImageUsageFlags::VIDEO_ENCODE_SRC_KHR)
-        .push(&mut video_profile_list_info);
+        .push_next(&mut video_profile_list_info);
 
-    let len = instance
+    let get_physical_device_video_format_properties = instance
         .video_queue_instance()
-        .get_physical_device_video_format_properties_len(
-            physical_device,
-            &physical_device_video_format_info,
-        )
-        .unwrap();
+        .fp()
+        .get_physical_device_video_format_properties_khr;
 
-    let mut video_format_properties = vec![vk::VideoFormatPropertiesKHR::default(); len];
-    instance
-        .video_queue_instance()
-        .get_physical_device_video_format_properties(
-            physical_device,
-            &physical_device_video_format_info,
-            video_format_properties.as_mut_slice(),
-        )
-        .unwrap();
+    let mut len = 0;
+    (get_physical_device_video_format_properties)(
+        physical_device,
+        &raw const physical_device_video_format_info,
+        &raw mut len,
+        null_mut(),
+    )
+    .result()
+    .unwrap();
+
+    let mut video_format_properties = vec![vk::VideoFormatPropertiesKHR::default(); len as usize];
+    (get_physical_device_video_format_properties)(
+        physical_device,
+        &raw const physical_device_video_format_info,
+        &raw mut len,
+        video_format_properties.as_mut_ptr(),
+    )
+    .result()
+    .unwrap();
 
     dbg!(video_format_properties)
 }
@@ -1162,10 +1236,18 @@ unsafe fn get_video_capabilities(
         ..Default::default()
     };
 
-    instance
+    let get_physical_device_video_capabilities = instance
         .video_queue_instance()
-        .get_physical_device_video_capabilities(physical_device, &video_profile_info, &mut caps)
-        .unwrap();
+        .fp()
+        .get_physical_device_video_capabilities_khr;
+
+    (get_physical_device_video_capabilities)(
+        physical_device,
+        &raw const video_profile_info,
+        &raw mut caps,
+    )
+    .result()
+    .unwrap();
 
     caps.p_next = null_mut();
     encode_caps.p_next = null_mut();
@@ -1261,7 +1343,7 @@ mod tests {
                     intra_period: 120,
                     ip_period: 4,
                 },
-                rate_control: H264RateControlConfig::ConstantBitRate { bitrate: 320_000 },
+                rate_control: H264RateControlConfig::ConstantBitRate { bitrate: 6_000_000 },
                 usage_hint: H264EncodeUsageHint::Default,
                 content_hint: H264EncodeContentHint::Default,
                 tuning_hint: H264EncodeTuningHint::Default,
