@@ -1,5 +1,5 @@
 use crate::{Device, VulkanError};
-use ash::vk::{self, TaggedStructure};
+use ash::vk::{self};
 
 pub struct VideoFeedbackQueryPool {
     device: Device,
@@ -22,8 +22,8 @@ impl VideoFeedbackQueryPool {
             let query_create_info = vk::QueryPoolCreateInfo::default()
                 .query_type(vk::QueryType::VIDEO_ENCODE_FEEDBACK_KHR)
                 .query_count(query_count)
-                .extend(&mut video_profile_info)
-                .push(&mut query_pool_video_encode_feedback_create_info);
+                .push_next(&mut video_profile_info)
+                .push_next(&mut query_pool_video_encode_feedback_create_info);
 
             let query_pool = device
                 .device()

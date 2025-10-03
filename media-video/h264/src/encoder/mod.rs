@@ -11,3 +11,5 @@ pub use config::{
 };
 
 pub(crate) mod util;
+
+pub trait H264EncoderBackend {}

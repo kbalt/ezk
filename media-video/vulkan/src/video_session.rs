@@ -1,6 +1,9 @@
 use crate::{Device, VulkanError};
 use ash::vk;
-use std::sync::Arc;
+use std::{
+    ptr::{null, null_mut},
+    sync::Arc,
+};
 
 #[derive(Clone)]
 pub struct VideoSession {
@@ -18,23 +21,44 @@ impl VideoSession {
         device: &Device,
         create_info: &vk::VideoSessionCreateInfoKHR,
     ) -> Result<Self, VulkanError> {
-        let video_session = device
+        let create_video_session = device.video_queue_device().fp().create_video_session_khr;
+        let get_video_session_memory_requirements = device
             .video_queue_device()
-            .create_video_session(create_info, None)?;
+            .fp()
+            .get_video_session_memory_requirements_khr;
+        let bind_video_session_memory = device
+            .video_queue_device()
+            .fp()
+            .bind_video_session_memory_khr;
 
-        let len = device
-            .video_queue_device()
-            .get_video_session_memory_requirements_len(video_session)?;
+        let mut video_session = vk::VideoSessionKHR::null();
+        (create_video_session)(
+            device.device().handle(),
+            &raw const *create_info,
+            null(),
+            &raw mut video_session,
+        )
+        .result()?;
+
+        let mut len = 0;
+        (get_video_session_memory_requirements)(
+            device.device().handle(),
+            video_session,
+            &raw mut len,
+            null_mut(),
+        )
+        .result()?;
 
         let mut video_session_memory_requirements =
-            vec![vk::VideoSessionMemoryRequirementsKHR::default(); len];
+            vec![vk::VideoSessionMemoryRequirementsKHR::default(); len as usize];
 
-        device
-            .video_queue_device()
-            .get_video_session_memory_requirements(
-                video_session,
-                &mut video_session_memory_requirements,
-            )?;
+        (get_video_session_memory_requirements)(
+            device.device().handle(),
+            video_session,
+            &raw mut len,
+            video_session_memory_requirements.as_mut_ptr(),
+        )
+        .result()?;
 
         let mut bind_session_memory_infos = vec![];
         let mut video_session_memory = vec![];
@@ -62,9 +86,13 @@ impl VideoSession {
             bind_session_memory_infos.push(bind_session_memory_info);
         }
 
-        device
-            .video_queue_device()
-            .bind_video_session_memory(video_session, &bind_session_memory_infos)?;
+        bind_video_session_memory(
+            device.device().handle(),
+            video_session,
+            len,
+            bind_session_memory_infos.as_ptr(),
+        )
+        .result()?;
 
         let memory = bind_session_memory_infos
             .into_iter()
@@ -92,9 +120,13 @@ impl VideoSession {
 impl Drop for Inner {
     fn drop(&mut self) {
         unsafe {
-            self.device
+            let destroy_video_session = self
+                .device
                 .video_queue_device()
-                .destroy_video_session(self.video_session, None);
+                .fp()
+                .destroy_video_session_khr;
+
+            (destroy_video_session)(self.device.device().handle(), self.video_session, null());
 
             for memory in &self.video_session_memory {
                 self.device.device().free_memory(*memory, None);

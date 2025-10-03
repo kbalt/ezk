@@ -17,7 +17,7 @@ impl Instance {
     pub fn load(entry: &ash::Entry) -> Result<Self, VulkanError> {
         unsafe {
             let app_info = vk::ApplicationInfo {
-                api_version: vk::make_api_version(0, 1, 4, 316),
+                api_version: vk::make_api_version(0, 1, 3, 316),
                 ..Default::default()
             };
 
