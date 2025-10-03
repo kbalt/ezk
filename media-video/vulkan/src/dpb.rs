@@ -1,5 +1,5 @@
 use crate::{Device, Image, ImageView, VulkanError};
-use ash::vk::{self, TaggedStructure};
+use ash::vk::{self};
 
 pub fn create_dpb(
     device: &Device,
@@ -26,7 +26,7 @@ pub fn create_dpb(
         .initial_layout(vk::ImageLayout::UNDEFINED)
         .samples(vk::SampleCountFlags::TYPE_1)
         .usage(vk::ImageUsageFlags::VIDEO_ENCODE_DPB_KHR)
-        .push(&mut video_profile_list_info);
+        .push_next(&mut video_profile_list_info);
 
     let image = unsafe { Image::create(device, &input_image_info)? };
 
