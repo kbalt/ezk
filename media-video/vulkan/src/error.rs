@@ -13,6 +13,10 @@ pub enum VulkanError {
         memory_type_bits: u32,
         properties: vk::MemoryPropertyFlags,
     },
+
+    InvalidArgument {
+        message: &'static str,
+    },
 }
 
 impl From<vk::Result> for VulkanError {
@@ -41,6 +45,9 @@ impl fmt::Display for VulkanError {
                 f,
                 "Failed to find memory type that can be used with the constraints memory_type_bits={memory_type_bits:b}, properties={properties:?}"
             ),
+            VulkanError::InvalidArgument { message } => {
+                write!(f, "Invalid argument, {message}")
+            }
         }
     }
 }

@@ -49,6 +49,12 @@ impl Buffer {
     }
 
     pub unsafe fn map(&mut self, size: vk::DeviceSize) -> Result<MappedBuffer<'_>, VulkanError> {
+        if size == 0 {
+            return Err(VulkanError::InvalidArgument {
+                message: "Cannot map buffer with size 0",
+            });
+        }
+
         let ptr =
             self.device
                 .device()
