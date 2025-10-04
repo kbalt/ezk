@@ -45,7 +45,7 @@ pub struct VkH264Encoder {
     video_session: VideoSession,
     video_session_parameters: VideoSessionParameters,
     video_session_needs_control: bool,
-    video_session_needs_reset: bool,
+    video_session_is_uninitialized: bool,
 
     rate_control: Box<RateControl>,
 
@@ -437,7 +437,7 @@ impl VkH264Encoder {
             video_session,
             video_session_parameters,
             video_session_needs_control: true,
-            video_session_needs_reset: true,
+            video_session_is_uninitialized: true,
             rate_control: RateControl::default(),
             available_encode_slots,
             in_flight: VecDeque::new(),
@@ -848,7 +848,10 @@ impl VkH264Encoder {
             .video_session(self.video_session.video_session())
             .video_session_parameters(self.video_session_parameters.video_session_parameters())
             .reference_slots(&use_reference_slots);
-        begin_info.p_next = (&raw const self.rate_control.info).cast();
+
+        if !self.video_session_is_uninitialized {
+            begin_info.p_next = (&raw const self.rate_control.info).cast();
+        }
 
         // Issue the begin video coding command
         let cmd_begin_video_coding = self
@@ -866,9 +869,9 @@ impl VkH264Encoder {
             // state of the video session.
             self.rate_control.update_from_config(&self.config);
 
-            self.control_video_coding(encode_slot, self.video_session_needs_reset);
+            self.control_video_coding(encode_slot, self.video_session_is_uninitialized);
 
-            self.video_session_needs_reset = false;
+            self.video_session_is_uninitialized = false;
             self.video_session_needs_control = false;
         }
 
