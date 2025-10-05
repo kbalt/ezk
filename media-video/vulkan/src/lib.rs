@@ -34,15 +34,6 @@ pub use ash;
 
 use std::ffi::CStr;
 
-pub const REQUIRED_EXTENSIONS_BASE: &[&CStr] = &[
-    c"VK_KHR_sampler_ycbcr_conversion",
-    c"VK_KHR_maintenance1",
-    c"VK_KHR_synchronization2",
-    c"VK_KHR_bind_memory2",
-    c"VK_KHR_get_memory_requirements2",
-    c"VK_KHR_synchronization2",
-    c"VK_KHR_video_queue",
-];
-
+pub const REQUIRED_EXTENSIONS_BASE: &[&CStr] = &[c"VK_KHR_video_queue"];
 pub const REQUIRED_EXTENSIONS_ENCODE: &[&CStr] = &[c"VK_KHR_video_encode_queue"];
 pub const REQUIRED_EXTENSIONS_DECODE: &[&CStr] = &[c"VK_KHR_video_decode_queue"];
