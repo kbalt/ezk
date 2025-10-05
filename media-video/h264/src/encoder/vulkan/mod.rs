@@ -458,7 +458,7 @@ impl VkH264Encoder {
             .get_bytes_written(encode_slot.index)
             .unwrap();
 
-        let mapped_buffer = encode_slot.output_buffer.map(bytes_written).unwrap();
+        let mapped_buffer = encode_slot.output_buffer.map(bytes_written.into()).unwrap();
         self.output.push_back(mapped_buffer.data().to_vec());
     }
 
