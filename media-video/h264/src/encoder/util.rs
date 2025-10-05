@@ -84,6 +84,7 @@ impl H264EncoderState {
         let frame_type = self
             .frame_pattern
             .frame_type_of_nth_frame(self.num_submitted_frames);
+
         if frame_type == H264FrameType::Idr {
             self.current_frame_num = 0;
             self.current_idr_display = self.num_submitted_frames;
@@ -99,7 +100,7 @@ impl H264EncoderState {
             frame_type,
             frame_num: self.current_frame_num,
             pic_order_cnt_lsb: poc as u16,
-            idr_pic_id: self.idr_pic_id,
+            idr_pic_id: self.idr_pic_id - 1, // idr_pic_id is always incremented once at start
         };
 
         if frame_type != H264FrameType::B {
