@@ -116,18 +116,21 @@ impl RateControl {
             info: vk::VideoEncodeRateControlInfoKHR::default(),
         });
 
-        this.info.virtual_buffer_size_in_ms = 100;
-
         this.layer.p_next = (&raw mut this.h264_layer).cast();
         this.info.p_next = (&raw mut this.h264_info).cast();
 
         this.info.p_layers = &raw const this.layer;
-        this.info.layer_count = 1;
 
         this
     }
 
     fn update_from_config(&mut self, config: &H264EncoderConfig) {
+        // TODO: magic value
+        self.info.virtual_buffer_size_in_ms = 100;
+        self.h264_info.idr_period = config.frame_pattern.intra_idr_period.into();
+        self.h264_info.gop_frame_count = config.frame_pattern.intra_period.into();
+        self.info.layer_count = 1;
+
         if let Some(H264FrameRate {
             numerator,
             denominator,
@@ -294,15 +297,26 @@ impl VkH264Encoder {
         println!("{video_encode_capabilities:#?}");
         println!("{video_encode_h264_capabilities:#?}");
 
+        // Make the output buffer size dependent from the input image dimensions
         let output_buffer_size: u64 = (width as u64 * height as u64 * 3) / 2;
-        let max_dpb_slots = video_capabilities.max_dpb_slots;
-        let max_active_ref_images = video_capabilities.max_active_reference_pictures;
+
         let max_l0_p_ref_images = video_encode_h264_capabilities.max_p_picture_l0_reference_count;
         let max_l0_b_ref_images = video_encode_h264_capabilities.max_b_picture_l0_reference_count;
         let max_l1_b_ref_images = video_encode_h264_capabilities.max_l1_reference_count;
 
-        // Create Video session
+        let max_references = cmp::max(
+            max_l0_p_ref_images,
+            max_l0_b_ref_images + max_l1_b_ref_images,
+        );
+        let max_active_ref_images = cmp::min(
+            max_references,
+            video_capabilities.max_active_reference_pictures,
+        );
 
+        // Make only as many dpb slots as can be actively references, + 1 for the setup reference
+        let max_dpb_slots = cmp::min(video_capabilities.max_dpb_slots, max_active_ref_images + 1);
+
+        // Create Video session
         let create_info = vk::VideoSessionCreateInfoKHR::default()
             .max_coded_extent(vk::Extent2D { width, height })
             .queue_family_index(encode_queue_family_index)
@@ -696,6 +710,13 @@ impl VkH264Encoder {
             )
             .unwrap();
 
+        // Reset query for this encode
+        self.video_feedback_query_pool.cmd_reset_query(
+            encode_slot.encode_command_buffer.command_buffer(),
+            encode_slot.index,
+        );
+
+        // Transition the input image to the encode queue
         encode_slot.input_image.cmd_memory_barrier2(
             encode_slot.encode_command_buffer.command_buffer(),
             vk::ImageLayout::VIDEO_ENCODE_SRC_KHR,
@@ -709,6 +730,7 @@ impl VkH264Encoder {
             0,
         );
 
+        // Transition all dpb slots to the correct layout
         if !self.dpb_in_correct_layout {
             self.dpb_in_correct_layout = true;
 
@@ -733,6 +755,24 @@ impl VkH264Encoder {
             }
         }
 
+        // Barrier the setup dpb slot
+        setup_reference.image_view.image().cmd_memory_barrier2(
+            encode_slot.encode_command_buffer.command_buffer(),
+            vk::ImageLayout::VIDEO_ENCODE_DPB_KHR,
+            vk::ImageLayout::VIDEO_ENCODE_DPB_KHR,
+            vk::QUEUE_FAMILY_IGNORED,
+            vk::QUEUE_FAMILY_IGNORED,
+            vk::PipelineStageFlags2::VIDEO_ENCODE_KHR,
+            vk::AccessFlags2::VIDEO_ENCODE_READ_KHR | vk::AccessFlags2::VIDEO_ENCODE_WRITE_KHR,
+            vk::PipelineStageFlags2::VIDEO_ENCODE_KHR,
+            vk::AccessFlags2::VIDEO_ENCODE_WRITE_KHR,
+            setup_reference
+                .image_view
+                .subresource_range()
+                .base_array_layer,
+        );
+
+        // Calculate the l0 & l1 reference list
         let l0 = self
             .active_ref_images
             .iter()
@@ -752,7 +792,8 @@ impl VkH264Encoder {
             H264FrameType::I | H264FrameType::Idr => (vec![], vec![]),
         };
 
-        for dpb_slot in l0.iter().chain(l1.iter()).chain(Some(&&*setup_reference)) {
+        // Barrier the active reference dpb slots
+        for dpb_slot in l0.iter().chain(l1.iter()) {
             dpb_slot.image_view.image().cmd_memory_barrier2(
                 encode_slot.encode_command_buffer.command_buffer(),
                 vk::ImageLayout::VIDEO_ENCODE_DPB_KHR,
@@ -776,13 +817,7 @@ impl VkH264Encoder {
             }
         };
 
-        let setup_ref_image_resource_info = vk::VideoPictureResourceInfoKHR::default()
-            .image_view_binding(setup_reference.image_view.image_view())
-            .coded_extent(vk::Extent2D {
-                width: self.width,
-                height: self.height,
-            });
-
+        // Update the actual reference info of the setup reference slot
         setup_reference.h264_reference_info = vk::native::StdVideoEncodeH264ReferenceInfo {
             flags: vk::native::StdVideoEncodeH264ReferenceInfoFlags {
                 _bitfield_align_1: [0; 0],
@@ -799,21 +834,28 @@ impl VkH264Encoder {
             temporal_id: 0,
         };
 
-        let mut setup_ref_image_h264_dpb_slot_info = vk::VideoEncodeH264DpbSlotInfoKHR::default()
-            .std_reference_info(&setup_reference.h264_reference_info);
+        let setup_reference_resource_info = vk::VideoPictureResourceInfoKHR::default()
+            .image_view_binding(setup_reference.image_view.image_view())
+            .coded_extent(vk::Extent2D {
+                width: self.width,
+                height: self.height,
+            });
 
-        let setup_ref_image_slot_info = vk::VideoReferenceSlotInfoKHR::default()
-            .picture_resource(&setup_ref_image_resource_info)
+        let mut setup_reference_h264_slot = vk::VideoEncodeH264DpbSlotInfoKHR::default()
+            .std_reference_info(&setup_reference.h264_reference_info);
+        let setup_reference_slot = vk::VideoReferenceSlotInfoKHR::default()
+            .picture_resource(&setup_reference_resource_info)
             .slot_index(setup_reference.slot_index as i32)
-            .push_next(&mut setup_ref_image_h264_dpb_slot_info);
+            .push_next(&mut setup_reference_h264_slot);
 
         // Prepare active reference images stuff
-        let mut active_ref_image_resource_infos: Vec<_> = l0
+        let mut reference_slots_resources: Vec<_> = l0
             .iter()
             .chain(l1.iter())
             .map(|slot| {
                 let h264_dpb_slot_info = vk::VideoEncodeH264DpbSlotInfoKHR::default()
                     .std_reference_info(&slot.h264_reference_info);
+
                 let picture_resource_info = vk::VideoPictureResourceInfoKHR::default()
                     .image_view_binding(slot.image_view.image_view())
                     .coded_extent(vk::Extent2D {
@@ -825,7 +867,7 @@ impl VkH264Encoder {
             })
             .collect();
 
-        let active_ref_image_slot_infos: Vec<_> = active_ref_image_resource_infos
+        let mut reference_slots: Vec<_> = reference_slots_resources
             .iter_mut()
             .map(|(slot_index, picture_resource, h264_dpb_slot)| {
                 vk::VideoReferenceSlotInfoKHR::default()
@@ -835,23 +877,21 @@ impl VkH264Encoder {
             })
             .collect();
 
-        // Reset query for this encode
-        self.video_feedback_query_pool.cmd_reset_query(
-            encode_slot.encode_command_buffer.command_buffer(),
-            encode_slot.index,
-        );
+        reference_slots.push(setup_reference_slot);
+        reference_slots.last_mut().unwrap().slot_index = -1;
 
-        // Build the reference slots list for the begin video coding command
-        let mut use_reference_slots = active_ref_image_slot_infos.clone();
-        let mut use_setup_ref_image_slot_info = setup_ref_image_slot_info;
-        // TODO: marking setup slot as not active, validation layers are not complaining but not sure if its correct
-        use_setup_ref_image_slot_info.slot_index = -1;
-        use_reference_slots.push(use_setup_ref_image_slot_info);
+        log::trace!(
+            "\reference slots: {:?}",
+            reference_slots
+                .iter()
+                .map(|slot| slot.slot_index)
+                .collect::<Vec<_>>()
+        );
 
         let mut begin_info = vk::VideoBeginCodingInfoKHR::default()
             .video_session(self.video_session.video_session())
             .video_session_parameters(self.video_session_parameters.video_session_parameters())
-            .reference_slots(&use_reference_slots);
+            .reference_slots(&reference_slots);
 
         if !self.video_session_is_uninitialized {
             begin_info.p_next = (&raw const self.rate_control.info).cast();
@@ -973,13 +1013,16 @@ impl VkH264Encoder {
             .nalu_slice_entries(&nalu_slices)
             .std_picture_info(&h264_picture_info);
 
+        // Do not include the setup reference in the vk::VideoEncodeInfoKHR::reference_slots
+        reference_slots.truncate(reference_slots.len() - 1);
+
         let encode_info = vk::VideoEncodeInfoKHR::default()
             .src_picture_resource(src_picture_resource_plane0)
             .dst_buffer(encode_slot.output_buffer.buffer())
             .dst_buffer_range(self.output_buffer_size) // TODO: actually use the value here of the buffer
-            .reference_slots(&active_ref_image_slot_infos)
+            .reference_slots(&reference_slots)
             .flags(vk::VideoEncodeFlagsKHR::empty())
-            .setup_reference_slot(&setup_ref_image_slot_info)
+            .setup_reference_slot(&setup_reference_slot)
             .push_next(&mut h264_encode_info);
 
         self.video_feedback_query_pool.cmd_begin_query(
@@ -1403,6 +1446,8 @@ mod tests {
 
                 let image = receiver.recv().unwrap();
 
+                while receiver.try_recv().is_ok() {}
+
                 let bgrx = image.raw;
 
                 let bgrx_original = ezk_image::Image::from_buffer(
@@ -1434,6 +1479,10 @@ mod tests {
                 encoder.encode_frame(nv12);
 
                 println!("Took: {:?}", now.elapsed());
+
+                while let Some(buf) = encoder.poll_result() {
+                    file.write_all(&buf).unwrap();
+                }
             }
 
             while let Some(buf) = encoder.wait_result() {
