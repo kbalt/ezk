@@ -1,4 +1,4 @@
-use ash::{khr::video_queue, vk};
+use ash::{ext::debug_utils, khr::video_queue, vk};
 use std::sync::Arc;
 
 use crate::VulkanError;
@@ -21,20 +21,54 @@ impl Instance {
                 ..Default::default()
             };
 
-            let instance_layers = [c"VK_LAYER_KHRONOS_validation".as_ptr()];
+            let instance_layers = [
+                #[cfg(debug_assertions)]
+                c"VK_LAYER_KHRONOS_validation".as_ptr(),
+            ];
             let instance_extensions = [
+                #[cfg(debug_assertions)]
                 ash::ext::debug_utils::NAME.as_ptr(),
                 c"VK_KHR_get_physical_device_properties2".as_ptr(),
             ];
 
-            let create_info = vk::InstanceCreateInfo {
+            let enabled = [
+                vk::ValidationFeatureEnableEXT::BEST_PRACTICES,
+                vk::ValidationFeatureEnableEXT::SYNCHRONIZATION_VALIDATION,
+            ];
+            let mut validation_features =
+                vk::ValidationFeaturesEXT::default().enabled_validation_features(&enabled);
+
+            let mut create_info = vk::InstanceCreateInfo {
                 p_application_info: &app_info,
                 ..Default::default()
             }
             .enabled_layer_names(&instance_layers)
             .enabled_extension_names(&instance_extensions);
 
+            if cfg!(debug_assertions) {
+                create_info = create_info.push_next(&mut validation_features);
+            }
+
             let instance = entry.create_instance(&create_info, None)?;
+
+            #[cfg(debug_assertions)]
+            debug_utils::Instance::new(entry, &instance).create_debug_utils_messenger(
+                &vk::DebugUtilsMessengerCreateInfoEXT::default()
+                    .message_severity(
+                        vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE
+                            | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
+                            | vk::DebugUtilsMessageSeverityFlagsEXT::INFO
+                            | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR,
+                    )
+                    .message_type(
+                        vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
+                            | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
+                            | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
+                    )
+                    .pfn_user_callback(Some(debug_utils_callback)),
+                None,
+            )?;
+
             let video_queue_instance = video_queue::Instance::new(entry, &instance);
 
             Ok(Self {
@@ -61,4 +95,35 @@ impl Drop for Inner {
             self.instance.destroy_instance(None);
         }
     }
+}
+
+#[cfg(debug_assertions)]
+unsafe extern "system" fn debug_utils_callback(
+    message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
+    message_types: vk::DebugUtilsMessageTypeFlagsEXT,
+    p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT<'_>,
+    _p_user_data: *mut std::ffi::c_void,
+) -> vk::Bool32 {
+    use std::ffi::CStr;
+
+    let data = &*p_callback_data;
+    match message_severity {
+        vk::DebugUtilsMessageSeverityFlagsEXT::ERROR => {
+            log::error!(target: "vulkan", "{message_types:?}: {:?}", CStr::from_ptr(data.p_message))
+        }
+        vk::DebugUtilsMessageSeverityFlagsEXT::WARNING => {
+            log::warn!(target: "vulkan", "{message_types:?}: {:?}", CStr::from_ptr(data.p_message))
+        }
+        vk::DebugUtilsMessageSeverityFlagsEXT::INFO => {
+            log::info!(target: "vulkan", "{message_types:?}: {:?}", CStr::from_ptr(data.p_message))
+        }
+        vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE => {
+            log::debug!(target: "vulkan", "{message_types:?}: {:?}", CStr::from_ptr(data.p_message))
+        }
+        _ => {
+            log::error!(target: "vulkan", "{message_severity:?} - {message_types:?}: {:?}", CStr::from_ptr(data.p_message))
+        }
+    }
+
+    0
 }
