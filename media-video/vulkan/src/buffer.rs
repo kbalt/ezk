@@ -26,7 +26,7 @@ impl Buffer {
             .allocation_size(memory_requirements.size)
             .memory_type_index(device.find_memory_type(
                 memory_requirements.memory_type_bits,
-                vk::MemoryPropertyFlags::HOST_VISIBLE,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             )?);
 
         let memory = device.device().allocate_memory(&output_alloc_info, None)?;
