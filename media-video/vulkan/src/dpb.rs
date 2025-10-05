@@ -33,6 +33,9 @@ pub fn create_dpb(
     let mut slots = Vec::with_capacity(num_slots as usize);
 
     for array_layer in 0..num_slots {
+        let mut view_usage_create_info = vk::ImageViewUsageCreateInfo::default()
+            .usage(vk::ImageUsageFlags::VIDEO_ENCODE_DPB_KHR);
+
         let create_info = vk::ImageViewCreateInfo::default()
             .image(unsafe { image.image() })
             .view_type(vk::ImageViewType::TYPE_2D)
@@ -44,7 +47,8 @@ pub fn create_dpb(
                 level_count: 1,
                 base_array_layer: array_layer,
                 layer_count: 1,
-            });
+            })
+            .push_next(&mut view_usage_create_info);
 
         let image_view = unsafe { ImageView::create(&image, &create_info)? };
 
