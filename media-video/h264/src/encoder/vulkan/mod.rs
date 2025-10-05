@@ -32,6 +32,8 @@ pub struct VkH264Encoder {
     width: u32,
     height: u32,
 
+    output_buffer_size: u64,
+
     device: Device,
 
     transfer_queue_family_index: u32,
@@ -292,6 +294,7 @@ impl VkH264Encoder {
         println!("{video_encode_capabilities:#?}");
         println!("{video_encode_h264_capabilities:#?}");
 
+        let output_buffer_size: u64 = (width as u64 * height as u64 * 3) / 2;
         let max_dpb_slots = video_capabilities.max_dpb_slots;
         let max_active_ref_images = video_capabilities.max_active_reference_pictures;
         let max_l0_p_ref_images = video_encode_h264_capabilities.max_p_picture_l0_reference_count;
@@ -383,7 +386,7 @@ impl VkH264Encoder {
                     vk::VideoProfileListInfoKHR::default().profiles(&profiles);
 
                 let create_info = vk::BufferCreateInfo::default()
-                    .size(1024 * 1024)
+                    .size(output_buffer_size)
                     .usage(
                         vk::BufferUsageFlags::VIDEO_ENCODE_DST_KHR
                             | vk::BufferUsageFlags::TRANSFER_SRC,
@@ -428,6 +431,7 @@ impl VkH264Encoder {
             state,
             width,
             height,
+            output_buffer_size,
             device,
             transfer_queue_family_index,
             encode_queue_family_index,
@@ -972,7 +976,7 @@ impl VkH264Encoder {
         let encode_info = vk::VideoEncodeInfoKHR::default()
             .src_picture_resource(src_picture_resource_plane0)
             .dst_buffer(encode_slot.output_buffer.buffer())
-            .dst_buffer_range(1024 * 1024) // TODO: actually use the value here of the buffer
+            .dst_buffer_range(self.output_buffer_size) // TODO: actually use the value here of the buffer
             .reference_slots(&active_ref_image_slot_infos)
             .flags(vk::VideoEncodeFlagsKHR::empty())
             .setup_reference_slot(&setup_ref_image_slot_info)
