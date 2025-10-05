@@ -14,6 +14,10 @@ pub enum VulkanError {
         properties: vk::MemoryPropertyFlags,
     },
 
+    QueryFailed {
+        status: vk::QueryResultStatusKHR,
+    },
+
     InvalidArgument {
         message: &'static str,
     },
@@ -45,6 +49,9 @@ impl fmt::Display for VulkanError {
                 f,
                 "Failed to find memory type that can be used with the constraints memory_type_bits={memory_type_bits:b}, properties={properties:?}"
             ),
+            VulkanError::QueryFailed { status } => {
+                write!(f, "Query failed, status={status:?}")
+            }
             VulkanError::InvalidArgument { message } => {
                 write!(f, "Invalid argument, {message}")
             }
