@@ -15,7 +15,8 @@ impl VideoFeedbackQueryPool {
         unsafe {
             let mut query_pool_video_encode_feedback_create_info =
                 vk::QueryPoolVideoEncodeFeedbackCreateInfoKHR::default().encode_feedback_flags(
-                    vk::VideoEncodeFeedbackFlagsKHR::BITSTREAM_BYTES_WRITTEN,
+                    vk::VideoEncodeFeedbackFlagsKHR::BITSTREAM_BYTES_WRITTEN
+                        | vk::VideoEncodeFeedbackFlagsKHR::BITSTREAM_BUFFER_OFFSET,
                 );
 
             let mut video_profile_info = video_profile_info;
@@ -36,17 +37,29 @@ impl VideoFeedbackQueryPool {
         }
     }
 
-    pub unsafe fn get_bytes_written(&mut self, index: u32) -> Result<u64, VulkanError> {
-        let mut bytes_written = [[0u64; 2]; 1];
+    pub unsafe fn get_bytes_written(&mut self, index: u32) -> Result<u32, VulkanError> {
+        let mut feedback = [EncodeFeedback {
+            offset: 0,
+            bytes_written: 0,
+            status: vk::QueryResultStatusKHR::NOT_READY,
+        }];
 
         self.device.device().get_query_pool_results(
             self.query_pool,
             index,
-            &mut bytes_written,
-            vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT,
+            &mut feedback,
+            vk::QueryResultFlags::WITH_STATUS_KHR | vk::QueryResultFlags::WAIT,
         )?;
 
-        Ok(bytes_written[0][1])
+        let [feedback] = feedback;
+
+        if feedback.status != vk::QueryResultStatusKHR::COMPLETE {
+            return Err(VulkanError::QueryFailed {
+                status: feedback.status,
+            });
+        }
+
+        Ok(feedback.bytes_written)
     }
 
     pub unsafe fn cmd_reset_query(&mut self, command_buffer: vk::CommandBuffer, index: u32) {
@@ -79,4 +92,12 @@ impl Drop for VideoFeedbackQueryPool {
                 .destroy_query_pool(self.query_pool, None);
         }
     }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct EncodeFeedback {
+    offset: u32,
+    bytes_written: u32,
+    status: vk::QueryResultStatusKHR,
 }
