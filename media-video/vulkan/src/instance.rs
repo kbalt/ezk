@@ -28,11 +28,10 @@ impl Instance {
             let instance_extensions = [
                 #[cfg(debug_assertions)]
                 ash::ext::debug_utils::NAME.as_ptr(),
-                c"VK_KHR_get_physical_device_properties2".as_ptr(),
             ];
 
             let enabled = [
-                vk::ValidationFeatureEnableEXT::BEST_PRACTICES,
+                // vk::ValidationFeatureEnableEXT::BEST_PRACTICES,
                 vk::ValidationFeatureEnableEXT::SYNCHRONIZATION_VALIDATION,
             ];
             let mut validation_features =
