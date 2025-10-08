@@ -822,143 +822,135 @@ fn profile_to_profile_and_format(profile: crate::Profile) -> Option<(i32, u32)> 
     Some((profile, format))
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use crate::encoder::H264FramePattern;
+#[cfg(test)]
+mod tests {
+    use crate::encoder::H264FramePattern;
 
-//     use super::*;
-//     use ezk_image::resize::{FilterType, ResizeAlg};
-//     use ezk_image::{
-//         ColorInfo, ColorPrimaries, ColorSpace, ColorTransfer, ImageRef, PixelFormat, YuvColorInfo,
-//     };
-//     use scap::frame::Frame;
-//     use std::fs::OpenOptions;
-//     use std::io::Write;
-//     use std::time::Instant;
+    use super::*;
+    use ezk_image::resize::{FilterType, ResizeAlg};
+    use ezk_image::{
+        ColorInfo, ColorPrimaries, ColorSpace, ColorTransfer, ImageRef, PixelFormat, YuvColorInfo,
+    };
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::time::Instant;
 
-//     #[test]
-//     fn haha() {
-//         env_logger::init();
-//         let display = Display::open_drm("/dev/dri/renderD128").unwrap();
+    #[test]
+    fn haha() {
+        env_logger::init();
+        let monitors = xcap::Monitor::all().unwrap();
 
-//         println!("profile: {:?}", display.profiles());
+        let monitor = &monitors[0];
+        let (rec, receiver) = monitor.video_recorder().unwrap();
+        rec.start().unwrap();
 
-//         let config = H264EncoderConfig {
-//             profile: crate::Profile::High,
-//             level: crate::Level::Level_4_2,
-//             resolution: (1920, 1080),
-//             framerate: None,
-//             qp: None,
-//             frame_pattern: H264FramePattern {
-//                 intra_idr_period: 60,
-//                 intra_period: 30,
-//                 ip_period: 4,
-//             },
-//             rate_control: H264RateControlConfig::ConstantQuality {
-//                 const_qp: 1,
-//                 max_bitrate: None,
-//             },
-//             usage_hint: Default::default(),
-//             content_hint: Default::default(),
-//             tuning_hint: Default::default(),
-//             max_slice_len: None,
-//         };
+        let display = Display::open_drm("/dev/dri/renderD128").unwrap();
 
-//         let mut encoder = VaH264Encoder::new(&display, config).unwrap();
+        println!("profile: {:?}", display.profiles());
 
-//         if scap::has_permission() {
-//             scap::request_permission();
-//         }
+        let config = H264EncoderConfig {
+            profile: crate::Profile::High,
+            level: crate::Level::Level_4_2,
+            resolution: (1920, 1080),
+            framerate: None,
+            qp: None,
+            frame_pattern: H264FramePattern {
+                intra_idr_period: 60,
+                intra_period: 30,
+                ip_period: 4,
+            },
+            rate_control: H264RateControlConfig::ConstantQuality {
+                const_qp: 1,
+                max_bitrate: None,
+            },
+            usage_hint: Default::default(),
+            content_hint: Default::default(),
+            tuning_hint: Default::default(),
+            max_slice_len: None,
+        };
 
-//         let mut resizer =
-//             ezk_image::resize::Resizer::new(ResizeAlg::Interpolation(FilterType::Bilinear));
+        let mut encoder = VaH264Encoder::new(&display, config).unwrap();
 
-//         let mut capturer = scap::capturer::Capturer::build(scap::capturer::Options {
-//             fps: 30,
-//             ..Default::default()
-//         })
-//         .unwrap();
+        let mut resizer =
+            ezk_image::resize::Resizer::new(ResizeAlg::Interpolation(FilterType::Bilinear));
 
-//         capturer.start_capture();
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open("va.h264")
+            .unwrap();
 
-//         let mut file = OpenOptions::new()
-//             .write(true)
-//             .create(true)
-//             .truncate(true)
-//             .open("va.h264")
-//             .unwrap();
+        let mut bgrx_target = ezk_image::Image::blank(
+            PixelFormat::BGRA,
+            1920,
+            1080,
+            ColorInfo::YUV(YuvColorInfo {
+                transfer: ColorTransfer::Linear,
+                full_range: false,
+                primaries: ColorPrimaries::BT709,
+                space: ColorSpace::BT709,
+            }),
+        );
 
-//         let mut bgrx_target = ezk_image::Image::blank(
-//             PixelFormat::BGRA,
-//             1920,
-//             1080,
-//             ColorInfo::YUV(YuvColorInfo {
-//                 transfer: ColorTransfer::Linear,
-//                 full_range: false,
-//                 primaries: ColorPrimaries::BT709,
-//                 space: ColorSpace::BT709,
-//             }),
-//         );
+        let mut nv12 = ezk_image::Image::blank(
+            PixelFormat::NV12,
+            1920,
+            1080,
+            ColorInfo::YUV(YuvColorInfo {
+                transfer: ColorTransfer::Linear,
+                full_range: false,
+                primaries: ColorPrimaries::BT709,
+                space: ColorSpace::BT709,
+            }),
+        );
 
-//         let mut nv12 = ezk_image::Image::blank(
-//             PixelFormat::NV12,
-//             1920,
-//             1080,
-//             ColorInfo::YUV(YuvColorInfo {
-//                 transfer: ColorTransfer::Linear,
-//                 full_range: false,
-//                 primaries: ColorPrimaries::BT709,
-//                 space: ColorSpace::BT709,
-//             }),
-//         );
+        let mut i = 0;
+        let mut last_frame = Instant::now();
+        while let Ok(frame) = receiver.recv() {
+            while receiver.try_recv().is_ok() {}
 
-//         let mut i = 0;
-//         let mut last_frame = Instant::now();
-//         while let Ok(frame) = capturer.get_next_frame() {
-//             let now = Instant::now();
-//             println!("Time since last frame: {:?}", now - last_frame);
-//             last_frame = now;
-//             i += 1;
-//             if i > 500 {
-//                 break;
-//             }
+            let now = Instant::now();
+            println!("Time since last frame: {:?}", now - last_frame);
+            last_frame = now;
+            i += 1;
+            if i > 500 {
+                break;
+            }
 
-//             let bgrx = match frame {
-//                 Frame::BGRx(bgrx) => bgrx,
-//                 _ => todo!(),
-//             };
+            let bgrx = frame.raw;
 
-//             let bgrx_original = ezk_image::Image::from_buffer(
-//                 PixelFormat::BGRA,
-//                 bgrx.data,
-//                 None,
-//                 bgrx.width as usize,
-//                 bgrx.height as usize,
-//                 ColorInfo::YUV(YuvColorInfo {
-//                     transfer: ColorTransfer::Linear,
-//                     full_range: false,
-//                     primaries: ColorPrimaries::BT709,
-//                     space: ColorSpace::BT709,
-//                 }),
-//             )
-//             .unwrap();
+            let bgrx_original = ezk_image::Image::from_buffer(
+                PixelFormat::RGBA,
+                bgrx,
+                None,
+                frame.width as usize,
+                frame.height as usize,
+                ColorInfo::YUV(YuvColorInfo {
+                    transfer: ColorTransfer::Linear,
+                    full_range: false,
+                    primaries: ColorPrimaries::BT709,
+                    space: ColorSpace::BT709,
+                }),
+            )
+            .unwrap();
 
-//             resizer.resize(&bgrx_original, &mut bgrx_target).unwrap();
+            resizer.resize(&bgrx_original, &mut bgrx_target).unwrap();
 
-//             ezk_image::convert_multi_thread(&bgrx_target, &mut nv12).unwrap();
+            ezk_image::convert_multi_thread(&bgrx_target, &mut nv12).unwrap();
 
-//             let mut planes = nv12.planes();
-//             let (y, y_stride) = planes.next().unwrap();
-//             let (uv, uv_stride) = planes.next().unwrap();
+            let mut planes = nv12.planes();
+            let (y, y_stride) = planes.next().unwrap();
+            let (uv, uv_stride) = planes.next().unwrap();
 
-//             encoder
-//                 .encode_frame([y, uv, &[]], [y_stride, uv_stride, 0], 1920, 1080)
-//                 .unwrap();
+            encoder
+                .encode_frame([y, uv, &[]], [y_stride, uv_stride, 0], 1920, 1080)
+                .unwrap();
 
-//             while let Some(buf) = encoder.poll_result().unwrap() {
-//                 println!("buf: {:?}", &buf[..8]);
-//                 file.write_all(&buf).unwrap();
-//             }
-//         }
-//     }
-// }
+            while let Some(buf) = encoder.poll_result().unwrap() {
+                println!("buf: {:?}", &buf[..8]);
+                file.write_all(&buf).unwrap();
+            }
+        }
+    }
+}
