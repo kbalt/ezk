@@ -1,4 +1,4 @@
-use crate::{FmtpOptions, Level, PacketizationMode, Profile};
+use crate::{FmtpOptions, Level, PacketizationMode, Profile, encoder::H264EncoderCapabilities};
 
 /// Generic H.264 encoder config
 #[derive(Debug, Clone, Copy)]
@@ -22,7 +22,7 @@ pub struct H264EncoderConfig {
     ///
     /// Allowed values range from 0 to 51, where 0 is the best quality and 51 the worst with the most compression.
     ///
-    /// Default is (17..=28) but manual tuning is recommended!
+    /// Default should be (17..=28) but manual tuning is recommended!
     ///
     /// Ignored when `rate_control` is `ConstantQuality`
     pub qp: Option<(u8, u8)>,
@@ -46,11 +46,18 @@ pub struct H264EncoderConfig {
     ///
     /// Required if the packetization mode is SingleNAL which doesn't support fragmentation units.
     pub max_slice_len: Option<usize>,
+
+    pub max_l0_p_references: u32,
+    pub max_l0_b_references: u32,
+    pub max_l1_b_references: u32,
+
+    /// Quality level from
+    pub quality_level: u32,
 }
 
 impl H264EncoderConfig {
     /// Create a encoder config from the peer's H.264 decoder capabilities, communicated through SDP's fmtp attribute
-    pub fn from_fmtp(fmtp: FmtpOptions, mtu: usize) -> Self {
+    pub fn from_fmtp(capabilities: H264EncoderCapabilities, fmtp: FmtpOptions, mtu: usize) -> Self {
         H264EncoderConfig {
             profile: fmtp.profile_level_id.profile,
             level: fmtp.profile_level_id.level,
@@ -76,6 +83,10 @@ impl H264EncoderConfig {
                     }
                 }
             },
+            max_l0_p_references: capabilities.max_l0_p_references,
+            max_l0_b_references: capabilities.max_l0_b_references,
+            max_l1_b_references: capabilities.max_l1_b_references,
+            quality_level: capabilities.max_quality_level,
         }
     }
 }

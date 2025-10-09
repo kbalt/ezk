@@ -6,6 +6,7 @@ use std::{
     ffi::{CStr, c_void},
     fmt,
     fs::File,
+    path::PathBuf,
 };
 
 pub mod ffi {
@@ -30,6 +31,9 @@ pub use surface::Surface;
 
 struct Handle {
     _drm_file: File,
+    drm_path: PathBuf,
+    vendor_id: u16,
+    device_id: u16,
     dpy: *mut c_void,
 }
 
