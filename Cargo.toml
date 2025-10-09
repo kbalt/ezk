@@ -39,4 +39,4 @@ unreachable_pub = "warn"
 
 [profile.release]
 debug = true
-debug-assertions = true
+# debug-assertions = true
