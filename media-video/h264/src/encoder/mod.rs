@@ -68,14 +68,18 @@ mod tests {
     use crate::encoder::{H264FramePattern, H264RateControlConfig};
     use ::libva::Display;
     use ::vulkan::{Instance, ash};
-    use ezk_image::resize::{FilterType, ResizeAlg};
     use ezk_image::{
-        ColorInfo, ColorPrimaries, ColorSpace, ColorTransfer, ImageMut, PixelFormat, YuvColorInfo,
+        ColorInfo, ColorPrimaries, ColorSpace, ColorTransfer, PixelFormat, YuvColorInfo,
     };
 
     #[test]
     fn generic() {
         env_logger::init();
+
+        let monitors = xcap::Monitor::all().unwrap();
+        let monitor = &monitors[1];
+        // let (rec, receiver) = monitor.video_recorder().unwrap();
+        // rec.start().unwrap();
 
         // Vulkan
         let entry = unsafe { ash::Entry::load().unwrap() };
@@ -109,10 +113,6 @@ mod tests {
 
         println!("Capabilities: {capabilities:#?}");
 
-        let monitors = xcap::Monitor::all().unwrap();
-
-        let monitor = &monitors[0];
-
         let mut encoder = device
             .create_encoder(H264EncoderConfig {
                 profile: crate::Profile::High,
@@ -123,7 +123,7 @@ mod tests {
                 frame_pattern: H264FramePattern {
                     intra_idr_period: 120,
                     intra_period: 120,
-                    ip_period: 4,
+                    ip_period: 1,
                 },
                 rate_control: H264RateControlConfig::ConstantBitRate { bitrate: 6_000_000 },
                 usage_hint: H264EncodeUsageHint::Default,
@@ -137,23 +137,20 @@ mod tests {
             })
             .unwrap();
 
-        let (rec, receiver) = monitor.video_recorder().unwrap();
-        rec.start().unwrap();
+        let mut file = OpenOptions::new()
+            .truncate(true)
+            .create(true)
+            .write(true)
+            .open("va.h264")
+            .unwrap();
 
-        // let mut file = OpenOptions::new()
-        //     .truncate(true)
-        //     .create(true)
-        //     .write(true)
-        //     .open("/home/dyson/va.h264")
-        //     .unwrap();
-
-        let mut captured = ezk_image::Image::blank(
+        let captured = ezk_image::Image::blank(
             PixelFormat::NV12,
-            2560,
-            1440,
+            monitor.width().unwrap() as usize,
+            monitor.height().unwrap() as usize,
             ColorInfo::YUV(YuvColorInfo {
                 transfer: ColorTransfer::Linear,
-                full_range: false,
+                full_range: true,
                 primaries: ColorPrimaries::BT709,
                 space: ColorSpace::BT709,
             }),
@@ -163,31 +160,25 @@ mod tests {
         while i < 500 {
             i += 1;
 
-            let image = receiver.recv().unwrap();
-            while receiver.try_recv().is_ok() {}
+            // std::thread::sleep_ms(32);
 
-            {
-                let i = Instant::now();
+            // let image = receiver.recv().unwrap();
+            // while receiver.try_recv().is_ok() {}
 
-                let captured_rgba = ezk_image::Image::from_buffer(
-                    PixelFormat::RGBA,
-                    image.raw,
-                    None,
-                    image.width as usize,
-                    image.height as usize,
-                    ColorInfo::YUV(YuvColorInfo {
-                        transfer: ColorTransfer::Linear,
-                        full_range: false,
-                        primaries: ColorPrimaries::BT709,
-                        space: ColorSpace::BT709,
-                    }),
-                )
-                .unwrap();
-
-                ezk_image::convert(&captured_rgba, &mut captured).unwrap();
-
-                println!("ezk convert took: {:?}", i.elapsed());
-            }
+            // let captured_rgba = ezk_image::Image::from_buffer(
+            //     PixelFormat::RGBA,
+            //     image.raw,
+            //     None,
+            //     image.width as usize,
+            //     image.height as usize,
+            //     ColorInfo::YUV(YuvColorInfo {
+            //         transfer: ColorTransfer::Linear,
+            //         full_range: false,
+            //         primaries: ColorPrimaries::BT2020,
+            //         space: ColorSpace::BT709,
+            //     }),
+            // )
+            // .unwrap();
 
             let now: Instant = Instant::now();
 
@@ -195,13 +186,13 @@ mod tests {
 
             println!("Took: {:?}", now.elapsed());
 
-            while let Some(buf) = encoder.poll_result().unwrap() {
-                // file.write_all(&buf).unwrap();
+            while let Some(buf) = encoder.wait_result().unwrap() {
+                file.write_all(&buf).unwrap();
             }
         }
 
         while let Some(buf) = encoder.wait_result().unwrap() {
-            // file.write_all(&buf).unwrap();
+            file.write_all(&buf).unwrap();
         }
         std::mem::forget(encoder);
     }
