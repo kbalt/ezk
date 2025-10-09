@@ -35,6 +35,25 @@ impl VideoSessionParameters {
         })
     }
 
+    pub unsafe fn update(
+        &mut self,
+        update_info: &vk::VideoSessionParametersUpdateInfoKHR<'_>,
+    ) -> Result<(), vk::Result> {
+        let device = self.video_session().device();
+
+        let update_video_session_parameters = device
+            .video_queue_device()
+            .fp()
+            .update_video_session_parameters_khr;
+
+        update_video_session_parameters(
+            device.device().handle(),
+            self.video_session_parameters,
+            update_info,
+        )
+        .result()
+    }
+
     pub unsafe fn get_encoded_video_session_parameters<T>(
         &self,
         ext: &mut T,
