@@ -37,7 +37,6 @@ impl Device {
                 ash::khr::video_queue::Device::new(instance.instance(), &device);
             let video_encode_queue_device =
                 video_encode_queue::Device::new(instance.instance(), &device);
-
             let physical_device_memory_properties = instance
                 .instance()
                 .get_physical_device_memory_properties(physical_device);

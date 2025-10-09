@@ -5,8 +5,8 @@ pub fn create_dpb(
     device: &Device,
     video_profile_info: vk::VideoProfileInfoKHR<'_>,
     num_slots: u32,
-    width: u32,
-    height: u32,
+    extent: vk::Extent2D,
+    usage: vk::ImageUsageFlags,
 ) -> Result<Vec<ImageView>, VulkanError> {
     let profiles = [video_profile_info];
 
@@ -15,8 +15,8 @@ pub fn create_dpb(
         .image_type(vk::ImageType::TYPE_2D)
         .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
         .extent(vk::Extent3D {
-            width,
-            height,
+            width: extent.width,
+            height: extent.height,
             depth: 1,
         })
         .mip_levels(1)
@@ -25,7 +25,7 @@ pub fn create_dpb(
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .initial_layout(vk::ImageLayout::UNDEFINED)
         .samples(vk::SampleCountFlags::TYPE_1)
-        .usage(vk::ImageUsageFlags::VIDEO_ENCODE_DPB_KHR)
+        .usage(usage)
         .push_next(&mut video_profile_list_info);
 
     let image = unsafe { Image::create(device, &input_image_info)? };
@@ -33,8 +33,7 @@ pub fn create_dpb(
     let mut slots = Vec::with_capacity(num_slots as usize);
 
     for array_layer in 0..num_slots {
-        let mut view_usage_create_info = vk::ImageViewUsageCreateInfo::default()
-            .usage(vk::ImageUsageFlags::VIDEO_ENCODE_DPB_KHR);
+        let mut view_usage_create_info = vk::ImageViewUsageCreateInfo::default().usage(usage);
 
         let create_info = vk::ImageViewCreateInfo::default()
             .image(unsafe { image.image() })
