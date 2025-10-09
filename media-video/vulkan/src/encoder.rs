@@ -4,6 +4,7 @@ use crate::{
     create_dpb,
 };
 use ash::vk::{self, Handle};
+use ezk_image::{ColorInfo, ColorSpace, ImageRef, PixelFormat, YuvColorInfo, convert_multi_thread};
 use std::{collections::VecDeque, ffi::CStr, mem::zeroed};
 
 const PARALLEL_ENCODINGS: u32 = 16;
@@ -13,9 +14,8 @@ pub trait VulkanEncCodec {
     const EXTENSION: &'static CStr;
     type ProfileInfo<'a>: vk::ExtendsVideoProfileInfoKHR;
     type Capabilities<'a>: vk::ExtendsVideoCapabilitiesKHR + Default;
-    type CreateParameters<'a>: vk::ExtendsVideoSessionParametersCreateInfoKHR;
-    type UpdateParameters<'a>: vk::ExtendsVideoSessionParametersUpdateInfoKHR;
-    type ReferenceSlot<'a>: vk::ExtendsVideoReferenceSlotInfoKHR;
+    type ParametersCreateInfo<'a>: vk::ExtendsVideoSessionParametersCreateInfoKHR;
+    type ParametersAddInfo<'a>: vk::ExtendsVideoSessionParametersUpdateInfoKHR;
 
     type StdReferenceInfo;
     type DpbSlotInfo<'a>: vk::ExtendsVideoReferenceSlotInfoKHR;
@@ -27,6 +27,10 @@ pub trait VulkanEncCodec {
     type RateControlInfo<'a>: vk::ExtendsVideoBeginCodingInfoKHR
         + vk::ExtendsVideoCodingControlInfoKHR;
     type RateControlLayerInfo<'a>: vk::ExtendsVideoEncodeRateControlLayerInfoKHR;
+
+    fn get_encoded_video_session_parameters(
+        video_session_parameters: &VideoSessionParameters,
+    ) -> Vec<u8>;
 }
 
 pub struct H264;
@@ -37,9 +41,8 @@ impl VulkanEncCodec for H264 {
     const EXTENSION: &'static CStr = ash::khr::video_encode_h264::NAME;
     type ProfileInfo<'a> = vk::VideoEncodeH264ProfileInfoKHR<'a>;
     type Capabilities<'a> = vk::VideoEncodeH264CapabilitiesKHR<'a>;
-    type CreateParameters<'a> = vk::VideoEncodeH264SessionParametersCreateInfoKHR<'a>;
-    type UpdateParameters<'a> = vk::VideoEncodeH264SessionParametersAddInfoKHR<'a>;
-    type ReferenceSlot<'a> = vk::VideoEncodeH264DpbSlotInfoKHR<'a>;
+    type ParametersCreateInfo<'a> = vk::VideoEncodeH264SessionParametersCreateInfoKHR<'a>;
+    type ParametersAddInfo<'a> = vk::VideoEncodeH264SessionParametersAddInfoKHR<'a>;
 
     type StdReferenceInfo = vk::native::StdVideoEncodeH264ReferenceInfo;
     type DpbSlotInfo<'a> = vk::VideoEncodeH264DpbSlotInfoKHR<'a>;
@@ -52,6 +55,20 @@ impl VulkanEncCodec for H264 {
 
     type RateControlInfo<'a> = vk::VideoEncodeH264RateControlInfoKHR<'a>;
     type RateControlLayerInfo<'a> = vk::VideoEncodeH264RateControlLayerInfoKHR<'a>;
+
+    fn get_encoded_video_session_parameters(
+        video_session_parameters: &VideoSessionParameters,
+    ) -> Vec<u8> {
+        let mut info = vk::VideoEncodeH264SessionParametersGetInfoKHR::default()
+            .write_std_sps(true)
+            .write_std_pps(true);
+
+        unsafe {
+            video_session_parameters
+                .get_encoded_video_session_parameters(&mut info)
+                .unwrap()
+        }
+    }
 }
 
 pub struct H265;
@@ -62,12 +79,11 @@ impl VulkanEncCodec for H265 {
     const EXTENSION: &'static CStr = ash::khr::video_encode_h265::NAME;
     type ProfileInfo<'a> = vk::VideoEncodeH265ProfileInfoKHR<'a>;
     type Capabilities<'a> = vk::VideoEncodeH265CapabilitiesKHR<'a>;
-    type CreateParameters<'a> = vk::VideoEncodeH265SessionParametersCreateInfoKHR<'a>;
-    type UpdateParameters<'a> = vk::VideoEncodeH265SessionParametersAddInfoKHR<'a>;
-    type ReferenceSlot<'a> = vk::VideoEncodeH265DpbSlotInfoKHR<'a>;
+    type ParametersCreateInfo<'a> = vk::VideoEncodeH265SessionParametersCreateInfoKHR<'a>;
+    type ParametersAddInfo<'a> = vk::VideoEncodeH265SessionParametersAddInfoKHR<'a>;
+    type DpbSlotInfo<'a> = vk::VideoEncodeH265DpbSlotInfoKHR<'a>;
 
     type StdReferenceInfo = vk::native::StdVideoEncodeH265ReferenceInfo;
-    type DpbSlotInfo<'a> = vk::VideoEncodeH265DpbSlotInfoKHR<'a>;
 
     fn slot_info_from_std(std_reference_info: &Self::StdReferenceInfo) -> Self::DpbSlotInfo<'_> {
         vk::VideoEncodeH265DpbSlotInfoKHR::default().std_reference_info(std_reference_info)
@@ -77,6 +93,21 @@ impl VulkanEncCodec for H265 {
 
     type RateControlInfo<'a> = vk::VideoEncodeH265RateControlInfoKHR<'a>;
     type RateControlLayerInfo<'a> = vk::VideoEncodeH265RateControlLayerInfoKHR<'a>;
+
+    fn get_encoded_video_session_parameters(
+        video_session_parameters: &VideoSessionParameters,
+    ) -> Vec<u8> {
+        let mut info = vk::VideoEncodeH265SessionParametersGetInfoKHR::default()
+            .write_std_sps(true)
+            .write_std_pps(true)
+            .write_std_vps(true);
+
+        unsafe {
+            video_session_parameters
+                .get_encoded_video_session_parameters(&mut info)
+                .unwrap()
+        }
+    }
 }
 
 pub struct VulkanEncoderCapabilities<'a, C: VulkanEncCodec> {
@@ -141,7 +172,7 @@ impl<'a, C: VulkanEncCodec + 'a> VulkanEncoderCapabilities<'a, C> {
 
     pub fn create_encoder(
         self,
-        parameters: &mut C::CreateParameters<'a>,
+        parameters: &mut C::ParametersCreateInfo<'a>,
         max_coded_extent: vk::Extent2D,
         max_active_ref_images: u32,
         max_dpb_slots: u32,
@@ -289,8 +320,9 @@ impl<'a, C: VulkanEncCodec + 'a> VulkanEncoderCapabilities<'a, C> {
             let transfer_semaphore = Semaphore::create(&device).unwrap();
             let completion_fence = Fence::create(&device).unwrap();
 
-            encode_slots.push(EncodeSlot {
+            encode_slots.push(VulkanEncodeSlot {
                 index,
+                emit_parameters: false,
                 input_staging_buffer,
                 input_image,
                 input_image_view,
@@ -313,13 +345,10 @@ impl<'a, C: VulkanEncCodec + 'a> VulkanEncoderCapabilities<'a, C> {
 
         let dpb_slots: Vec<DpbSlot<C>> = dpb_views
             .into_iter()
-            .enumerate()
-            .map(|(i, image_view)| DpbSlot {
-                slot_index: i as u32,
+            .map(|image_view| DpbSlot {
                 image_view,
                 std_reference_info: unsafe { zeroed() },
             })
-            .rev()
             .collect();
 
         let encode_slot = &mut encode_slots[0];
@@ -381,6 +410,7 @@ impl<'a, C: VulkanEncCodec + 'a> VulkanEncoderCapabilities<'a, C> {
             encode_slots,
             in_flight: VecDeque::new(),
             dpb_slots,
+            output: VecDeque::new(),
         }
     }
 }
@@ -429,15 +459,19 @@ pub struct VulkanEncoder<C: VulkanEncCodec> {
 
     video_feedback_query_pool: VideoFeedbackQueryPool,
 
-    encode_slots: Vec<EncodeSlot>,
-    in_flight: VecDeque<EncodeSlot>,
+    encode_slots: Vec<VulkanEncodeSlot>,
+    in_flight: VecDeque<VulkanEncodeSlot>,
 
     dpb_slots: Vec<DpbSlot<C>>,
+
+    output: VecDeque<Vec<u8>>,
 }
 
-struct EncodeSlot {
+pub struct VulkanEncodeSlot {
     /// Index used for the video feedback query pool
     index: u32,
+
+    emit_parameters: bool,
 
     input_staging_buffer: Buffer,
 
@@ -455,13 +489,153 @@ struct EncodeSlot {
 }
 
 struct DpbSlot<C: VulkanEncCodec> {
-    slot_index: u32,
     image_view: ImageView,
     std_reference_info: C::StdReferenceInfo,
 }
 
 impl<C: VulkanEncCodec> VulkanEncoder<C> {
-    unsafe fn record_transfer_queue(&mut self, encode_slot: &mut EncodeSlot) {
+    fn wait_encode_slot(&mut self, encode_slot: &mut VulkanEncodeSlot) {
+        assert!(encode_slot.completion_fence.wait(u64::MAX).unwrap());
+        encode_slot.completion_fence.reset().unwrap();
+    }
+
+    fn read_out_encode_slot(&mut self, encode_slot: &mut VulkanEncodeSlot) {
+        if encode_slot.emit_parameters {
+            let parameters =
+                C::get_encoded_video_session_parameters(&self.video_session_parameters);
+
+            self.output.push_back(parameters);
+        }
+
+        unsafe {
+            let bytes_written = self
+                .video_feedback_query_pool
+                .get_bytes_written(encode_slot.index)
+                .unwrap();
+
+            let mapped_buffer = encode_slot.output_buffer.map(bytes_written.into()).unwrap();
+
+            self.output.push_back(mapped_buffer.data().to_vec());
+        }
+    }
+
+    pub fn pop_encode_slot(&mut self) -> Option<VulkanEncodeSlot> {
+        if let Some(encode_slot) = self.encode_slots.pop() {
+            return Some(encode_slot);
+        }
+
+        let mut encode_slot = self.in_flight.pop_front()?;
+
+        self.wait_encode_slot(&mut encode_slot);
+        self.read_out_encode_slot(&mut encode_slot);
+
+        Some(encode_slot)
+    }
+
+    pub fn poll_result(&mut self) -> Option<Vec<u8>> {
+        if let Some(output) = self.output.pop_front() {
+            return Some(output);
+        }
+
+        if let Some(encode_slot) = self.in_flight.front_mut() {
+            let completed = encode_slot.completion_fence.wait(0).unwrap();
+            if !completed {
+                return None;
+            }
+
+            encode_slot.completion_fence.reset().unwrap();
+
+            let mut encode_slot = self.in_flight.pop_front().unwrap();
+            self.read_out_encode_slot(&mut encode_slot);
+            self.encode_slots.push(encode_slot);
+        }
+
+        self.output.pop_front()
+    }
+
+    pub fn wait_result(&mut self) -> Option<Vec<u8>> {
+        if let Some(output) = self.output.pop_front() {
+            return Some(output);
+        }
+
+        if let Some(mut encode_slot) = self.in_flight.pop_front() {
+            self.wait_encode_slot(&mut encode_slot);
+            self.read_out_encode_slot(&mut encode_slot);
+            self.encode_slots.push(encode_slot);
+        }
+
+        self.output.pop_front()
+    }
+
+    pub fn upload_image_to_encode_slot(
+        &mut self,
+        encode_slot: &mut VulkanEncodeSlot,
+        image: &dyn ImageRef,
+    ) {
+        unsafe {
+            let width = self.max_coded_extent.width;
+            let height = self.max_coded_extent.height;
+
+            let mapped_buffer = encode_slot
+                .input_staging_buffer
+                .map((width as u64 * height as u64 * 12) / 8)
+                .unwrap();
+
+            let dst_color = match image.color() {
+                ColorInfo::RGB(rgb_color_info) => YuvColorInfo {
+                    transfer: rgb_color_info.transfer,
+                    primaries: rgb_color_info.primaries,
+                    space: ColorSpace::BT709,
+                    full_range: true,
+                },
+                ColorInfo::YUV(yuv_color_info) => yuv_color_info,
+            };
+
+            let mut dst = ezk_image::Image::from_buffer(
+                PixelFormat::NV12,
+                mapped_buffer.data_mut(),
+                None,
+                width as usize,
+                height as usize,
+                dst_color.into(),
+            )
+            .unwrap();
+
+            convert_multi_thread(image, &mut dst).unwrap();
+        }
+    }
+
+    pub fn submit_encode_slot(
+        &mut self,
+        mut encode_slot: VulkanEncodeSlot,
+        references: Vec<usize>,
+        setup_reference: usize,
+        setup_std_reference_info: C::StdReferenceInfo,
+        picture_info: C::PictureInfo<'_>,
+        emit_parameters: bool,
+    ) {
+        encode_slot.emit_parameters = emit_parameters;
+
+        log::trace!(
+            "Submit encode slot: references: {references:?}, setup_reference: {setup_reference}, emit_parameters: {emit_parameters}"
+        );
+
+        unsafe {
+            self.record_transfer_queue(&mut encode_slot);
+
+            self.record_encode_queue(
+                &mut encode_slot,
+                references,
+                setup_reference,
+                setup_std_reference_info,
+                picture_info,
+            );
+
+            self.in_flight.push_back(encode_slot);
+        }
+    }
+
+    unsafe fn record_transfer_queue(&mut self, encode_slot: &mut VulkanEncodeSlot) {
         let device = self.video_session.device();
 
         // Record TRANSFER queue
@@ -531,13 +705,14 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
             .device()
             .queue_submit(self.transfer_queue, &[submit_info], vk::Fence::null())
             .unwrap();
+        device.device().device_wait_idle().unwrap();
     }
 
     unsafe fn record_encode_queue(
         &mut self,
-        encode_slot: &mut EncodeSlot,
-        references: Vec<usize>,
-        setup_reference: usize,
+        encode_slot: &mut VulkanEncodeSlot,
+        reference_indices: Vec<usize>,
+        setup_reference_index: usize,
         setup_std_reference_info: C::StdReferenceInfo,
         mut picture_info: C::PictureInfo<'_>,
     ) {
@@ -568,8 +743,8 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
         );
 
         // Barrier the setup dpb slot
-        self.dpb_slots[setup_reference].std_reference_info = setup_std_reference_info;
-        let setup_reference = &self.dpb_slots[setup_reference];
+        self.dpb_slots[setup_reference_index].std_reference_info = setup_std_reference_info;
+        let setup_reference = &self.dpb_slots[setup_reference_index];
 
         setup_reference.image_view.image().cmd_memory_barrier2(
             recording.command_buffer(),
@@ -594,11 +769,11 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
             C::slot_info_from_std(&setup_reference.std_reference_info);
         let setup_reference_slot_info = vk::VideoReferenceSlotInfoKHR::default()
             .picture_resource(&setup_reference_picture_resource_info)
-            .slot_index(setup_reference.slot_index as i32)
+            .slot_index(setup_reference_index as i32)
             .push_next(&mut setup_reference_dpb_slot_info);
 
         // Barrier the active reference dpb slots
-        for dpb_slot in &references {
+        for dpb_slot in &reference_indices {
             let dpb_slot = &self.dpb_slots[*dpb_slot];
 
             dpb_slot.image_view.image().cmd_memory_barrier2(
@@ -608,17 +783,17 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
                 vk::QUEUE_FAMILY_IGNORED,
                 vk::QUEUE_FAMILY_IGNORED,
                 vk::PipelineStageFlags2::VIDEO_ENCODE_KHR,
-                vk::AccessFlags2::VIDEO_ENCODE_WRITE_KHR | vk::AccessFlags2::VIDEO_ENCODE_READ_KHR,
+                vk::AccessFlags2::VIDEO_ENCODE_READ_KHR | vk::AccessFlags2::VIDEO_ENCODE_WRITE_KHR,
                 vk::PipelineStageFlags2::VIDEO_ENCODE_KHR,
                 vk::AccessFlags2::VIDEO_ENCODE_READ_KHR,
                 dpb_slot.image_view.subresource_range().base_array_layer,
             );
         }
 
-        let mut reference_slots_resources: Vec<_> = references
+        let mut reference_slots_resources: Vec<_> = reference_indices
             .iter()
-            .map(|slot| {
-                let slot = &self.dpb_slots[*slot];
+            .map(|index| {
+                let slot = &self.dpb_slots[*index];
 
                 let dpb_slot_info = C::slot_info_from_std(&slot.std_reference_info);
 
@@ -626,7 +801,7 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
                     .image_view_binding(slot.image_view.image_view())
                     .coded_extent(self.max_coded_extent);
 
-                (slot.slot_index, picture_resource_info, dpb_slot_info)
+                (*index, picture_resource_info, dpb_slot_info)
             })
             .collect();
 
@@ -683,7 +858,7 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
             .base_array_layer(0);
 
         // Do not include the setup reference in the vk::VideoEncodeInfoKHR::reference_slots
-        let _ = reference_slots.pop();
+        reference_slots.truncate(reference_slots.len() - 1);
 
         let encode_info = vk::VideoEncodeInfoKHR::default()
             .src_picture_resource(src_picture_resource_info)
@@ -727,6 +902,8 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
                 encode_slot.completion_fence.fence(),
             )
             .unwrap();
+
+        device.device().device_wait_idle().unwrap();
     }
 
     unsafe fn control_video_coding(
