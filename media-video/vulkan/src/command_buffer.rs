@@ -1,6 +1,5 @@
+use ash::vk::{self};
 use std::sync::Arc;
-
-use ash::vk;
 
 use crate::{Device, VulkanError};
 
@@ -59,12 +58,63 @@ impl CommandBuffer {
     pub unsafe fn command_buffer(&self) -> vk::CommandBuffer {
         self.command_buffer
     }
+
+    pub unsafe fn begin(
+        &mut self,
+        begin_info: &vk::CommandBufferBeginInfo,
+    ) -> Result<RecordingCommandBuffer<'_>, vk::Result> {
+        self.device()
+            .device()
+            .begin_command_buffer(self.command_buffer(), begin_info)?;
+
+        Ok(RecordingCommandBuffer {
+            command_buffer: self,
+            ended: false,
+        })
+    }
 }
 
 impl Drop for Inner {
     fn drop(&mut self) {
         unsafe {
             self.device.device().destroy_command_pool(self.pool, None);
+        }
+    }
+}
+
+pub struct RecordingCommandBuffer<'a> {
+    command_buffer: &'a mut CommandBuffer,
+    ended: bool,
+}
+
+impl RecordingCommandBuffer<'_> {
+    pub unsafe fn command_buffer(&self) -> vk::CommandBuffer {
+        self.command_buffer.command_buffer()
+    }
+
+    pub fn end(mut self) -> Result<(), vk::Result> {
+        self.ended = true;
+        self.end_ref()
+    }
+
+    fn end_ref(&mut self) -> Result<(), vk::Result> {
+        unsafe {
+            self.command_buffer
+                .device()
+                .device()
+                .end_command_buffer(self.command_buffer())
+        }
+    }
+}
+
+impl Drop for RecordingCommandBuffer<'_> {
+    fn drop(&mut self) {
+        if self.ended {
+            return;
+        }
+
+        if let Err(e) = self.end_ref() {
+            log::error!("Failed to end command buffer: {e}");
         }
     }
 }

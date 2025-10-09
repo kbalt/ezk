@@ -83,7 +83,7 @@ impl Context {
         }
     }
 
-    pub fn begin_picture(&self, render_target: &Surface) -> Result<(), VaError> {
+    pub fn begin_picture(&self, render_target: &Surface) -> Result<Pipeline<'_>, VaError> {
         debug_assert!(Arc::ptr_eq(&self.display, &render_target.display));
 
         unsafe {
@@ -91,28 +91,13 @@ impl Context {
                 self.display.dpy,
                 self.context_id,
                 render_target.surface_id,
-            ))
+            ))?;
         }
-    }
 
-    pub fn render_picture<'a>(
-        &self,
-        buffers: impl IntoIterator<Item = &'a Buffer>,
-    ) -> Result<(), VaError> {
-        unsafe {
-            let buffers: Vec<ffi::VABufferID> = buffers.into_iter().map(|b| b.buf_id).collect();
-
-            VaError::try_(ffi::vaRenderPicture(
-                self.display.dpy,
-                self.context_id,
-                buffers.as_ptr().cast_mut(),
-                buffers.len() as _,
-            ))
-        }
-    }
-
-    pub fn end_picture(&self) -> Result<(), VaError> {
-        unsafe { VaError::try_(ffi::vaEndPicture(self.display.dpy, self.context_id)) }
+        Ok(Pipeline {
+            context: self,
+            completed: false,
+        })
     }
 }
 
@@ -123,6 +108,55 @@ impl Drop for Context {
             {
                 log::error!("Failed to destroy VAContext {}, {}", self.context_id, e)
             }
+        }
+    }
+}
+
+pub struct Pipeline<'a> {
+    context: &'a Context,
+    completed: bool,
+}
+
+impl Pipeline<'_> {
+    pub fn render_picture<'a>(
+        &self,
+        buffers: impl IntoIterator<Item = &'a Buffer>,
+    ) -> Result<(), VaError> {
+        unsafe {
+            let buffers: Vec<ffi::VABufferID> = buffers.into_iter().map(|b| b.buf_id).collect();
+
+            VaError::try_(ffi::vaRenderPicture(
+                self.context.display.dpy,
+                self.context.context_id,
+                buffers.as_ptr().cast_mut(),
+                buffers.len() as _,
+            ))
+        }
+    }
+
+    pub fn end_picture(mut self) -> Result<(), VaError> {
+        self.completed = true;
+        self.end_picture_ref()
+    }
+
+    fn end_picture_ref(&mut self) -> Result<(), VaError> {
+        unsafe {
+            VaError::try_(ffi::vaEndPicture(
+                self.context.display.dpy,
+                self.context.context_id,
+            ))
+        }
+    }
+}
+
+impl Drop for Pipeline<'_> {
+    fn drop(&mut self) {
+        if self.completed {
+            return;
+        }
+
+        if let Err(e) = self.end_picture_ref() {
+            log::error!("vaEndPicture failed: {e:?}");
         }
     }
 }

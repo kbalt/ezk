@@ -19,7 +19,6 @@ bytes = "1.10.0"
 thiserror = "2.0.11"
 rand = "0.9"
 bitstream-io = "4"
-xcap = "0.7.1"
 ezk-image = "0.3.0"
 
 openh264 = { version = "0.8", optional = true }
@@ -34,3 +33,4 @@ libva.workspace = true
 
 [dev-dependencies]
 env_logger = "0.11"
+xcap = "0.7.1"

@@ -1,7 +1,7 @@
 use ash::{ext::debug_utils, khr::video_queue, vk};
 use std::sync::Arc;
 
-use crate::VulkanError;
+use crate::{PhysicalDevice, VulkanError};
 
 #[derive(Clone)]
 pub struct Instance {
@@ -9,12 +9,16 @@ pub struct Instance {
 }
 
 struct Inner {
+    _entry: ash::Entry,
     instance: ash::Instance,
     video_queue_instance: video_queue::Instance,
+
+    #[cfg(debug_assertions)]
+    debug_messenger: vk::DebugUtilsMessengerEXT,
 }
 
 impl Instance {
-    pub fn load(entry: &ash::Entry) -> Result<Self, VulkanError> {
+    pub fn load(entry: ash::Entry) -> Result<Self, VulkanError> {
         unsafe {
             let app_info = vk::ApplicationInfo {
                 api_version: vk::make_api_version(0, 1, 3, 316),
@@ -31,7 +35,7 @@ impl Instance {
             ];
 
             let enabled = [
-                // vk::ValidationFeatureEnableEXT::BEST_PRACTICES,
+                // vk::ValidationFeatureEnableEXT::BEST_PRACTICES, // TODO: SEGFAULT under RADV
                 vk::ValidationFeatureEnableEXT::SYNCHRONIZATION_VALIDATION,
             ];
             let mut validation_features =
@@ -51,29 +55,33 @@ impl Instance {
             let instance = entry.create_instance(&create_info, None)?;
 
             #[cfg(debug_assertions)]
-            debug_utils::Instance::new(entry, &instance).create_debug_utils_messenger(
-                &vk::DebugUtilsMessengerCreateInfoEXT::default()
-                    .message_severity(
-                        vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE
-                            | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
-                            | vk::DebugUtilsMessageSeverityFlagsEXT::INFO
-                            | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR,
-                    )
-                    .message_type(
-                        vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
-                            | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
-                            | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
-                    )
-                    .pfn_user_callback(Some(debug_utils_callback)),
-                None,
-            )?;
+            let debug_messenger = debug_utils::Instance::new(&entry, &instance)
+                .create_debug_utils_messenger(
+                    &vk::DebugUtilsMessengerCreateInfoEXT::default()
+                        .message_severity(
+                            vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE
+                                | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
+                                | vk::DebugUtilsMessageSeverityFlagsEXT::INFO
+                                | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR,
+                        )
+                        .message_type(
+                            vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
+                                | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
+                                | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
+                        )
+                        .pfn_user_callback(Some(debug_utils_callback)),
+                    None,
+                )?;
 
-            let video_queue_instance = video_queue::Instance::new(entry, &instance);
+            let video_queue_instance = video_queue::Instance::new(&entry, &instance);
 
             Ok(Self {
                 inner: Arc::new(Inner {
+                    _entry: entry,
                     instance,
                     video_queue_instance,
+                    #[cfg(debug_assertions)]
+                    debug_messenger,
                 }),
             })
         }
@@ -86,11 +94,28 @@ impl Instance {
     pub fn video_queue_instance(&self) -> &video_queue::Instance {
         &self.inner.video_queue_instance
     }
+
+    pub fn physical_devices(&self) -> Result<Vec<PhysicalDevice>, vk::Result> {
+        unsafe {
+            let physical_devices = self
+                .instance()
+                .enumerate_physical_devices()?
+                .into_iter()
+                .map(|physical_device| PhysicalDevice::new(self.clone(), physical_device))
+                .collect();
+
+            Ok(physical_devices)
+        }
+    }
 }
 
 impl Drop for Inner {
     fn drop(&mut self) {
         unsafe {
+            #[cfg(debug_assertions)]
+            debug_utils::Instance::new(&self._entry, &self.instance)
+                .destroy_debug_utils_messenger(self.debug_messenger, None);
+
             self.instance.destroy_instance(None);
         }
     }
