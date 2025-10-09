@@ -22,9 +22,6 @@ pub(crate) struct H264EncoderState {
 
     /// Frame index in the current GOP, not incremented for B Frames
     current_frame_num: u16,
-
-    pic_order_cnt_msb_ref: i32,
-    pic_order_cnt_lsb_ref: i32,
 }
 
 impl H264EncoderState {
@@ -34,7 +31,7 @@ impl H264EncoderState {
             ((intra_idr_period as f32).log2().ceil() as i32).clamp(4, 12);
         let max_pic_order_cnt_lsb = 1 << log2_max_pic_order_cnt_lsb;
 
-        Self {
+        H264EncoderState {
             frame_pattern,
             log2_max_pic_order_cnt_lsb,
             max_pic_order_cnt_lsb,
@@ -42,42 +39,7 @@ impl H264EncoderState {
             current_idr_display: 0,
             idr_pic_id: 0,
             current_frame_num: 0,
-            pic_order_cnt_msb_ref: 0,
-            pic_order_cnt_lsb_ref: 0,
         }
-    }
-
-    fn calc_top_field_order_cnt(
-        &mut self,
-        frame_type: H264FrameType,
-        pic_order_cnt_lsb: i32,
-    ) -> i32 {
-        let (prev_pic_order_cnt_msb, prev_pic_order_cnt_lsb) = if frame_type == H264FrameType::Idr {
-            (0, 0)
-        } else {
-            (self.pic_order_cnt_msb_ref, self.pic_order_cnt_lsb_ref)
-        };
-
-        let pic_order_cnt_msb = if (pic_order_cnt_lsb < prev_pic_order_cnt_lsb)
-            && ((prev_pic_order_cnt_lsb - pic_order_cnt_lsb) >= (self.max_pic_order_cnt_lsb / 2))
-        {
-            prev_pic_order_cnt_msb + self.max_pic_order_cnt_lsb
-        } else if (pic_order_cnt_lsb > prev_pic_order_cnt_lsb)
-            && ((pic_order_cnt_lsb - prev_pic_order_cnt_lsb) > (self.max_pic_order_cnt_lsb / 2))
-        {
-            prev_pic_order_cnt_msb - self.max_pic_order_cnt_lsb
-        } else {
-            prev_pic_order_cnt_msb
-        };
-
-        let top_field_order_cnt = pic_order_cnt_msb + pic_order_cnt_lsb;
-
-        if frame_type != H264FrameType::B {
-            self.pic_order_cnt_msb_ref = pic_order_cnt_msb;
-            self.pic_order_cnt_lsb_ref = pic_order_cnt_lsb;
-        }
-
-        top_field_order_cnt
     }
 
     pub(crate) fn next(&mut self) -> FrameEncodeInfo {
@@ -91,15 +53,12 @@ impl H264EncoderState {
             self.idr_pic_id = self.idr_pic_id.wrapping_add(1);
         }
 
-        let poc_lsb = (self.num_submitted_frames as i32 - self.current_idr_display as i32)
-            % self.max_pic_order_cnt_lsb;
-
-        let poc = self.calc_top_field_order_cnt(frame_type, poc_lsb);
+        let picture_order_count = self.num_submitted_frames - self.current_idr_display;
 
         let info = FrameEncodeInfo {
             frame_type,
             frame_num: self.current_frame_num,
-            pic_order_cnt_lsb: poc as u16,
+            picture_order_count: picture_order_count.try_into().unwrap(),
             idr_pic_id: self.idr_pic_id - 1, // idr_pic_id is always incremented once at start
         };
 
@@ -117,6 +76,6 @@ impl H264EncoderState {
 pub(crate) struct FrameEncodeInfo {
     pub(crate) frame_type: H264FrameType,
     pub(crate) frame_num: u16,
-    pub(crate) pic_order_cnt_lsb: u16,
+    pub(crate) picture_order_count: u16,
     pub(crate) idr_pic_id: u16,
 }
