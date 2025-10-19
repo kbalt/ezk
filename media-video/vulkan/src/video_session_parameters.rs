@@ -1,66 +1,87 @@
 use std::ptr::{null, null_mut};
 
 use crate::{VideoSession, VulkanError};
-use ash::vk::{self, ExtendsVideoEncodeSessionParametersGetInfoKHR, TaggedStructure};
+use ash::vk::{self, ExtendsVideoSessionParametersUpdateInfoKHR};
 
-pub struct VideoSessionParameters {
+#[derive(Debug)]
+pub(crate) struct VideoSessionParameters {
     video_session: VideoSession,
+    update_count: u32,
     video_session_parameters: vk::VideoSessionParametersKHR,
 }
 
 impl VideoSessionParameters {
-    pub unsafe fn create(
+    pub(crate) fn create<P>(
         video_session: &VideoSession,
-        create_info: &vk::VideoSessionParametersCreateInfoKHR<'_>,
-    ) -> Result<Self, VulkanError> {
+        parameters: &mut P,
+    ) -> Result<Self, VulkanError>
+    where
+        P: vk::ExtendsVideoSessionParametersCreateInfoKHR,
+    {
         let device = video_session.device();
 
-        let fun = device
-            .video_queue_device()
+        let create_info = vk::VideoSessionParametersCreateInfoKHR::default()
+            .video_session(unsafe { video_session.video_session() })
+            .push_next(parameters);
+
+        let mut video_session_parameters = vk::VideoSessionParametersKHR::null();
+
+        let create_video_session_parameters = device
+            .ash_video_queue_device()
             .fp()
             .create_video_session_parameters_khr;
 
-        let mut video_session_parameters = vk::VideoSessionParametersKHR::null();
-        (fun)(
-            device.device().handle(),
-            &raw const *create_info,
-            null_mut(),
-            &raw mut video_session_parameters,
-        )
-        .result()?;
+        unsafe {
+            (create_video_session_parameters)(
+                device.ash().handle(),
+                &raw const create_info,
+                null_mut(),
+                &raw mut video_session_parameters,
+            )
+            .result()?;
+        }
 
         Ok(Self {
             video_session: video_session.clone(),
+            update_count: 0,
             video_session_parameters,
         })
     }
 
-    pub unsafe fn update(
-        &mut self,
-        update_info: &vk::VideoSessionParametersUpdateInfoKHR<'_>,
-    ) -> Result<(), vk::Result> {
+    pub(crate) fn update<P>(&mut self, parameters: &mut P) -> Result<(), vk::Result>
+    where
+        P: ExtendsVideoSessionParametersUpdateInfoKHR,
+    {
+        self.update_count += 1;
+
         let device = self.video_session().device();
 
+        let update_info = vk::VideoSessionParametersUpdateInfoKHR::default()
+            .update_sequence_count(self.update_count)
+            .push_next(parameters);
+
         let update_video_session_parameters = device
-            .video_queue_device()
+            .ash_video_queue_device()
             .fp()
             .update_video_session_parameters_khr;
 
-        update_video_session_parameters(
-            device.device().handle(),
-            self.video_session_parameters,
-            update_info,
-        )
-        .result()
+        unsafe {
+            update_video_session_parameters(
+                device.ash().handle(),
+                self.video_session_parameters,
+                &raw const update_info,
+            )
+            .result()
+        }
     }
 
-    pub unsafe fn get_encoded_video_session_parameters<T>(
+    pub(crate) unsafe fn get_encoded_video_session_parameters<T>(
         &self,
         ext: &mut T,
     ) -> Result<Vec<u8>, VulkanError>
     where
-        T: TaggedStructure,
-        T: ExtendsVideoEncodeSessionParametersGetInfoKHR,
+        T: vk::TaggedStructure,
+        T: vk::ExtendsVideoEncodeSessionParametersGetInfoKHR,
     {
         let device = self.video_session.device();
 
@@ -69,13 +90,13 @@ impl VideoSessionParameters {
             .push_next(ext);
 
         let get_encoded_video_session_parameters = device
-            .video_encode_queue_device()
+            .ash_video_encode_queue_device()
             .fp()
             .get_encoded_video_session_parameters_khr;
 
         let mut len = 0;
         (get_encoded_video_session_parameters)(
-            device.device().handle(),
+            device.ash().handle(),
             &session_parameters_info,
             null_mut(),
             &raw mut len,
@@ -85,7 +106,7 @@ impl VideoSessionParameters {
 
         let mut buf = vec![0u8; len];
         (get_encoded_video_session_parameters)(
-            device.device().handle(),
+            device.ash().handle(),
             &session_parameters_info,
             null_mut(),
             &raw mut len,
@@ -96,11 +117,11 @@ impl VideoSessionParameters {
         Ok(buf)
     }
 
-    pub fn video_session(&self) -> &VideoSession {
+    pub(crate) fn video_session(&self) -> &VideoSession {
         &self.video_session
     }
 
-    pub unsafe fn video_session_parameters(&self) -> vk::VideoSessionParametersKHR {
+    pub(crate) unsafe fn video_session_parameters(&self) -> vk::VideoSessionParametersKHR {
         self.video_session_parameters
     }
 }
@@ -111,12 +132,12 @@ impl Drop for VideoSessionParameters {
 
         unsafe {
             let destroy_video_session_parameters_khr = device
-                .video_queue_device()
+                .ash_video_queue_device()
                 .fp()
                 .destroy_video_session_parameters_khr;
 
             destroy_video_session_parameters_khr(
-                device.device().handle(),
+                device.ash().handle(),
                 self.video_session_parameters,
                 null(),
             );
