@@ -1,5 +1,5 @@
 use std::{
-    ffi::c_void,
+    marker::PhantomData,
     slice::{from_raw_parts, from_raw_parts_mut},
 };
 
@@ -7,20 +7,34 @@ use ash::vk;
 
 use crate::{Device, VulkanError};
 
-pub struct Buffer {
+#[derive(Debug)]
+pub(crate) struct Buffer<T = u8> {
     device: Device,
     buffer: vk::Buffer,
     memory: vk::DeviceMemory,
+    capacity: usize,
+    _m: PhantomData<T>,
 }
 
-impl Buffer {
-    pub unsafe fn create(
+impl<T> Buffer<T> {
+    pub(crate) unsafe fn create(
         device: &Device,
         create_info: &vk::BufferCreateInfo<'_>,
     ) -> Result<Self, VulkanError> {
-        let buffer = device.device().create_buffer(create_info, None)?;
+        if !create_info
+            .size
+            .is_multiple_of(size_of::<T>() as vk::DeviceSize)
+        {
+            return Err(VulkanError::InvalidArgument {
+                message: "Buffer size is not a multiple of T",
+            });
+        }
 
-        let memory_requirements = device.device().get_buffer_memory_requirements(buffer);
+        let capacity = create_info.size as usize / size_of::<T>();
+
+        let buffer = device.ash().create_buffer(create_info, None)?;
+
+        let memory_requirements = device.ash().get_buffer_memory_requirements(buffer);
 
         let output_alloc_info = vk::MemoryAllocateInfo::default()
             .allocation_size(memory_requirements.size)
@@ -29,88 +43,88 @@ impl Buffer {
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             )?);
 
-        let memory = device.device().allocate_memory(&output_alloc_info, None)?;
+        let memory = device.ash().allocate_memory(&output_alloc_info, None)?;
 
-        device.device().bind_buffer_memory(buffer, memory, 0)?;
+        device.ash().bind_buffer_memory(buffer, memory, 0)?;
 
         Ok(Self {
             device: device.clone(),
             buffer,
             memory,
+            capacity,
+            _m: PhantomData,
         })
     }
 
-    pub fn device(&self) -> &Device {
-        &self.device
-    }
-
-    pub fn buffer(&self) -> vk::Buffer {
+    pub(crate) unsafe fn buffer(&self) -> vk::Buffer {
         self.buffer
     }
 
-    pub unsafe fn map(&mut self, size: vk::DeviceSize) -> Result<MappedBuffer<'_>, VulkanError> {
-        if size == 0 {
+    #[allow(clippy::len_without_is_empty)]
+    pub(crate) fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    pub(crate) fn map(&mut self, len: usize) -> Result<MappedBuffer<'_, T>, VulkanError> {
+        if len == 0 {
             return Err(VulkanError::InvalidArgument {
                 message: "Cannot map buffer with size 0",
             });
         }
 
-        let ptr =
-            self.device
-                .device()
-                .map_memory(self.memory, 0, size, vk::MemoryMapFlags::empty())?;
+        if len > self.capacity {
+            return Err(VulkanError::InvalidArgument {
+                message: "Tried to map buffer with size larger than buffer size",
+            });
+        }
+
+        let ptr = unsafe {
+            self.device.ash().map_memory(
+                self.memory,
+                0,
+                (size_of::<T>() * len) as vk::DeviceSize,
+                vk::MemoryMapFlags::empty(),
+            )?
+        };
 
         Ok(MappedBuffer {
             buffer: self,
-            ptr,
-            size,
+            ptr: ptr.cast::<T>(),
+            len,
         })
     }
 }
 
-impl Drop for Buffer {
+impl<T> Drop for Buffer<T> {
     fn drop(&mut self) {
         unsafe {
-            self.device.device().destroy_buffer(self.buffer, None);
-            self.device.device().free_memory(self.memory, None);
+            self.device.ash().destroy_buffer(self.buffer, None);
+            self.device.ash().free_memory(self.memory, None);
         }
     }
 }
 
-pub struct MappedBuffer<'a> {
-    buffer: &'a mut Buffer,
-    ptr: *mut c_void,
-    size: vk::DeviceSize,
+#[derive(Debug)]
+pub(crate) struct MappedBuffer<'a, T> {
+    buffer: &'a mut Buffer<T>,
+    ptr: *mut T,
+    len: usize,
 }
 
-impl<'a> MappedBuffer<'a> {
-    pub fn data(&self) -> &'a [u8] {
-        unsafe {
-            from_raw_parts(
-                self.ptr.cast(),
-                self.size
-                    .try_into()
-                    .expect("vk::DeviceSize must fit into usize"),
-            )
-        }
+impl<'a, T> MappedBuffer<'a, T> {
+    pub(crate) fn data(&self) -> &'a [T] {
+        unsafe { from_raw_parts(self.ptr.cast(), self.len) }
     }
 
-    pub fn data_mut(&self) -> &'a mut [u8] {
-        unsafe {
-            from_raw_parts_mut(
-                self.ptr.cast(),
-                self.size
-                    .try_into()
-                    .expect("vk::DeviceSize must fit into usize"),
-            )
-        }
+    pub(crate) fn data_mut(&mut self) -> &'a mut [T] {
+        unsafe { from_raw_parts_mut(self.ptr.cast(), self.len) }
     }
 }
 
-impl Drop for MappedBuffer<'_> {
+impl<T> Drop for MappedBuffer<'_, T> {
     fn drop(&mut self) {
         unsafe {
-            self.buffer.device.device().unmap_memory(self.buffer.memory);
+            self.buffer.device.ash().unmap_memory(self.buffer.memory);
         }
     }
 }

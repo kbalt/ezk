@@ -1,7 +1,7 @@
 use bitstream_io::{BigEndian, BitWrite, BitWriter};
 use libva::ffi;
 
-use crate::{Profile, encoder::H264EncoderConfig};
+use crate::{Profile, encoder::backends::libva::VaH264EncoderConfig};
 
 const SLICE_TYPE_P: u8 = 0;
 const SLICE_TYPE_B: u8 = 1;
@@ -78,7 +78,7 @@ impl H264BitStreamWriter {
 
 /// Returns the encoded buffer with the bit length
 pub(super) fn write_sps_rbsp(
-    encode_config: &H264EncoderConfig,
+    encode_config: &VaH264EncoderConfig,
     seq_param: &ffi::VAEncSequenceParameterBufferH264,
 ) -> Vec<u8> {
     let seq_fields = unsafe { &seq_param.seq_fields.bits };
@@ -223,32 +223,33 @@ pub(super) fn write_pps_rbsp(pic_param: &ffi::VAEncPictureParameterBufferH264) -
     writer.write_bits::<1>(pic_fields.redundant_pic_cnt_present_flag());
 
     //     if ( more_rbsp_data( ) ) { // true
+    if false {
+        //         transform_8x8_mode_flag 1 u(1)
+        writer.write_bits::<1>(pic_fields.transform_8x8_mode_flag());
 
-    //         transform_8x8_mode_flag 1 u(1)
-    writer.write_bits::<1>(pic_fields.transform_8x8_mode_flag());
+        //         pic_scaling_matrix_present_flag 1 u(1)
+        writer.write_bits::<1>(pic_fields.pic_scaling_matrix_present_flag());
 
-    //         pic_scaling_matrix_present_flag 1 u(1)
-    writer.write_bits::<1>(pic_fields.pic_scaling_matrix_present_flag());
+        //          if ( pic_scaling_matrix_present_flag )
+        //              for( i = 0;
+        //                   i < 6 + ( ( chroma_format_idc != 3 ) ? 2 : 6 ) * transform_8x8_mode_flag;
+        //                   i++ ) {
+        //                  pic_scaling_list_present_flag[ i ] 1 u(1)
+        //                  if ( pic_scaling_list_present_flag[ i ] )
+        //                      if ( i < 6 )
+        //                          scaling_list( ScalingList4x4[ i ], 16, UseDefaultScalingMatrix4x4Flag[ i ] )
+        //                      else
+        //                           scaling_list( ScalingList8x8[ i − 6 ], 64, UseDefaultScalingMatrix8x8Flag[ i − 6 ] )
+        //             }
+        if pic_fields.pic_scaling_matrix_present_flag() != 0 {
+            panic!("pic_scaling_matrix_present_flag is not implemented")
+        }
 
-    //          if ( pic_scaling_matrix_present_flag )
-    //              for( i = 0;
-    //                   i < 6 + ( ( chroma_format_idc != 3 ) ? 2 : 6 ) * transform_8x8_mode_flag;
-    //                   i++ ) {
-    //                  pic_scaling_list_present_flag[ i ] 1 u(1)
-    //                  if ( pic_scaling_list_present_flag[ i ] )
-    //                      if ( i < 6 )
-    //                          scaling_list( ScalingList4x4[ i ], 16, UseDefaultScalingMatrix4x4Flag[ i ] )
-    //                      else
-    //                           scaling_list( ScalingList8x8[ i − 6 ], 64, UseDefaultScalingMatrix8x8Flag[ i − 6 ] )
-    //             }
-    if pic_fields.pic_scaling_matrix_present_flag() != 0 {
-        panic!("pic_scaling_matrix_present_flag is not implemented")
+        //         second_chroma_qp_index_offset 1 se(v)
+        writer.write_se(pic_param.second_chroma_qp_index_offset.into());
+
+        //     } // more rbsp_data
     }
-
-    //         second_chroma_qp_index_offset 1 se(v)
-    writer.write_se(pic_param.second_chroma_qp_index_offset.into());
-
-    //     } // more rbsp_data
 
     writer.rbsp_trailing_bits();
 

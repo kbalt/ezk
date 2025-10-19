@@ -1,60 +1,30 @@
 //! Utility functions for openh264
 
 use crate::{
-    FmtpOptions, Level, PacketizationMode, Profile,
-    encoder::{
-        H264Encoder, H264EncoderCapabilities, H264EncoderConfig, H264EncoderDevice, H264FrameRate,
-        H264RateControlConfig,
-    },
+    H264FmtpOptions, H264PacketizationMode, Level, Profile,
+    encoder::config::{Framerate, H264EncoderConfig, H264RateControlConfig},
     profile_level_id::ProfileLevelId,
 };
 use ezk_image::{
-    ColorInfo, ColorSpace, Image, ImageRef, PixelFormat, YuvColorInfo, convert_multi_thread,
+    ColorInfo, ColorSpace, Image, ImageRef, ImageRefExt, PixelFormat, YuvColorInfo,
+    convert_multi_thread,
 };
 use openh264::{
     encoder::{BitRate, Encoder, FrameRate, IntraFramePeriod, QpRange, RateControlMode},
-    formats::YUVSource,
+    formats::YUVSlices,
 };
 use openh264_sys2::API as _;
-use std::{collections::VecDeque, convert::Infallible, mem::MaybeUninit};
+use std::{collections::VecDeque, mem::MaybeUninit, time::Instant};
 
-pub struct OpenH264Device;
+pub struct OpenH264Encoder {
+    encoder: Encoder,
+    scratch: Vec<u8>,
+    output: VecDeque<Vec<u8>>,
+    init: Option<Instant>,
+}
 
-impl H264EncoderDevice for OpenH264Device {
-    type Encoder = OpenH264Encoder;
-    type CapabilitiesError = Infallible;
-    type CreateEncoderError = openh264::Error;
-
-    fn profiles(&mut self) -> Vec<Profile> {
-        vec![
-            Profile::Baseline,
-            Profile::Main,
-            Profile::Extended,
-            Profile::High,
-        ]
-    }
-
-    fn capabilities(
-        &mut self,
-        _profile: Profile,
-    ) -> Result<H264EncoderCapabilities, Self::CapabilitiesError> {
-        Ok(H264EncoderCapabilities {
-            min_qp: 0,
-            max_qp: 51,
-            min_resolution: (16, 16),
-            max_resolution: (3840, 2160), // TODO: investigate these values
-            max_l0_p_references: 16,
-            max_l0_b_references: 0,
-            max_l1_b_references: 0,
-            max_quality_level: 1,
-            formats: vec![PixelFormat::I420],
-        })
-    }
-
-    fn create_encoder(
-        &mut self,
-        config: H264EncoderConfig,
-    ) -> Result<Self::Encoder, Self::CreateEncoderError> {
+impl OpenH264Encoder {
+    pub fn new(config: H264EncoderConfig) -> Result<Self, openh264::Error> {
         let config = openh264_encoder_config(config);
 
         let encoder = Encoder::with_api_config(openh264::OpenH264API::from_source(), config)?;
@@ -63,42 +33,44 @@ impl H264EncoderDevice for OpenH264Device {
             encoder,
             scratch: Vec::new(),
             output: VecDeque::new(),
+            init: None,
         })
     }
-}
 
-pub struct OpenH264Encoder {
-    encoder: Encoder,
-    scratch: Vec<u8>,
-    output: VecDeque<Vec<u8>>,
-}
+    pub fn request_idr(&mut self) {
+        self.encoder.force_intra_frame();
+    }
 
-impl H264Encoder for OpenH264Encoder {
-    type Error = openh264::Error;
+    pub fn encode_frame(&mut self, image: &dyn ImageRef) -> Result<(), openh264::Error> {
+        let init = self.init.get_or_insert_with(Instant::now);
+        let timestamp = openh264::Timestamp::from_millis(init.elapsed().as_millis() as u64);
 
-    fn encode_frame(&mut self, image: &dyn ImageRef) -> Result<(), Self::Error> {
+        let image = image.crop_even().map_err(|e| {
+            openh264::Error::msg_string(format!(
+                "Failed to crop input image to an even resolution: {e:?}"
+            ))
+        })?;
+
         let bitstream = if image.format() == PixelFormat::I420 {
-            let (y_plane, y_stride) = image
-                .planes()
+            let mut planes = image.planes();
+
+            let (y_plane, y_stride) = planes
                 .next()
                 .ok_or_else(|| openh264::Error::msg("Missing Y plane"))?;
-            let (u_plane, u_stride) = image
-                .planes()
+            let (u_plane, u_stride) = planes
                 .next()
                 .ok_or_else(|| openh264::Error::msg("Missing U plane"))?;
-            let (v_plane, v_stride) = image
-                .planes()
+            let (v_plane, v_stride) = planes
                 .next()
                 .ok_or_else(|| openh264::Error::msg("Missing V plane"))?;
 
-            let input = I420Input {
-                width: image.width(),
-                height: image.height(),
-                planes: [y_plane, u_plane, v_plane],
-                strides: [y_stride, u_stride, v_stride],
-            };
+            let input = YUVSlices::new(
+                (y_plane, u_plane, v_plane),
+                (image.width(), image.height()),
+                (y_stride, u_stride, v_stride),
+            );
 
-            self.encoder.encode(&input)?
+            self.encoder.encode_at(&input, timestamp)?
         } else {
             self.scratch.resize(
                 PixelFormat::I420.buffer_size(image.width(), image.height()),
@@ -123,74 +95,60 @@ impl H264Encoder for OpenH264Encoder {
                 image.height(),
                 dst_color.into(),
             )
-            .unwrap();
+            .map_err(|e| {
+                openh264::Error::msg_string(format!(
+                    "Failed to create convert destination image: {e:?}"
+                ))
+            })?;
 
-            convert_multi_thread(image, &mut dst).unwrap();
+            convert_multi_thread(&image, &mut dst).map_err(|e| {
+                openh264::Error::msg_string(format!("Failed to convert input image to I420: {e:?}"))
+            })?;
 
-            let (y_plane, y_stride) = dst
-                .planes()
+            let mut planes = dst.planes();
+
+            let (y_plane, y_stride) = planes
                 .next()
                 .ok_or_else(|| openh264::Error::msg("Missing Y plane"))?;
-            let (u_plane, u_stride) = dst
-                .planes()
+            let (u_plane, u_stride) = planes
                 .next()
                 .ok_or_else(|| openh264::Error::msg("Missing U plane"))?;
-            let (v_plane, v_stride) = dst
-                .planes()
+            let (v_plane, v_stride) = planes
                 .next()
                 .ok_or_else(|| openh264::Error::msg("Missing V plane"))?;
 
-            let input = I420Input {
-                width: image.width(),
-                height: image.height(),
-                planes: [y_plane, u_plane, v_plane],
-                strides: [y_stride, u_stride, v_stride],
-            };
+            let input = YUVSlices::new(
+                (y_plane, u_plane, v_plane),
+                (image.width(), image.height()),
+                (y_stride, u_stride, v_stride),
+            );
 
-            self.encoder.encode(&input)?
+            self.encoder.encode_at(&input, timestamp)?
         };
+
+        match bitstream.frame_type() {
+            openh264::encoder::FrameType::Invalid
+            | openh264::encoder::FrameType::Skip
+            | openh264::encoder::FrameType::IPMixed => {
+                println!("Got invalid frame type: {:?}", bitstream.frame_type());
+                return Ok(());
+            }
+            openh264::encoder::FrameType::IDR => {}
+            openh264::encoder::FrameType::I => {}
+            openh264::encoder::FrameType::P => {}
+        }
 
         self.output.push_back(bitstream.to_vec());
 
         Ok(())
     }
 
-    fn poll_result(&mut self) -> Result<Option<Vec<u8>>, Self::Error> {
-        Ok(self.output.pop_front())
+    pub fn poll_result(&mut self) -> Option<Vec<u8>> {
+        self.output.pop_front()
     }
 
-    fn wait_result(&mut self) -> Result<Option<Vec<u8>>, Self::Error> {
-        Ok(self.output.pop_front())
-    }
-}
-
-struct I420Input<'a> {
-    width: usize,
-    height: usize,
-
-    planes: [&'a [u8]; 3],
-    strides: [usize; 3],
-}
-
-impl YUVSource for I420Input<'_> {
-    fn dimensions(&self) -> (usize, usize) {
-        (self.width, self.height)
-    }
-
-    fn strides(&self) -> (usize, usize, usize) {
-        self.strides.into()
-    }
-
-    fn y(&self) -> &[u8] {
-        self.planes[0]
-    }
-
-    fn u(&self) -> &[u8] {
-        self.planes[1]
-    }
-
-    fn v(&self) -> &[u8] {
-        self.planes[2]
+    pub fn wait_result(&mut self) -> Option<Vec<u8>> {
+        self.output.pop_front()
     }
 }
 
@@ -241,12 +199,8 @@ fn openh264_encoder_config(c: H264EncoderConfig) -> openh264::encoder::EncoderCo
         .profile(map_profile(c.profile))
         .level(map_level(c.level));
 
-    if let Some(H264FrameRate {
-        numerator,
-        denominator,
-    }) = c.framerate
-    {
-        config = config.max_frame_rate(FrameRate::from_hz(numerator as f32 / denominator as f32));
+    if let Some(Framerate { num, denom }) = c.framerate {
+        config = config.max_frame_rate(FrameRate::from_hz(num as f32 / denom as f32));
     }
 
     if let Some((qmin, qmax)) = c.qp {
@@ -260,7 +214,7 @@ fn openh264_encoder_config(c: H264EncoderConfig) -> openh264::encoder::EncoderCo
     match c.rate_control {
         H264RateControlConfig::ConstantBitRate { bitrate } => {
             config = config
-                .rate_control_mode(RateControlMode::Bitrate)
+                .rate_control_mode(RateControlMode::Quality)
                 .bitrate(BitRate::from_bps(bitrate));
         }
         H264RateControlConfig::VariableBitRate {
@@ -287,7 +241,7 @@ fn openh264_encoder_config(c: H264EncoderConfig) -> openh264::encoder::EncoderCo
         }
     }
 
-    if let Some(max_slice_len) = c.max_slice_len {
+    if let Some(max_slice_len) = c.slice_max_len {
         config = config.max_slice_len(max_slice_len as u32);
     }
 
@@ -297,7 +251,7 @@ fn openh264_encoder_config(c: H264EncoderConfig) -> openh264::encoder::EncoderCo
 /// Create [`FmtpOptions`] from openh264's decoder capabilities.
 ///
 /// Should be used when offering to receive H.264 in a SDP negotiation.
-pub fn openh264_decoder_fmtp(api: &openh264::OpenH264API) -> FmtpOptions {
+pub fn openh264_decoder_fmtp(api: &openh264::OpenH264API) -> H264FmtpOptions {
     let capability = unsafe {
         let mut capability = MaybeUninit::uninit();
 
@@ -310,7 +264,7 @@ pub fn openh264_decoder_fmtp(api: &openh264::OpenH264API) -> FmtpOptions {
         capability.assume_init()
     };
 
-    FmtpOptions {
+    H264FmtpOptions {
         profile_level_id: ProfileLevelId::from_bytes(
             capability.iProfileIdc as u8,
             capability.iProfileIop as u8,
@@ -318,7 +272,7 @@ pub fn openh264_decoder_fmtp(api: &openh264::OpenH264API) -> FmtpOptions {
         )
         .expect("openh264 should not return unknown capabilities"),
         level_asymmetry_allowed: true,
-        packetization_mode: PacketizationMode::NonInterleavedMode,
+        packetization_mode: H264PacketizationMode::NonInterleavedMode,
         max_mbps: Some(capability.iMaxMbps as u32),
         max_fs: Some(capability.iMaxFs as u32),
         max_cbp: Some(capability.iMaxCpb as u32),

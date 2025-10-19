@@ -1,16 +1,19 @@
+use std::os::fd::{AsRawFd, OwnedFd};
+
 use crate::{Device, VulkanError};
 use ash::vk;
 
+#[derive(Debug)]
 pub struct Semaphore {
     device: Device,
     semaphore: vk::Semaphore,
 }
 
 impl Semaphore {
-    pub fn create(device: &Device) -> Result<Self, VulkanError> {
+    pub(crate) fn create(device: &Device) -> Result<Self, VulkanError> {
         unsafe {
             let semaphore = device
-                .device()
+                .ash()
                 .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)?;
 
             Ok(Self {
@@ -20,18 +23,31 @@ impl Semaphore {
         }
     }
 
-    pub fn device(&self) -> &Device {
-        &self.device
+    pub unsafe fn import_timeline_fd(device: &Device, fd: OwnedFd) -> Result<Self, VulkanError> {
+        let mut type_create_info =
+            vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);
+        let create_info = vk::SemaphoreCreateInfo::default().push_next(&mut type_create_info);
+
+        let semaphore = device.ash().create_semaphore(&create_info, None)?;
+
+        let import_semaphore_fd_info = vk::ImportSemaphoreFdInfoKHR::default()
+            .semaphore(semaphore)
+            .handle_type(vk::ExternalSemaphoreHandleTypeFlags::OPAQUE_FD)
+            .fd(fd.as_raw_fd());
+
+        ash::khr::external_semaphore_fd::Device::new(device.instance().ash(), device.ash())
+            .import_semaphore_fd(&import_semaphore_fd_info)?;
+
+        // Ownership of the fd transferred to the vulkan driver, forget about it
+        std::mem::forget(fd);
+
+        Ok(Self {
+            device: device.clone(),
+            semaphore,
+        })
     }
 
-    /// Access to the raw semaphore handle
-    ///
-    /// # Safety
-    ///
-    /// The semaphore must not be destroyed using this handle.
-    ///
-    /// `Semaphore` must outlive operations that depend on it.
-    pub unsafe fn semaphore(&self) -> vk::Semaphore {
+    pub(crate) unsafe fn handle(&self) -> vk::Semaphore {
         self.semaphore
     }
 }
@@ -39,7 +55,7 @@ impl Semaphore {
 impl Drop for Semaphore {
     fn drop(&mut self) {
         unsafe {
-            self.device.device().destroy_semaphore(self.semaphore, None);
+            self.device.ash().destroy_semaphore(self.semaphore, None);
         }
     }
 }

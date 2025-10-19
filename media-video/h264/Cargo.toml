@@ -10,27 +10,27 @@ repository.workspace = true
 workspace = true
 
 [features]
-default = ["openh264"]
-openh264 = ["dep:openh264", "dep:openh264-sys2"]
+default = ["openh264", "libva", "vulkan"]
 
+openh264 = ["dep:openh264", "dep:openh264-sys2"]
+libva = ["dep:libva"]
+vulkan = ["dep:vulkan"]
 
 [dependencies]
-bytes = "1.10.0"
-thiserror = "2.0.11"
-rand = "0.9"
 bitstream-io = "4"
-ezk-image = "0.3.0"
-
-openh264 = { version = "0.8", optional = true }
-openh264-sys2 = { version = "0.8", optional = true }
+bytes = "1.10.0"
+ezk-image = { workspace = true, features = ["NV12", "I420"] }
 log = "0.4"
-vulkan.workspace = true
-h264-parser = "0.2"
-bitflags = "2"
+openh264 = { version = "0.9", optional = true }
+openh264-sys2 = { version = "0.9", optional = true }
+thiserror = "2.0.11"
+vulkan = { workspace = true, optional = true }
+smallvec = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-libva.workspace = true
+libva = { workspace = true, optional = true }
 
 [dev-dependencies]
 env_logger = "0.11"
-xcap = "0.7.1"
+capture.workspace = true
+tokio = { version = "1", features = ["sync", "macros", "rt"] }
