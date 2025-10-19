@@ -1,4 +1,5 @@
-use crate::{FmtpOptions, Level, PacketizationMode, Profile, encoder::H264EncoderCapabilities};
+use crate::{Level, Profile};
+use std::num::NonZeroU32;
 
 /// Generic H.264 encoder config
 #[derive(Debug, Clone, Copy)]
@@ -11,12 +12,12 @@ pub struct H264EncoderConfig {
 
     /// Maximum width & height of the image to be encoded.
     ///
-    /// This value is only used for the initialization and should represent to largest allowed resolution.
+    /// This value is only used for the initialization and should represent the largest allowed resolution.
     /// Some encoders will not be able to handle larger resolutions later without being reinitialized.
     pub resolution: (u32, u32),
 
     /// Expected (maximum) framerate of the video stream
-    pub framerate: Option<H264FrameRate>,
+    pub framerate: Option<Framerate>,
 
     /// Define the range of QP values the encoder is allowed use.
     ///
@@ -28,67 +29,21 @@ pub struct H264EncoderConfig {
     pub qp: Option<(u8, u8)>,
 
     /// Pattern of frames to emit
-    pub frame_pattern: H264FramePattern,
+    pub frame_pattern: FramePattern,
 
     /// Rate control configuration
     pub rate_control: H264RateControlConfig,
 
-    /// Hint for the encoder what the H.264 stream is used for
-    pub usage_hint: H264EncodeUsageHint,
-
-    /// Hint about the video content
-    pub content_hint: H264EncodeContentHint,
-
-    /// Hint about the video encode tuning mode to use
-    pub tuning_hint: H264EncodeTuningHint,
-
     /// Limit the output slice size.
     ///
     /// Required if the packetization mode is SingleNAL which doesn't support fragmentation units.
-    pub max_slice_len: Option<usize>,
+    pub slice_max_len: Option<usize>,
 
-    pub max_l0_p_references: u32,
-    pub max_l0_b_references: u32,
-    pub max_l1_b_references: u32,
+    /// How slices should be created
+    pub slice_mode: SliceMode,
 
-    /// Quality level from
+    /// Quality level,
     pub quality_level: u32,
-}
-
-impl H264EncoderConfig {
-    /// Create a encoder config from the peer's H.264 decoder capabilities, communicated through SDP's fmtp attribute
-    pub fn from_fmtp(capabilities: H264EncoderCapabilities, fmtp: FmtpOptions, mtu: usize) -> Self {
-        H264EncoderConfig {
-            profile: fmtp.profile_level_id.profile,
-            level: fmtp.profile_level_id.level,
-            resolution: fmtp.max_resolution(1, 1),
-            framerate: None,
-            qp: None,
-            frame_pattern: H264FramePattern {
-                intra_idr_period: 60,
-                intra_period: 30,
-                ip_period: 1,
-            },
-            rate_control: H264RateControlConfig::ConstantBitRate {
-                bitrate: fmtp.max_bitrate(),
-            },
-            usage_hint: H264EncodeUsageHint::Default,
-            content_hint: H264EncodeContentHint::Default,
-            tuning_hint: H264EncodeTuningHint::Default,
-            max_slice_len: {
-                match fmtp.packetization_mode {
-                    PacketizationMode::SingleNAL => Some(mtu),
-                    PacketizationMode::NonInterleavedMode | PacketizationMode::InterleavedMode => {
-                        None
-                    }
-                }
-            },
-            max_l0_p_references: capabilities.max_l0_p_references,
-            max_l0_b_references: capabilities.max_l0_b_references,
-            max_l1_b_references: capabilities.max_l1_b_references,
-            quality_level: capabilities.max_quality_level,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,8 +63,8 @@ pub enum H264FrameType {
 /// # Examples
 ///
 /// ```rust
-/// # use ezk_h264::encoder::{FrameType, FrameType::*, FrameTypePattern};
-/// # fn eval<const N: usize>(pattern: FrameTypePattern) -> [FrameType; N] {
+/// # use ezk_h264::encoder::config::{H264FrameType, H264FrameType::*, FramePattern};
+/// # fn eval<const N: usize>(pattern: FramePattern) -> [H264FrameType; N] {
 /// #    let mut ret = [P; N];
 /// #    let mut n = 0;
 /// #    while n < N {
@@ -119,27 +74,27 @@ pub enum H264FrameType {
 /// #    ret
 /// # }
 /// // Only create I Frames
-/// let pattern = FrameTypePattern { intra_idr_period: 32, intra_period: 1, ip_period: 1 };
+/// let pattern = FramePattern { intra_idr_period: 32, intra_period: 1, ip_period: 1 };
 /// assert_eq!(eval(pattern), [Idr, I, I, I, I, I, I, I, I, I, I, I, I, I, I, I]);
 ///
 /// // Create I & P Frames
-/// let pattern = FrameTypePattern { intra_idr_period: 32, intra_period: 4, ip_period: 1 };
+/// let pattern = FramePattern { intra_idr_period: 32, intra_period: 4, ip_period: 1 };
 /// assert_eq!(eval(pattern), [Idr, P, P, P, I, P, P, P, I, P, P, P, I, P, P, P]);
 ///
 /// // Insert some IDR frames, required for livestream or video conferences
-/// let pattern = FrameTypePattern { intra_idr_period: 8, intra_period: 4, ip_period: 1 };
+/// let pattern = FramePattern { intra_idr_period: 8, intra_period: 4, ip_period: 1 };
 /// assert_eq!(eval(pattern), [Idr, P, P, P, I, P, P, P, Idr, P, P, P, I, P, P, P]);
 ///
-/// // B frames are only created if `p_period` is specified
-/// let pattern = FrameTypePattern { intra_idr_period: 32, intra_period: 8, ip_period: 4 };
+/// // B frames are only created if `ip_period` is larger than 1
+/// let pattern = FramePattern { intra_idr_period: 32, intra_period: 8, ip_period: 4 };
 /// assert_eq!(eval(pattern), [Idr, B, B, B, P, B, B, B, I, B, B, B, P, B, B, B]);
 ///
-/// // B frames are only created if `p_period` is specified
-/// let pattern = FrameTypePattern { intra_idr_period: 8, intra_period: 8, ip_period: 4 };
+/// // Some more IDR frames...
+/// let pattern = FramePattern { intra_idr_period: 8, intra_period: 8, ip_period: 4 };
 /// assert_eq!(eval(pattern), [Idr, B, B, B, P, B, B, P, Idr, B, B, B, P, B, B]);
 /// ```
 #[derive(Debug, Clone, Copy)]
-pub struct H264FramePattern {
+pub struct FramePattern {
     /// Period in which to create IDR-Frames
     ///
     /// Must be a multiple of `i_period` (or `p_period`) if set
@@ -150,31 +105,26 @@ pub struct H264FramePattern {
     /// Must be a multiple of `ip_period` if set
     pub intra_period: u16,
 
-    /// How often to insert P-Frames, instead of B-Frames
+    /// Period in which to create P-Frames. All other frames are created as B-Frames
     ///
-    /// B-Frames are not inserted if this is set to `None` or `Some(1)`
+    /// B-Frames are not inserted if this is set to 1
     pub ip_period: u16,
 }
 
-impl Default for H264FramePattern {
+impl Default for FramePattern {
     fn default() -> Self {
         Self {
-            intra_idr_period: 90,
-            intra_period: 30,
+            intra_idr_period: 120,
+            intra_period: 60,
             ip_period: 1,
         }
     }
 }
 
-impl H264FramePattern {
+impl FramePattern {
     // public for doc test
     #[doc(hidden)]
-    pub fn frame_type_of_nth_frame(&self, n: u32) -> H264FrameType {
-        // Always start with an IDR frame
-        if n == 0 {
-            return H264FrameType::Idr;
-        }
-
+    pub fn frame_type_of_nth_frame(&self, n: u64) -> H264FrameType {
         // Emit IDR frame every idr_period frames
         if n.is_multiple_of(self.intra_idr_period.into()) {
             return H264FrameType::Idr;
@@ -217,45 +167,27 @@ pub enum H264RateControlConfig {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct H264FrameRate {
-    pub numerator: u32,
-    pub denominator: u32,
+pub struct Framerate {
+    pub num: u32,
+    pub denom: u32,
 }
 
-impl H264FrameRate {
+impl Framerate {
     pub const fn from_fps(fps: u32) -> Self {
-        Self {
-            numerator: fps,
-            denominator: 1,
-        }
+        Self { num: fps, denom: 1 }
     }
 }
 
+/// Defines how slices should be created for a single picture
 #[derive(Default, Debug, Clone, Copy)]
-pub enum H264EncodeUsageHint {
+pub enum SliceMode {
     #[default]
-    Default,
-    Transcoding,
-    Streaming,
-    Recording,
-    Conferencing,
-}
+    /// A single slice per picture
+    Picture,
 
-#[derive(Default, Debug, Clone, Copy)]
-pub enum H264EncodeContentHint {
-    #[default]
-    Default,
-    Camera,
-    Desktop,
-    Rendered,
-}
+    /// Number of rows per slice
+    Rows(NonZeroU32),
 
-#[derive(Default, Debug, Clone, Copy)]
-pub enum H264EncodeTuningHint {
-    #[default]
-    Default,
-    HighQuality,
-    LowLatency,
-    UltraLowLatency,
-    Lossless,
+    /// Number of macro blocks per slice
+    MacroBlocks(NonZeroU32),
 }
