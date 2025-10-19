@@ -1,8 +1,10 @@
 use std::{ffi::CStr, fmt, ptr};
 
 use crate::Instance;
+use anyhow::Context as _;
 use ash::vk::{self, ExtendsVideoCapabilitiesKHR, PhysicalDeviceProperties};
 
+#[derive(Clone)]
 pub struct PhysicalDevice {
     instance: Instance,
     physical_device: vk::PhysicalDevice,
@@ -20,14 +22,14 @@ impl PhysicalDevice {
         &self.instance
     }
 
-    pub fn physical_device(&self) -> vk::PhysicalDevice {
+    pub fn handle(&self) -> vk::PhysicalDevice {
         self.physical_device
     }
 
     pub fn properties(&self) -> vk::PhysicalDeviceProperties {
         unsafe {
             self.instance
-                .instance()
+                .ash()
                 .get_physical_device_properties(self.physical_device)
         }
     }
@@ -35,7 +37,7 @@ impl PhysicalDevice {
     pub fn queue_family_properties(&self) -> Vec<vk::QueueFamilyProperties> {
         unsafe {
             self.instance
-                .instance()
+                .ash()
                 .get_physical_device_queue_family_properties(self.physical_device)
         }
     }
@@ -82,19 +84,19 @@ impl PhysicalDevice {
         Ok(video_format_properties)
     }
 
-    pub fn video_capabilities<'a, CodecCaps>(
+    pub fn video_capabilities<CodecCaps>(
         &self,
-        video_profile_info: vk::VideoProfileInfoKHR<'a>,
+        video_profile_info: vk::VideoProfileInfoKHR<'_>,
     ) -> Result<
         (
-            vk::VideoCapabilitiesKHR<'a>,
-            vk::VideoEncodeCapabilitiesKHR<'a>,
+            vk::VideoCapabilitiesKHR<'static>,
+            vk::VideoEncodeCapabilitiesKHR<'static>,
             CodecCaps,
         ),
         vk::Result,
     >
     where
-        CodecCaps: Default + ExtendsVideoCapabilitiesKHR + 'a,
+        CodecCaps: Default + ExtendsVideoCapabilitiesKHR,
     {
         let mut codec_caps = CodecCaps::default();
         let mut encode_caps = vk::VideoEncodeCapabilitiesKHR {
@@ -122,6 +124,60 @@ impl PhysicalDevice {
         }
 
         Ok((caps, encode_caps, codec_caps))
+    }
+
+    pub fn supported_drm_modifier(&self, format: vk::Format) -> Vec<u64> {
+        unsafe {
+            let mut modifier_list = vk::DrmFormatModifierPropertiesList2EXT::default();
+            let mut format_properties =
+                vk::FormatProperties2::default().push_next(&mut modifier_list);
+
+            self.instance()
+                .ash()
+                .get_physical_device_format_properties2(
+                    self.handle(),
+                    format,
+                    &mut format_properties,
+                );
+
+            let mut properties = vec![
+                vk::DrmFormatModifierProperties2EXT::default();
+                modifier_list.drm_format_modifier_count as usize
+            ];
+
+            let mut modifier_list = vk::DrmFormatModifierPropertiesList2EXT::default()
+                .drm_format_modifier_properties(&mut properties);
+            let mut format_properties =
+                vk::FormatProperties2::default().push_next(&mut modifier_list);
+
+            self.instance()
+                .ash()
+                .get_physical_device_format_properties2(
+                    self.handle(),
+                    format,
+                    &mut format_properties,
+                );
+
+            properties
+                .into_iter()
+                .map(|x| x.drm_format_modifier)
+                .collect()
+        }
+    }
+
+    pub unsafe fn to_wgpu(&self, instance: &wgpu::Instance) -> anyhow::Result<wgpu::Adapter> {
+        instance
+            .enumerate_adapters(wgpu::Backends::VULKAN)
+            .into_iter()
+            .find(|a| {
+                let raw = a
+                    .as_hal::<wgpu::hal::vulkan::Api>()
+                    .unwrap()
+                    .raw_physical_device();
+
+                self.handle() == raw
+            })
+            .context("Failed to find adapter when enumerating vulkan adapters")
     }
 }
 

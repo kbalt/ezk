@@ -117,8 +117,8 @@ pub struct Pipeline<'a> {
     completed: bool,
 }
 
-impl Pipeline<'_> {
-    pub fn render_picture<'a>(
+impl<'a> Pipeline<'a> {
+    pub fn render_picture(
         &self,
         buffers: impl IntoIterator<Item = &'a Buffer>,
     ) -> Result<(), VaError> {

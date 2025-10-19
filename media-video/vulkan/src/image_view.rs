@@ -1,6 +1,7 @@
 use crate::{Image, VulkanError};
 use ash::vk;
 
+#[derive(Debug)]
 pub struct ImageView {
     image: Image,
     image_view: vk::ImageView,
@@ -14,7 +15,7 @@ impl ImageView {
     ) -> Result<Self, VulkanError> {
         let device = image.device();
 
-        let image_view = device.device().create_image_view(create_info, None)?;
+        let image_view = device.ash().create_image_view(create_info, None)?;
 
         Ok(Self {
             image: image.clone(),
@@ -23,15 +24,15 @@ impl ImageView {
         })
     }
 
-    pub fn image(&self) -> &Image {
+    pub(crate) fn image(&self) -> &Image {
         &self.image
     }
 
-    pub unsafe fn image_view(&self) -> vk::ImageView {
+    pub(crate) unsafe fn handle(&self) -> vk::ImageView {
         self.image_view
     }
 
-    pub fn subresource_range(&self) -> &vk::ImageSubresourceRange {
+    pub(crate) fn subresource_range(&self) -> &vk::ImageSubresourceRange {
         &self.subresource_range
     }
 }
@@ -41,7 +42,7 @@ impl Drop for ImageView {
         unsafe {
             let device = self.image.device();
 
-            device.device().destroy_image_view(self.image_view, None);
+            device.ash().destroy_image_view(self.image_view, None);
         }
     }
 }

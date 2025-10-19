@@ -27,12 +27,15 @@ srtp = { package = "ezk-srtp", version = "0.1.0", path = "media/srtp" }
 h264 = { package = "ezk-h264", version = "0.1.0", path = "media-video/h264" }
 libva = { package = "ezk-libva", version = "0.1.0", path = "media-video/libva" }
 vulkan = { package = "ezk-vulkan", version = "0.1.0", path = "media-video/vulkan" }
+capture = { package = "ezk-capture", version = "0.1.0", path = "media-video/capture" }
 
 rustls-pki-types = { version = "1", features = ["std"] }
 tokio-native-tls = { version = "0.3" }
 tokio-rustls = { version = "0.26", default-features = false }
 
 log = "0.4"
+
+ezk-image = { version = "0.4", default-features = false }
 
 [workspace.lints.rust]
 unreachable_pub = "warn"
