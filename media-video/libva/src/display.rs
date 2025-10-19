@@ -276,11 +276,11 @@ impl Display {
         format: u32,
         width: u32,
         height: u32,
-        num: usize,
+        num: u32,
         attributes: &[ffi::VASurfaceAttrib],
     ) -> Result<Vec<Surface>, VaError> {
         unsafe {
-            let mut surfaces: Vec<ffi::VASurfaceID> = vec![ffi::VA_INVALID_ID; num];
+            let mut surfaces: Vec<ffi::VASurfaceID> = vec![ffi::VA_INVALID_ID; num as usize];
 
             VaError::try_(ffi::vaCreateSurfaces(
                 self.handle.dpy,

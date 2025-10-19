@@ -43,15 +43,10 @@ impl Surface {
 
     pub fn try_sync(&mut self) -> Result<bool, VaError> {
         unsafe {
-            if let Err(e) = VaError::try_(ffi::vaSyncSurface2(self.display.dpy, self.surface_id, 0))
-            {
-                if e.status == ffi::VA_STATUS_ERROR_TIMEDOUT as ffi::VAStatus {
-                    Ok(false)
-                } else {
-                    Err(e)
-                }
-            } else {
-                Ok(true)
+            match VaError::try_(ffi::vaSyncSurface2(self.display.dpy, self.surface_id, 0)) {
+                Ok(_) => Ok(true),
+                Err(e) if e.status == ffi::VA_STATUS_ERROR_TIMEDOUT as ffi::VAStatus => Ok(false),
+                Err(e) => Err(e),
             }
         }
     }
