@@ -10,7 +10,7 @@ pub mod profile_level_id;
 
 pub mod encoder;
 
-pub use fmtp::{FmtpOptions, PacketizationMode, ParseFmtpOptionsError};
+pub use fmtp::{H264FmtpOptions, H264PacketizationMode, ParseH264FmtpOptionsError};
 pub use level::Level;
 pub use payload::{
     H264DePayloadError, H264DePayloader, H264DePayloaderOutputFormat, H264Payloader,

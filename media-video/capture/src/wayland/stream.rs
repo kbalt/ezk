@@ -1,0 +1,734 @@
+use crate::wayland::{
+    CapturedDmaBuffer, CapturedDmaBufferSync, CapturedFrame, CapturedFrameBuffer,
+    CapturedFrameFormat, PipewireOptions, RgbaSwizzle,
+};
+use pipewire::{
+    context::ContextRc,
+    main_loop::{MainLoopRc, MainLoopWeak},
+    properties::properties,
+    spa::{
+        self,
+        param::{
+            ParamType,
+            format::{FormatProperties, MediaSubtype, MediaType},
+            video::{VideoFormat, VideoInfoRaw},
+        },
+        pod::{
+            ChoiceValue, Object, Pod, Property, PropertyFlags, Value, object, property,
+            serialize::PodSerializer,
+        },
+        utils::{Choice, ChoiceEnum, ChoiceFlags, Direction, Fraction, Id, Rectangle, SpaTypes},
+    },
+    stream::{Stream, StreamFlags, StreamListener, StreamRc, StreamState},
+};
+use smallvec::SmallVec;
+use std::{
+    io::Cursor,
+    os::fd::{BorrowedFd, OwnedFd, RawFd},
+    ptr,
+    slice::from_raw_parts,
+};
+use tokio::sync::oneshot;
+
+struct BufferGuard<'a> {
+    stream: &'a Stream,
+    pw_buffer: *mut pipewire::sys::pw_buffer,
+}
+
+impl Drop for BufferGuard<'_> {
+    fn drop(&mut self) {
+        unsafe { self.stream.queue_raw_buffer(self.pw_buffer) };
+    }
+}
+
+struct UserStreamState {
+    main_loop: MainLoopWeak,
+    options: PipewireOptions,
+
+    format: VideoInfoRaw,
+    on_frame: Box<dyn FnMut(CapturedFrame) -> bool + Send>,
+}
+
+impl UserStreamState {
+    fn handle_state_changed(&mut self, _stream: &Stream, old: StreamState, new: StreamState) {
+        log::debug!("stream changed: {old:?} -> {new:?}");
+    }
+
+    fn handle_param_changed(&mut self, stream: &Stream, id: u32, param: Option<&Pod>) {
+        let Some(param) = param else {
+            return;
+        };
+
+        if id != ParamType::Format.as_raw() {
+            return;
+        }
+
+        let (media_type, media_subtype) =
+            match pipewire::spa::param::format_utils::parse_format(param) {
+                Ok(v) => v,
+                Err(_) => return,
+            };
+
+        if media_type != MediaType::Video || media_subtype != MediaSubtype::Raw {
+            return;
+        }
+
+        self.format
+            .parse(param)
+            .expect("Failed to parse param changed to VideoInfoRaw");
+
+        log::debug!(
+            "Stream format changed to {:?}, resolution={}x{}, framerate={}, max_framerate={}, modifier={}",
+            self.format.format(),
+            self.format.size().width,
+            self.format.size().height,
+            (self.format.framerate().num as f32) / (self.format.framerate().denom.max(1) as f32),
+            (self.format.max_framerate().num as f32)
+                / (self.format.max_framerate().denom.max(1) as f32),
+            self.format.modifier()
+        );
+
+        // Check explicitly if the Video modifier property has been set
+        let video_modifier_is_set = unsafe {
+            let prop = spa::sys::spa_pod_find_prop(
+                param.as_raw_ptr(),
+                ptr::null(),
+                spa::sys::SPA_FORMAT_VIDEO_modifier,
+            );
+
+            !prop.is_null()
+        };
+
+        if let Some(dma_options) = &self.options.dma_usage
+            && video_modifier_is_set
+        {
+            let dma_buffer_params = serialize_object(dma_buffer_params(
+                dma_options.num_buffers as i32,
+                dma_options.request_sync_obj,
+            ));
+            let sync_obj_params = serialize_object(sync_obj_params());
+
+            let mut update_params: SmallVec<[&Pod; 2]> = smallvec::SmallVec::new();
+
+            update_params
+                .push(Pod::from_bytes(&dma_buffer_params).expect("object is serialized as pod"));
+
+            if dma_options.request_sync_obj {
+                update_params
+                    .push(Pod::from_bytes(&sync_obj_params).expect("object is serialized as pod"));
+            }
+
+            if let Err(e) = stream.update_params(&mut update_params) {
+                log::error!("Failed to update stream params: {e}");
+            }
+        } else {
+            let mem_buffer_params = serialize_object(mem_buffer_params());
+
+            let mut update_params =
+                [Pod::from_bytes(&mem_buffer_params).expect("object is serialized as pod")];
+
+            if let Err(e) = stream.update_params(&mut update_params) {
+                log::error!("Failed to update stream params: {e}");
+            }
+        }
+    }
+
+    fn handle_process(&mut self, stream: &Stream) {
+        let pw_buffer = unsafe { stream.dequeue_raw_buffer() };
+
+        let Some(buffer) = (unsafe { pw_buffer.as_ref() }) else {
+            return;
+        };
+
+        let defer_enqueue = BufferGuard { stream, pw_buffer };
+
+        let Some(buffer) = (unsafe { buffer.buffer.as_ref() }) else {
+            return;
+        };
+
+        let spa::sys::spa_rectangle { width, height } = self.format.size();
+        let width = width as usize;
+        let height = height as usize;
+
+        let metas = unsafe { from_raw_parts(buffer.metas, buffer.n_metas as usize) };
+        let datas = unsafe { from_raw_parts(buffer.datas, buffer.n_datas as usize) };
+
+        // First check if memory buffers were sent
+        let mem_data: SmallVec<[_; 3]> = datas
+            .iter()
+            .filter(|data| {
+                matches!(
+                    data.type_,
+                    spa::sys::SPA_DATA_MemFd | spa::sys::SPA_DATA_MemPtr
+                )
+            })
+            .collect();
+
+        let frame = if !mem_data.is_empty() {
+            self.handle_mem_data(width, height, &mem_data)
+        } else {
+            let dma_data: SmallVec<[_; 3]> = datas
+                .iter()
+                .filter(|data| data.type_ == spa::sys::SPA_DATA_DmaBuf)
+                .collect();
+
+            if dma_data.is_empty() {
+                log::warn!("Got neither MemPtr nor DmaBuf data");
+                return;
+            }
+
+            let first_data = dma_data[0];
+
+            // check that the fd of all dma buf's are the same, as different ones are currently not supported
+            if dma_data.iter().any(|data| data.fd != first_data.fd) {
+                log::warn!(
+                    "Got dma buffers with different fds, discarding as this is not supported"
+                );
+                return;
+            }
+
+            self.handle_dma_data(metas, datas, dma_data)
+        };
+
+        if !(self.on_frame)(frame) {
+            // on_frame returned false, exit the main loop
+
+            if let Some(main_loop) = self.main_loop.upgrade() {
+                main_loop.quit();
+            }
+        }
+
+        drop(defer_enqueue);
+    }
+
+    fn handle_dma_data(
+        &mut self,
+        metas: &[spa::sys::spa_meta],
+        datas: &[spa::sys::spa_data],
+        dma_data: SmallVec<[&spa::sys::spa_data; 3]>,
+    ) -> CapturedFrame {
+        fn clone_fd(fd: RawFd) -> OwnedFd {
+            unsafe {
+                BorrowedFd::borrow_raw(fd)
+                    .try_clone_to_owned()
+                    .expect("fd received from pipewire must be cloneable")
+            }
+        }
+
+        let format = match self.format.format() {
+            VideoFormat::NV12 => {
+                let y_chunk = unsafe { dma_data[0].chunk.read_unaligned() };
+                let uv_chunk = unsafe { dma_data[1].chunk.read_unaligned() };
+
+                CapturedFrameFormat::NV12 {
+                    offsets: [y_chunk.offset, uv_chunk.offset],
+                    strides: [y_chunk.stride as u32, uv_chunk.stride as u32],
+                }
+            }
+            VideoFormat::I420 => {
+                let y_chunk = unsafe { dma_data[0].chunk.read_unaligned() };
+                let u_chunk = unsafe { dma_data[1].chunk.read_unaligned() };
+                let v_chunk = unsafe { dma_data[2].chunk.read_unaligned() };
+
+                CapturedFrameFormat::I420 {
+                    offsets: [y_chunk.offset, u_chunk.offset, v_chunk.offset],
+                    strides: [
+                        y_chunk.stride as u32,
+                        u_chunk.stride as u32,
+                        v_chunk.stride as u32,
+                    ],
+                }
+            }
+            VideoFormat::RGBA
+            | VideoFormat::RGBx
+            | VideoFormat::BGRA
+            | VideoFormat::BGRx
+            | VideoFormat::ARGB
+            | VideoFormat::xRGB
+            | VideoFormat::ABGR
+            | VideoFormat::xBGR => {
+                let swizzle = match self.format.format() {
+                    VideoFormat::RGBA | VideoFormat::RGBx => RgbaSwizzle::RGBA,
+                    VideoFormat::BGRA | VideoFormat::BGRx => RgbaSwizzle::BGRA,
+                    VideoFormat::ARGB | VideoFormat::xRGB => RgbaSwizzle::ARGB,
+                    VideoFormat::ABGR | VideoFormat::xBGR => RgbaSwizzle::ABGR,
+                    _ => unreachable!(),
+                };
+
+                let rgba_chunk = unsafe { dma_data[0].chunk.read_unaligned() };
+
+                CapturedFrameFormat::RGBA {
+                    offset: rgba_chunk.offset,
+                    stride: rgba_chunk.stride as u32,
+                    swizzle,
+                }
+            }
+            _ => unreachable!(),
+        };
+
+        let sync_timeline = metas
+            .iter()
+            .find(|m| m.type_ == spa::sys::SPA_META_SyncTimeline);
+
+        let sync = if let Some(sync_timeline) = sync_timeline {
+            let sync_timeline = unsafe {
+                sync_timeline
+                    .data
+                    .cast::<spa::sys::spa_meta_sync_timeline>()
+                    .read_unaligned()
+            };
+
+            let sync_objs: SmallVec<[_; 2]> = datas
+                .iter()
+                .filter(|d| d.type_ == spa::sys::SPA_DATA_SyncObj)
+                .collect();
+
+            let acquire_sync_obj = clone_fd(sync_objs[0].fd as RawFd);
+            let release_sync_obj = clone_fd(sync_objs[1].fd as RawFd);
+
+            Some(CapturedDmaBufferSync {
+                acquire_point: sync_timeline.acquire_point,
+                release_point: sync_timeline.release_point,
+                acquire_fd: acquire_sync_obj,
+                release_fd: release_sync_obj,
+            })
+        } else {
+            None
+        };
+
+        CapturedFrame {
+            width: self.format.size().width,
+            height: self.format.size().height,
+            format,
+            buffer: CapturedFrameBuffer::DmaBuf(CapturedDmaBuffer {
+                fd: clone_fd(dma_data[0].fd as RawFd),
+                modifier: self.format.modifier(),
+                sync,
+            }),
+        }
+    }
+
+    fn handle_mem_data(
+        &mut self,
+        width: usize,
+        height: usize,
+        data: &SmallVec<[&spa::sys::spa_data; 3]>,
+    ) -> CapturedFrame {
+        match self.format.format() {
+            VideoFormat::NV12 => {
+                let mut buffer = vec![0u8; (width * height * 12).div_ceil(8)];
+
+                let (y_plane, uv_plane) = buffer.split_at_mut(width * height);
+
+                copy_plane(data[0], y_plane, height, width);
+                copy_plane(data[1], uv_plane, height / 2, width);
+
+                let width = width as u32;
+                let height = height as u32;
+
+                CapturedFrame {
+                    width,
+                    height,
+                    format: CapturedFrameFormat::NV12 {
+                        offsets: [0, (width * height)],
+                        strides: [width, width],
+                    },
+                    buffer: CapturedFrameBuffer::Vec(buffer),
+                }
+            }
+            VideoFormat::I420 => {
+                let mut buffer = vec![0u8; (width * height * 12).div_ceil(8)];
+
+                let (y_plane, uv_plane) = buffer.split_at_mut(width * height);
+                let (u_plane, v_plane) = uv_plane.split_at_mut((width * height) / 4);
+
+                copy_plane(data[0], y_plane, height, width);
+                copy_plane(data[1], u_plane, height / 2, width / 2);
+                copy_plane(data[2], v_plane, height / 2, width / 2);
+
+                let width = width as u32;
+                let height = height as u32;
+
+                let u_offset = width * height;
+                let v_offset = u_offset + (width * height) / 4;
+
+                CapturedFrame {
+                    width,
+                    height,
+                    format: CapturedFrameFormat::I420 {
+                        offsets: [0, u_offset, v_offset],
+                        strides: [width, width / 2, width / 2],
+                    },
+                    buffer: CapturedFrameBuffer::Vec(buffer),
+                }
+            }
+            VideoFormat::RGBA
+            | VideoFormat::RGBx
+            | VideoFormat::BGRA
+            | VideoFormat::BGRx
+            | VideoFormat::ARGB
+            | VideoFormat::xRGB
+            | VideoFormat::ABGR
+            | VideoFormat::xBGR => {
+                let swizzle = match self.format.format() {
+                    VideoFormat::RGBA | VideoFormat::RGBx => RgbaSwizzle::RGBA,
+                    VideoFormat::BGRA | VideoFormat::BGRx => RgbaSwizzle::BGRA,
+                    VideoFormat::ARGB | VideoFormat::xRGB => RgbaSwizzle::ARGB,
+                    VideoFormat::ABGR | VideoFormat::xBGR => RgbaSwizzle::ABGR,
+                    _ => unreachable!(),
+                };
+
+                let mut buffer = vec![0u8; width * height * 4];
+
+                // Single plane
+                copy_plane(data[0], &mut buffer, height, width * 4);
+
+                let width = width as u32;
+                let height = height as u32;
+
+                CapturedFrame {
+                    width,
+                    height,
+                    format: CapturedFrameFormat::RGBA {
+                        offset: 0,
+                        stride: width * 4,
+                        swizzle,
+                    },
+                    buffer: CapturedFrameBuffer::Vec(buffer),
+                }
+            }
+            _ => unreachable!("Received unexpected video format"),
+        }
+    }
+}
+
+fn copy_plane(
+    spa_data: &spa::sys::spa_data,
+    buffer: &mut [u8],
+    height: usize,
+    buffer_stride: usize,
+) {
+    let data_slice = unsafe {
+        from_raw_parts(
+            spa_data.data.cast::<u8>(),
+            spa_data
+                .maxsize
+                .try_into()
+                .expect("maxsize must fit into usize"),
+        )
+    };
+
+    let chunk = unsafe { spa_data.chunk.read_unaligned() };
+    let chunk_offset = (chunk.offset % spa_data.maxsize) as usize;
+    let chunk_size = chunk.size as usize;
+    let chunk_stride = chunk.stride as usize;
+    let chunk_slice = &data_slice[chunk_offset..chunk_offset + chunk_size];
+
+    if chunk_stride == buffer_stride {
+        buffer.copy_from_slice(chunk_slice);
+    } else {
+        // Copy per row
+        for y in 0..height {
+            let chunk_index = y * chunk_stride;
+            let buffer_index = y * buffer_stride;
+
+            let src_slice = &chunk_slice[chunk_index..chunk_index + buffer_stride];
+            let dst_slice = &mut buffer[buffer_index..buffer_index + buffer_stride];
+
+            dst_slice.copy_from_slice(src_slice);
+        }
+    }
+}
+
+pub(super) enum Command {
+    Play,
+    Pause,
+    Close,
+}
+
+pub(super) fn start(
+    node_id: Option<u32>,
+    fd: OwnedFd,
+    options: PipewireOptions,
+    role: &'static str,
+    on_frame: Box<dyn FnMut(CapturedFrame) -> bool + Send>,
+    result_tx: oneshot::Sender<Result<pipewire::channel::Sender<Command>, pipewire::Error>>,
+) {
+    pipewire::init();
+
+    let mainloop = match MainLoopRc::new(None) {
+        Ok(mainloop) => mainloop,
+        Err(e) => {
+            let _ = result_tx.send(Err(e));
+            return;
+        }
+    };
+
+    let (tx, rx) = pipewire::channel::channel();
+
+    let (stream, _listener) = match build_stream(&mainloop, node_id, fd, options, role, on_frame) {
+        Ok(data_to_not_drop) => data_to_not_drop,
+        Err(e) => {
+            let _ = result_tx.send(Err(e));
+            return;
+        }
+    };
+
+    let _attach_guard = rx.attach(mainloop.loop_(), move |command| match command {
+        Command::Play => {
+            if let Err(e) = stream.set_active(true) {
+                log::warn!("Failed to handle Play command: {e}");
+            }
+        }
+        Command::Pause => {
+            if let Err(e) = stream.set_active(false) {
+                log::warn!("Failed to handle Pause command: {e}");
+            }
+        }
+        Command::Close => {
+            if let Err(e) = stream.disconnect() {
+                log::warn!("Failed to handle Close command: {e}");
+            }
+        }
+    });
+
+    if result_tx.send(Ok(tx)).is_err() {
+        return;
+    }
+
+    mainloop.run();
+}
+
+fn build_stream(
+    mainloop: &MainLoopRc,
+    node_id: Option<u32>,
+    fd: OwnedFd,
+    options: PipewireOptions,
+    role: &'static str,
+    on_frame: Box<dyn FnMut(CapturedFrame) -> bool + Send>,
+) -> Result<(StreamRc, StreamListener<UserStreamState>), pipewire::Error> {
+    let context = ContextRc::new(mainloop, None)?;
+    let core = context.connect_fd_rc(fd, None)?;
+    let data = UserStreamState {
+        format: Default::default(),
+        main_loop: mainloop.downgrade(),
+        on_frame,
+        options: options.clone(),
+    };
+
+    let stream = StreamRc::new(
+        core,
+        "capture",
+        properties! {
+            *pipewire::keys::MEDIA_TYPE => "Video",
+            *pipewire::keys::MEDIA_CATEGORY => "Capture",
+            *pipewire::keys::MEDIA_ROLE => role,
+        },
+    )?;
+
+    let listener = stream
+        .add_local_listener_with_user_data(data)
+        .state_changed(|stream, user_data, old, new| {
+            user_data.handle_state_changed(stream, old, new);
+        })
+        .param_changed(|stream, user_data, id, param| {
+            user_data.handle_param_changed(stream, id, param);
+        })
+        .process(move |stream, user_data| {
+            user_data.handle_process(stream);
+        })
+        .register()?;
+
+    let mut connect_params: SmallVec<[_; 2]> = SmallVec::new();
+
+    // Add the format params with the video drm modifier property first if dma buffers are to be used
+    if let Some(dma_usage) = options.dma_usage {
+        let mut format_params = format_params(options.max_framerate);
+        format_params
+            .properties
+            .push(drm_modifier_property(&dma_usage.supported_modifier));
+        connect_params.push(serialize_object(format_params));
+    }
+
+    // Add format without video drm modifier property
+    connect_params.push(serialize_object(format_params(options.max_framerate)));
+
+    let mut connect_params: SmallVec<[&Pod; 2]> = connect_params
+        .iter()
+        .map(|pod| Pod::from_bytes(pod).expect("object is serialized as pod"))
+        .collect();
+
+    stream.connect(
+        Direction::Input,
+        node_id,
+        StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS,
+        &mut connect_params,
+    )?;
+
+    Ok((stream, listener))
+}
+
+/// Build the video format capabilities which will be used to negotiate a video stream with pipewire
+fn format_params(max_framerate: u32) -> Object {
+    object!(
+        SpaTypes::ObjectParamFormat,
+        ParamType::EnumFormat,
+        property!(FormatProperties::MediaType, Id, MediaType::Video),
+        property!(FormatProperties::MediaSubtype, Id, MediaSubtype::Raw),
+        property!(
+            FormatProperties::VideoFormat,
+            Choice,
+            Enum,
+            Id,
+            // Default
+            VideoFormat::NV12,
+            // Alternatives
+            VideoFormat::NV12,
+            VideoFormat::I420,
+            VideoFormat::RGBA,
+            VideoFormat::BGRA,
+            VideoFormat::ARGB,
+            VideoFormat::ABGR,
+            VideoFormat::RGBx,
+            VideoFormat::BGRx,
+            VideoFormat::xRGB,
+            VideoFormat::xBGR,
+        ),
+        property!(
+            FormatProperties::VideoSize,
+            Choice,
+            Range,
+            Rectangle,
+            // Default
+            Rectangle {
+                width: 320,
+                height: 240
+            },
+            // Min
+            Rectangle {
+                width: 1,
+                height: 1
+            },
+            // Max
+            Rectangle {
+                width: 32768,
+                height: 32768
+            }
+        ),
+        property!(
+            FormatProperties::VideoFramerate,
+            Choice,
+            Range,
+            Fraction,
+            // Default
+            Fraction {
+                num: max_framerate,
+                denom: 1
+            },
+            // Min
+            Fraction { num: 0, denom: 1 },
+            // Max
+            Fraction {
+                num: max_framerate,
+                denom: 1
+            }
+        ),
+    )
+}
+
+fn mem_buffer_params() -> Object {
+    let mut params = object!(SpaTypes::ObjectParamBuffers, ParamType::Buffers,);
+
+    params.properties.push(Property {
+        key: spa::sys::SPA_PARAM_BUFFERS_dataType,
+        flags: PropertyFlags::empty(),
+        value: Value::Choice(ChoiceValue::Int(Choice(
+            ChoiceFlags::empty(),
+            ChoiceEnum::Flags {
+                default: 1 << spa::sys::SPA_DATA_MemFd,
+                flags: vec![
+                    1 << spa::sys::SPA_DATA_MemFd,
+                    1 << spa::sys::SPA_DATA_MemPtr,
+                ],
+            },
+        ))),
+    });
+
+    params
+}
+
+fn dma_buffer_params(num_buffers: i32, request_sync_obj: bool) -> Object {
+    let mut params = object!(SpaTypes::ObjectParamBuffers, ParamType::Buffers,);
+
+    params.properties.push(Property {
+        key: spa::sys::SPA_PARAM_BUFFERS_buffers,
+        flags: PropertyFlags::MANDATORY,
+        value: Value::Int(num_buffers),
+    });
+
+    if request_sync_obj {
+        params.properties.push(Property {
+            key: spa::sys::SPA_PARAM_BUFFERS_metaType,
+            flags: PropertyFlags::MANDATORY,
+            value: Value::Int(1 << spa::sys::SPA_META_SyncTimeline),
+        });
+    }
+
+    params.properties.push(Property {
+        key: spa::sys::SPA_PARAM_BUFFERS_dataType,
+        flags: PropertyFlags::empty(),
+        value: Value::Choice(ChoiceValue::Int(Choice(
+            ChoiceFlags::empty(),
+            ChoiceEnum::Flags {
+                default: 1 << spa::sys::SPA_DATA_DmaBuf,
+                flags: vec![1 << spa::sys::SPA_DATA_DmaBuf],
+            },
+        ))),
+    });
+
+    params
+}
+
+fn drm_modifier_property(drm_modifier: &[u64]) -> Property {
+    let default = drm_modifier[0].cast_signed();
+    let alternatives = drm_modifier.iter().copied().map(u64::cast_signed).collect();
+
+    Property {
+        key: FormatProperties::VideoModifier.as_raw(),
+        flags: PropertyFlags::MANDATORY | PropertyFlags::DONT_FIXATE,
+        value: Value::Choice(ChoiceValue::Long(Choice(
+            ChoiceFlags::empty(),
+            ChoiceEnum::Enum {
+                default,
+                alternatives,
+            },
+        ))),
+    }
+}
+
+fn sync_obj_params() -> Object {
+    Object {
+        type_: spa::sys::SPA_TYPE_OBJECT_ParamMeta,
+        id: spa::sys::SPA_PARAM_Meta,
+        properties: [
+            Property {
+                key: spa::sys::SPA_PARAM_META_type,
+                flags: PropertyFlags::empty(),
+                value: Value::Id(Id(spa::sys::SPA_META_SyncTimeline)),
+            },
+            Property {
+                key: spa::sys::SPA_PARAM_META_size,
+                flags: PropertyFlags::empty(),
+                value: Value::Int(size_of::<spa::sys::spa_meta_sync_timeline>() as i32),
+            },
+        ]
+        .into(),
+    }
+}
+
+fn serialize_object(object: Object) -> Vec<u8> {
+    PodSerializer::serialize(Cursor::new(Vec::new()), &Value::Object(object))
+        .expect("objects must be serializable")
+        .0
+        .into_inner()
+}
