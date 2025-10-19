@@ -1,13 +1,14 @@
 use crate::{Device, VulkanError};
 use ash::vk::{self};
 
-pub struct VideoFeedbackQueryPool {
+#[derive(Debug)]
+pub(crate) struct VideoFeedbackQueryPool {
     device: Device,
     query_pool: vk::QueryPool,
 }
 
 impl VideoFeedbackQueryPool {
-    pub fn create(
+    pub(crate) fn create(
         device: &Device,
         query_count: u32,
         video_profile_info: vk::VideoProfileInfoKHR,
@@ -26,9 +27,7 @@ impl VideoFeedbackQueryPool {
                 .push_next(&mut video_profile_info)
                 .push_next(&mut query_pool_video_encode_feedback_create_info);
 
-            let query_pool = device
-                .device()
-                .create_query_pool(&query_create_info, None)?;
+            let query_pool = device.ash().create_query_pool(&query_create_info, None)?;
 
             Ok(Self {
                 device: device.clone(),
@@ -37,14 +36,14 @@ impl VideoFeedbackQueryPool {
         }
     }
 
-    pub unsafe fn get_bytes_written(&mut self, index: u32) -> Result<u32, VulkanError> {
+    pub(crate) unsafe fn get_bytes_written(&mut self, index: u32) -> Result<u32, VulkanError> {
         let mut feedback = [EncodeFeedback {
             offset: 0,
             bytes_written: 0,
             status: vk::QueryResultStatusKHR::NOT_READY,
         }];
 
-        self.device.device().get_query_pool_results(
+        self.device.ash().get_query_pool_results(
             self.query_pool,
             index,
             &mut feedback,
@@ -62,14 +61,14 @@ impl VideoFeedbackQueryPool {
         Ok(feedback.bytes_written)
     }
 
-    pub unsafe fn cmd_reset_query(&mut self, command_buffer: vk::CommandBuffer, index: u32) {
+    pub(crate) unsafe fn cmd_reset_query(&mut self, command_buffer: vk::CommandBuffer, index: u32) {
         self.device
-            .device()
+            .ash()
             .cmd_reset_query_pool(command_buffer, self.query_pool, index, 1);
     }
 
-    pub unsafe fn cmd_begin_query(&mut self, command_buffer: vk::CommandBuffer, index: u32) {
-        self.device.device().cmd_begin_query(
+    pub(crate) unsafe fn cmd_begin_query(&mut self, command_buffer: vk::CommandBuffer, index: u32) {
+        self.device.ash().cmd_begin_query(
             command_buffer,
             self.query_pool,
             index,
@@ -77,9 +76,9 @@ impl VideoFeedbackQueryPool {
         );
     }
 
-    pub unsafe fn cmd_end_query(&mut self, command_buffer: vk::CommandBuffer, index: u32) {
+    pub(crate) unsafe fn cmd_end_query(&mut self, command_buffer: vk::CommandBuffer, index: u32) {
         self.device
-            .device()
+            .ash()
             .cmd_end_query(command_buffer, self.query_pool, index);
     }
 }
@@ -87,9 +86,7 @@ impl VideoFeedbackQueryPool {
 impl Drop for VideoFeedbackQueryPool {
     fn drop(&mut self) {
         unsafe {
-            self.device
-                .device()
-                .destroy_query_pool(self.query_pool, None);
+            self.device.ash().destroy_query_pool(self.query_pool, None);
         }
     }
 }
