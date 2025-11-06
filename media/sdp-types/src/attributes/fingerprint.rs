@@ -87,7 +87,7 @@ impl fmt::Display for Fingerprint {
         let mut iter = self.fingerprint.iter();
 
         if let Some(b) = iter.next() {
-            write!(f, "{b:2X}")?;
+            write!(f, "{b:02X}")?;
 
             for b in iter {
                 write!(f, ":{b:02X}")?;
