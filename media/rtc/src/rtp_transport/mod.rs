@@ -16,7 +16,7 @@ use crate::{
     rtp_transport::{dtls_srtp::DtlsState, packet_kind::PacketKind},
     sdp::TransportType,
 };
-use ice::{Component, IceAgent, IceConnectionState, ReceivedPkt};
+use ice::{Component, IceAgent, IceConnectionState, IceGatheringState, ReceivedPkt};
 use rtp::{RtpExtensionIds, RtpPacket};
 use srtp::SrtpError;
 use std::{
@@ -258,6 +258,27 @@ impl RtpTransport {
                 });
 
             self.connection_state = new;
+        }
+    }
+
+    /// Returns the current transport connection state
+    pub fn connection_state(&self) -> TransportConnectionState {
+        self.connection_state
+    }
+
+    /// Returns the current ICE gathering state if ICE is used
+    pub fn ice_gathering_state(&self) -> Option<IceGatheringState> {
+        match &self.connectivity {
+            Connectivity::Static { .. } => None,
+            Connectivity::Ice(agent) => Some(agent.gathering_state()),
+        }
+    }
+
+    /// Returns the current ICE connection state if ICE is used
+    pub fn ice_connection_state(&self) -> Option<IceConnectionState> {
+        match &self.connectivity {
+            Connectivity::Static { .. } => None,
+            Connectivity::Ice(agent) => Some(agent.connection_state()),
         }
     }
 

@@ -3,8 +3,13 @@ use std::net::{IpAddr, SocketAddr};
 use ice::{Component, IceConnectionState, IceGatheringState};
 
 /// Connection state of a transport
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TransportConnectionState {
+    /// # DTLS-SRTP
+    ///
+    /// The transport has failed as the result of an error (such as receipt of an error alert or failure to validate the remote fingerprint).
+    Failed,
+
     /// The transport has just been created
     New,
 
@@ -21,11 +26,6 @@ pub enum TransportConnectionState {
     ///
     /// This state is reached as soon as the SDP exchange has concluded or (if used) the ICE agent has established a connection.
     Connected,
-
-    /// # DTLS-SRTP
-    ///
-    /// The transport has failed as the result of an error (such as receipt of an error alert or failure to validate the remote fingerprint).
-    Failed,
 }
 
 /// Event produced by various functions in [`RtpTransport`](super::RtpTransport).

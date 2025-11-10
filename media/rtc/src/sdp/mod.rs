@@ -12,7 +12,7 @@ use super::{
 use crate::{
     OpenSslContext,
     rtp_session::{RtpOutboundStream, RtpSession, RtpSessionEvent, SendRtpPacket},
-    rtp_transport::RtpOrRtcp,
+    rtp_transport::{RtpOrRtcp, TransportConnectionState},
     sdp::{
         local_media::LocalMedia,
         media::{Media, MediaStreams},
@@ -1624,10 +1624,7 @@ impl SdpSession {
     pub fn ice_gathering_state(&self) -> Option<IceGatheringState> {
         self.transports
             .values()
-            .filter_map(|t| match t.transport.connectivity() {
-                Connectivity::Static { .. } => None,
-                Connectivity::Ice(ice_agent) => Some(ice_agent.gathering_state()),
-            })
+            .filter_map(|t| t.transport.ice_gathering_state())
             .min()
     }
 
@@ -1635,10 +1632,17 @@ impl SdpSession {
     pub fn ice_connection_state(&self) -> Option<IceConnectionState> {
         self.transports
             .values()
-            .filter_map(|t| match t.transport.connectivity() {
-                Connectivity::Static { .. } => None,
-                Connectivity::Ice(ice_agent) => Some(ice_agent.connection_state()),
-            })
+            .filter_map(|t| t.transport.ice_connection_state())
+            .min()
+    }
+
+    /// Returns the cumulative connection state of all rtp transports
+    ///
+    /// Returns `None` if there are no transports
+    pub fn transport_connection_state(&self) -> Option<TransportConnectionState> {
+        self.transports
+            .values()
+            .map(|t| t.transport.connection_state())
             .min()
     }
 }
