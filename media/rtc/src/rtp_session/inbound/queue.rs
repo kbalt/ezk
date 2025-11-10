@@ -7,7 +7,7 @@ use std::{
 };
 use time::ext::InstantExt as _;
 
-const RX_BUFFER_DURATION: Duration = Duration::from_millis(100);
+const RX_BUFFER_DURATION: Duration = Duration::from_millis(50);
 
 pub(crate) struct InboundQueue {
     max_entries: usize,
@@ -26,7 +26,7 @@ pub(crate) struct InboundQueue {
     pub(crate) received_bytes: u64,
     /// packets that were never received
     pub(crate) lost: u64,
-    pub(crate) jitter: f32,
+    pub(crate) jitter: f64,
 }
 
 enum QueueEntry {
@@ -98,27 +98,23 @@ impl InboundQueue {
                 let timestamp = last_rtp_timestamp.guess_extended(packet.timestamp);
                 let sequence_number = last_sequence_number.guess_extended(packet.sequence_number);
 
-                if timestamp > last_rtp_timestamp {
-                    // Only update jitter if the timestamp changes
+                // Rj - Ri
+                let a = now - last_rtp_instant;
+                let a = (a.as_secs_f64() * self.clock_rate as f64) as i64;
 
-                    // Rj - Ri
-                    let a = now - last_rtp_instant;
-                    let a = (a.as_secs_f32() * self.clock_rate as f32) as i64;
+                // Sj - Si
+                let b = packet.timestamp.0 as i64 - last_rtp_timestamp.truncated().0 as i64;
 
-                    // Sj - Si
-                    let b = packet.timestamp.0 as i64 - last_rtp_timestamp.truncated().0 as i64;
+                // (Rj - Ri) - (Sj - Si)
+                let d = (a - b).abs();
 
-                    // (Rj - Ri) - (Sj - Si)
-                    let d = a.abs_diff(b);
+                self.jitter = self.jitter + (d as f64 - self.jitter) / 16.;
 
-                    self.jitter = self.jitter + ((d as f32).abs() - self.jitter) / 16.;
-
-                    self.last_rtp_received = Some((now, timestamp, sequence_number));
-                }
+                self.last_rtp_received = Some((now, timestamp, sequence_number));
 
                 self.push_extended(timestamp, sequence_number, packet)
             } else {
-                let timestamp = ExtendedRtpTimestamp(packet.timestamp.0.into());
+                let timestamp = ExtendedRtpTimestamp(u64::from(packet.timestamp.0));
                 let sequence_number = ExtendedSequenceNumber(packet.sequence_number.0.into());
 
                 self.last_rtp_received = Some((now, timestamp, sequence_number));
@@ -148,8 +144,8 @@ impl InboundQueue {
         sequence_number: ExtendedSequenceNumber,
         packet: RtpPacket,
     ) -> PushResult {
-        if let Some(seq) = self.last_sequence_number_returned
-            && seq >= sequence_number
+        if let Some(last_sequence_number_returned) = self.last_sequence_number_returned
+            && last_sequence_number_returned >= sequence_number
         {
             return PushResult::Dropped;
         }
@@ -274,7 +270,7 @@ impl InboundQueue {
         })?;
 
         let delta = last_rtp_received_timestamp.0 - earliest_timestamp.0;
-        let delta = Duration::from_secs_f32(delta as f32 / self.clock_rate as f32);
+        let delta = Duration::from_secs_f64(delta as f64 / self.clock_rate as f64);
 
         let instant = (last_rtp_received_instant - delta) + RX_BUFFER_DURATION;
 
@@ -298,7 +294,7 @@ fn map_instant_to_rtp_timestamp(
     instant: Instant,
 ) -> Option<ExtendedRtpTimestamp> {
     let delta = instant.signed_duration_since(reference_instant);
-    let delta_in_rtp_timesteps = (delta.as_seconds_f32() * clock_rate as f32) as i64;
+    let delta_in_rtp_timesteps = (delta.as_seconds_f64() * clock_rate as f64) as i64;
 
     u64::try_from(reference_timestamp.0 as i64 + delta_in_rtp_timesteps)
         .ok()
@@ -399,5 +395,31 @@ mod tests {
             4
         );
         assert_eq!(jb.lost, 1)
+    }
+
+    #[test]
+    fn sequence_rollover() {
+        let mut jb = InboundQueue::new(1000);
+
+        let now = Instant::now();
+
+        const BASE_SEQ: u16 = 65530;
+
+        for i in 0..10 {
+            jb.push(
+                now + Duration::from_millis(i * 10),
+                make_packet(BASE_SEQ.wrapping_add(i as u16), (i * 10) as u32),
+            );
+        }
+
+        assert_eq!(jb.queue.len(), 10);
+
+        for i in 0..10 {
+            let packet = jb
+                .pop(now + Duration::from_millis(i * 10) + RX_BUFFER_DURATION)
+                .unwrap();
+
+            assert_eq!(packet.sequence_number.0, BASE_SEQ.wrapping_add(i as u16));
+        }
     }
 }

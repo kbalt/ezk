@@ -70,7 +70,7 @@ fn wrapping_counter_to_u64_counter(reference: u64, got: u64, max: u64) -> u64 {
     if low.abs_diff(reference) < high.abs_diff(reference) {
         low
     } else {
-        high
+        high + 1
     }
 }
 

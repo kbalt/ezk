@@ -125,7 +125,7 @@ impl RtpInboundStream {
             bytes_received: self.queue.received_bytes,
             packets_lost: self.queue.lost,
             loss: self.packet_loss(),
-            jitter: Duration::from_secs_f32(self.queue.jitter / self.queue.clock_rate as f32),
+            jitter: Duration::from_secs_f64(self.queue.jitter / self.queue.clock_rate as f64),
             remote: self.remote_stats,
         }
     }
