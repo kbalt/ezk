@@ -70,6 +70,14 @@ impl Codec {
     pub fn name(&self) -> &str {
         &self.name
     }
+
+    /// Test wether these 2 codecs represent the same actual media encoding
+    pub(crate) fn is_same_encoding(&self, rhs: &Self) -> bool {
+        self.name == rhs.name
+            && self.clock_rate == rhs.clock_rate
+            && self.channels == rhs.channels
+            && self.fmtp == rhs.fmtp
+    }
 }
 
 #[derive(Debug, Clone)]

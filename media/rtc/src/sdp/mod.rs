@@ -214,13 +214,30 @@ impl SdpSession {
                 continue;
             }
 
-            codec.pt = Some(self.next_pt);
+            // Check if the same "encoding" has been registered before and re-use that payload type
+            let existing_pt = self.local_media.values().find_map(|m| {
+                if m.codecs.media_type != codecs.media_type {
+                    None
+                } else {
+                    m.codecs
+                        .codecs
+                        .iter()
+                        .find(|existing_codec| existing_codec.is_same_encoding(codec))
+                        .map(|same_codec| same_codec.pt.expect("payload type must be set"))
+                }
+            });
 
-            self.next_pt += 1;
+            if let Some(existing_pt) = existing_pt {
+                codec.pt = Some(existing_pt);
+            } else {
+                codec.pt = Some(self.next_pt);
 
-            if self.next_pt > 127 {
-                self.next_pt = prev_next_pt;
-                return None;
+                self.next_pt += 1;
+
+                if self.next_pt > 127 {
+                    self.next_pt = prev_next_pt;
+                    return None;
+                }
             }
         }
 
