@@ -124,7 +124,11 @@ impl RtpDtlsSrtpTransport {
         self.setup
     }
 
-    pub(crate) fn state(&mut self) -> &mut DtlsState {
+    pub(crate) fn state(&self) -> &DtlsState {
+        &self.state
+    }
+
+    pub(crate) fn state_mut(&mut self) -> &mut DtlsState {
         &mut self.state
     }
 

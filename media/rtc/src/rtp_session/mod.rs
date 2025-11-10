@@ -40,7 +40,6 @@ pub struct RtpSession {
 
     /// RTCP reports that are queued to be sent
     reports: ReportsQueue,
-    last_reports_collected: Option<Instant>,
 }
 
 impl RtpSession {
@@ -51,7 +50,6 @@ impl RtpSession {
             tx: HashMap::default(),
             rx: HashMap::default(),
             reports: ReportsQueue::default(),
-            last_reports_collected: None,
         }
     }
 
@@ -170,22 +168,12 @@ impl RtpSession {
     pub fn poll(&mut self, now: Instant, mtu: Mtu) -> Option<RtpSessionEvent> {
         let fallback_sender_ssrc = *self.tx.keys().next().unwrap_or(&self.next_tx_ssrc);
 
-        let collect_reports = self
-            .last_reports_collected
-            .is_none_or(|instant| now > instant + Duration::from_secs(1));
+        for tx in self.tx.values_mut() {
+            tx.collect_reports(now, &mut self.reports);
+        }
 
-        if collect_reports {
-            for tx in self.tx.values_mut() {
-                tx.collect_reports(now, &mut self.reports);
-            }
-
-            for rx in self.rx.values_mut() {
-                rx.collect_reports(now, &mut self.reports);
-            }
-
-            if !self.reports.is_empty() {
-                self.last_reports_collected = Some(now);
-            }
+        for rx in self.rx.values_mut() {
+            rx.collect_reports(now, &mut self.reports);
         }
 
         if let Some(report) = self.reports.make_report(fallback_sender_ssrc, mtu) {

@@ -46,17 +46,21 @@ impl OutboundQueue {
         }
     }
 
+    pub(crate) fn has_received(&self) -> bool {
+        self.first_rtp_timestamp.is_some()
+    }
+
     pub(crate) fn instant_to_rtp_timestamp(
         &self,
         instant: Instant,
     ) -> Option<ExtendedRtpTimestamp> {
         let (ref_instant, ref_rtp_timestamp) = self.first_rtp_timestamp?;
 
-        let v = ref_rtp_timestamp.0 as i64
+        let v = ref_rtp_timestamp.0.cast_signed()
             + (instant.signed_duration_since(ref_instant).as_seconds_f32() * self.clock_rate)
                 as i64;
 
-        Some(ExtendedRtpTimestamp(v as u64))
+        Some(ExtendedRtpTimestamp(v.cast_unsigned()))
     }
 
     pub(crate) fn push(

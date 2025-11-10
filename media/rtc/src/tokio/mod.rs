@@ -13,7 +13,7 @@ use std::{
     net::{IpAddr, SocketAddr},
     pin::Pin,
     task::{Context, Poll},
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tokio::{
     io::ReadBuf,
@@ -27,7 +27,7 @@ mod socket;
 pub struct TokioIoState {
     ips: Vec<IpAddr>,
     sockets: HashMap<(TransportId, Component), Socket, BuildTransportHasher>,
-    timeout: Option<Pin<Box<Sleep>>>,
+    sleep: Option<Pin<Box<Sleep>>>,
     buf: Vec<MaybeUninit<u8>>,
 }
 
@@ -37,7 +37,7 @@ impl TokioIoState {
         Self {
             ips,
             sockets: HashMap::with_hasher(BuildTransportHasher),
-            timeout: Some(Box::pin(sleep_until(Instant::now().into()))),
+            sleep: Some(Box::pin(sleep_until(Instant::now().into()))),
             buf: vec![MaybeUninit::uninit(); 65535],
         }
     }
@@ -141,12 +141,14 @@ impl TokioIoState {
     pub fn poll(&mut self, cx: &mut Context<'_>, session: &mut SdpSession) -> Poll<io::Result<()>> {
         let now = Instant::now();
 
+        let mut received = false;
+
         for (socket_id, socket) in self.sockets.iter_mut() {
             socket.send_pending(cx);
 
             let mut buf = ReadBuf::uninit(&mut self.buf);
 
-            if let Poll::Ready(result) = socket.poll_recv_from(cx, &mut buf) {
+            while let Poll::Ready(result) = socket.poll_recv_from(cx, &mut buf) {
                 let (dst, src) = result?;
 
                 let pkt = ReceivedPkt {
@@ -157,27 +159,52 @@ impl TokioIoState {
                 };
 
                 session.receive(now, socket_id.0, pkt);
+                received = true;
 
-                self.timeout = session
-                    .timeout(now)
-                    .map(|timeout| Box::pin(sleep_until((now + timeout).into())));
+                buf.clear();
             }
         }
 
-        if let Some(timeout) = &mut self.timeout
-            && timeout.as_mut().poll(cx).is_ready()
+        // Polled without IO being the reason, ignore sleep and poll session once
+        if !received {
+            session.poll(now);
+
+            self.update_sleep(session, now);
+        }
+
+        // Poll sleep until it returns pending, to register the sleep with the context
+        while let Some(sleep) = &mut self.sleep
+            && sleep.as_mut().poll(cx).is_ready()
         {
             session.poll(now);
 
-            self.timeout = session
-                .timeout(now)
-                .map(|timeout| Box::pin(sleep_until((now + timeout).into())));
+            self.update_sleep(session, now);
         }
 
         if session.has_events() {
             Poll::Ready(Ok(()))
         } else {
             Poll::Pending
+        }
+    }
+
+    fn update_sleep(&mut self, session: &mut SdpSession, now: Instant) {
+        match session.timeout(now) {
+            Some(duration) => {
+                debug_assert!(
+                    duration != Duration::ZERO,
+                    "SdpSession::timeout must not return Duration::ZERO after SdpSession::poll"
+                );
+
+                let deadline = tokio::time::Instant::from(now + duration);
+
+                if let Some(sleep) = &mut self.sleep {
+                    sleep.as_mut().reset(deadline);
+                } else {
+                    self.sleep = Some(Box::pin(sleep_until((now + duration).into())))
+                }
+            }
+            None => self.sleep = None,
         }
     }
 }

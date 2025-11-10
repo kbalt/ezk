@@ -234,7 +234,7 @@ impl RtpTransport {
             RtpTransportKind::Unencrypted | RtpTransportKind::SdesSrtp(..) => {
                 self.set_connection_state(TransportConnectionState::Connected);
             }
-            RtpTransportKind::DtlsSrtp(transport) => match transport.state() {
+            RtpTransportKind::DtlsSrtp(transport) => match transport.state_mut() {
                 DtlsState::Accepting | DtlsState::Connecting => {
                     self.set_connection_state(TransportConnectionState::Connecting);
                 }
@@ -284,7 +284,7 @@ impl RtpTransport {
                     }
                     RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) => {
                         if let DtlsState::Connected { inbound, .. } =
-                            rtp_dtls_srtp_transport.state()
+                            rtp_dtls_srtp_transport.state_mut()
                         {
                             if let Err(e) = inbound.unprotect_rtp(&mut pkt.data) {
                                 log::warn!("Failed to unprotect incoming RTP packet, {e}");
@@ -321,7 +321,7 @@ impl RtpTransport {
                     }
                     RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) => {
                         if let DtlsState::Connected { inbound, .. } =
-                            rtp_dtls_srtp_transport.state()
+                            rtp_dtls_srtp_transport.state_mut()
                         {
                             if let Err(e) = inbound.unprotect_rtcp(&mut pkt.data) {
                                 log::warn!("Failed to unprotect incoming RTCP packet, {e}");
@@ -402,6 +402,28 @@ impl RtpTransport {
     pub fn writer(&mut self) -> Option<RtpTransportWriter<'_>> {
         // Check that all addresses are known
         let (local_rtp_addr, local_rtcp_addr, remote_rtp_addr, remote_rtcp_addr) =
+            self.local_and_remote_addrs()?;
+
+        Some(RtpTransportWriter {
+            transport: self,
+            local_rtp_addr: local_rtp_addr.map(|addr| addr.ip()),
+            local_rtcp_addr: local_rtcp_addr.map(|addr| addr.ip()),
+            remote_rtp_addr,
+            remote_rtcp_addr,
+        })
+    }
+
+    // TODO: used to detect if the transport is ready to send/receive, so naming isn't quite right
+    pub(crate) fn local_and_remote_addrs(
+        &self,
+    ) -> Option<(
+        Option<SocketAddr>,
+        Option<SocketAddr>,
+        SocketAddr,
+        SocketAddr,
+    )> {
+        // Test that connectivity is setup (primarily ICE)
+        let (local_rtp_addr, local_rtcp_addr, remote_rtp_addr, remote_rtcp_addr) =
             match &self.connectivity {
                 Connectivity::Static {
                     remote_rtp_address,
@@ -434,13 +456,22 @@ impl RtpTransport {
                 }
             };
 
-        Some(RtpTransportWriter {
-            transport: self,
-            local_rtp_addr: local_rtp_addr.map(|addr| addr.ip()),
-            local_rtcp_addr: local_rtcp_addr.map(|addr| addr.ip()),
+        // Underlying transport must be connected as well
+        match &self.kind {
+            RtpTransportKind::Unencrypted | RtpTransportKind::SdesSrtp(..) => {}
+            RtpTransportKind::DtlsSrtp(dtls) => {
+                if !matches!(dtls.state(), DtlsState::Connected { .. }) {
+                    return None;
+                }
+            }
+        }
+
+        Some((
+            local_rtp_addr,
+            local_rtcp_addr,
             remote_rtp_addr,
             remote_rtcp_addr,
-        })
+        ))
     }
 }
 
@@ -523,7 +554,8 @@ impl RtpTransportWriter<'_> {
                 rtp_sdes_srtp_transport.outbound.protect_rtp(&mut data)?;
             }
             RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) => {
-                let DtlsState::Connected { outbound, .. } = rtp_dtls_srtp_transport.state() else {
+                let DtlsState::Connected { outbound, .. } = rtp_dtls_srtp_transport.state_mut()
+                else {
                     unreachable!("RtpTransportWriter is only created when DtlsState is Connected");
                 };
 
@@ -553,7 +585,8 @@ impl RtpTransportWriter<'_> {
                     .protect_rtcp(&mut rtcp_packet)?;
             }
             RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) => {
-                let DtlsState::Connected { outbound, .. } = rtp_dtls_srtp_transport.state() else {
+                let DtlsState::Connected { outbound, .. } = rtp_dtls_srtp_transport.state_mut()
+                else {
                     unreachable!("RtpTransportWriter is only created when DtlsState is Connected");
                 };
 

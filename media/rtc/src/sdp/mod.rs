@@ -1319,7 +1319,10 @@ impl SdpSession {
             ..
         } in self.transports.values()
         {
-            timeout = opt_min(timeout, rtp_session.timeout(now));
+            if transport.local_and_remote_addrs().is_some() {
+                timeout = opt_min(timeout, rtp_session.timeout(now));
+            }
+
             timeout = opt_min(timeout, transport.timeout(now));
         }
 

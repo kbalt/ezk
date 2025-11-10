@@ -46,14 +46,19 @@ impl RtpOutboundStream {
     pub(crate) fn timeout(&self, now: Instant) -> Option<Duration> {
         let queue = self.queue.timeout(now);
 
-        let report = self
-            .last_report_sent
-            .and_then(|last_report_sent| {
-                (last_report_sent + self.report_interval).checked_duration_since(now)
-            })
-            .unwrap_or_default();
+        let report = if self.queue.has_received() {
+            Some(
+                self.last_report_sent
+                    .and_then(|last_report_sent| {
+                        (last_report_sent + self.report_interval).checked_duration_since(now)
+                    })
+                    .unwrap_or_default(),
+            )
+        } else {
+            None
+        };
 
-        opt_min(queue, Some(report))
+        opt_min(queue, report)
     }
 
     pub(crate) fn collect_reports(&mut self, now: Instant, reports: &mut ReportsQueue) {
