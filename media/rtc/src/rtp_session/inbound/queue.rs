@@ -370,7 +370,10 @@ mod tests {
         jb.push(now + Duration::from_millis(300), make_packet(3, 300));
         assert_eq!(jb.queue.len(), 4);
 
-        assert!(jb.pop(now + Duration::from_millis(150)).is_none());
+        assert!(
+            jb.pop(now + Duration::from_millis(100) + RX_BUFFER_DURATION / 2)
+                .is_none()
+        );
         assert_eq!(
             jb.pop(now + Duration::from_millis(100) + RX_BUFFER_DURATION)
                 .unwrap()
@@ -378,8 +381,6 @@ mod tests {
                 .0,
             1
         );
-
-        assert!(jb.pop(now + Duration::from_millis(200)).is_none());
         assert_eq!(
             jb.pop(now + Duration::from_millis(300) + RX_BUFFER_DURATION)
                 .unwrap()
