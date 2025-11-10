@@ -106,6 +106,7 @@ where
             let calculated_digest = hmac.finalize().into_bytes();
 
             // Compare the received and calculated digest
+            #[allow(deprecated)] // See https://github.com/fizyk20/generic-array/issues/158
             if calculated_digest.as_slice() != received_digest {
                 return Err(Error::InvalidData("failed to verify message integrity"));
             }
