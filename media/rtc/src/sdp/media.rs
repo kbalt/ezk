@@ -4,10 +4,10 @@ use crate::{
 };
 use bytesstr::BytesStr;
 use rtp::Ssrc;
-use sdp_types::{MediaDescription, MediaType, SessionDescription};
+use sdp_types::{Direction, MediaDescription, MediaType, SessionDescription};
 use slotmap::SlotMap;
 
-pub(super) struct Media {
+pub struct Media {
     pub(super) id: MediaId,
     pub(super) local_media_id: LocalMediaId,
     pub(super) media_type: MediaType,
@@ -32,6 +32,33 @@ pub(super) struct Media {
 }
 
 impl Media {
+    /// Id of this media
+    pub fn id(&self) -> MediaId {
+        self.id
+    }
+
+    /// Id of the local media used for this
+    pub fn local_media_id(&self) -> LocalMediaId {
+        self.local_media_id
+    }
+
+    /// Type of media, e.g. audio, video etc..
+    pub fn media_type(&self) -> MediaType {
+        self.media_type
+    }
+
+    /// `mid` attribute used by this media
+    ///
+    /// Returns `None` if the peer does not support `mid` attributes
+    pub fn mid(&self) -> Option<&str> {
+        self.mid.as_deref()
+    }
+
+    /// Direction of this media
+    pub fn direction(&self) -> Direction {
+        self.direction.into()
+    }
+
     /// Check if the media matches a media section in SDP
     pub(super) fn matches(
         &self,

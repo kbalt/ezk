@@ -13,17 +13,11 @@ use crate::{
     OpenSslContext,
     rtp_session::{RtpOutboundStream, RtpSession, RtpSessionEvent, SendRtpPacket},
     rtp_transport::{RtpOrRtcp, TransportConnectionState},
-    sdp::{
-        local_media::LocalMedia,
-        media::{Media, MediaStreams},
-        pending_media::PendingMedia,
-    },
+    sdp::{local_media::LocalMedia, media::MediaStreams},
 };
 use bytes::Bytes;
 use bytesstr::BytesStr;
-use ice::{
-    Component, IceAgent, IceConnectionState, IceCredentials, IceGatheringState, ReceivedPkt,
-};
+use ice::{Component, IceAgent, IceCredentials, ReceivedPkt};
 use openssl::hash::MessageDigest;
 use rtp::{RtpExtensions, RtpPacket, rtcp_types::Compound};
 use sdp_types::{
@@ -55,8 +49,10 @@ pub use event::{
     IceConnectionStateChanged, IceGatheringStateChanged, MediaAdded, MediaChanged, NegotiatedCodec,
     NegotiatedDtmf, SdpSessionEvent, TransportChange, TransportConnectionStateChanged,
 };
+pub use ice::{IceConnectionState, IceGatheringState};
 pub use local_media::LocalMediaId;
-pub use media::MediaId;
+pub use media::{Media, MediaId};
+pub use pending_media::PendingMedia;
 pub use sdp_types::{Direction, MediaType, ParseSessionDescriptionError, SessionDescription};
 pub use transport::ResolveError;
 
@@ -413,6 +409,20 @@ impl SdpSession {
         (!self.media.is_empty()) || has_pending_media
     }
 
+    pub fn pending_media(&self) -> impl Iterator<Item = &PendingMedia> {
+        self.pending_changes
+            .iter()
+            .filter_map(|pending_change| match pending_change {
+                PendingChange::AddMedia(pending_media) => Some(pending_media),
+                _ => None,
+            })
+    }
+
+    /// Returns a list of all fully negotiated media lines in the SDP session
+    pub fn media(&self) -> impl Iterator<Item = &Media> {
+        self.media.iter()
+    }
+
     /// Set the RTP/RTCP ports of a transport
     pub fn set_transport_ports(
         &mut self,
@@ -710,18 +720,25 @@ impl SdpSession {
             }
 
             // Try to match a new media session
-            for (i, pending_change) in self.pending_changes.iter().enumerate() {
-                let PendingChange::AddMedia(pending_media) = pending_change else {
+            let pending_media_index =
+                self.pending_changes
+                    .iter()
+                    .position(|pending_change| match pending_change {
+                        PendingChange::AddMedia(pending_media) => pending_media.matches_answer(
+                            &self.transports,
+                            &self.offered_transports,
+                            remote_media_desc,
+                        ),
+                        PendingChange::RemoveMedia(..) => false,
+                        PendingChange::ChangeDirection(..) => false,
+                    });
+
+            if let Some(pending_media_index) = pending_media_index {
+                let PendingChange::AddMedia(pending_media) =
+                    &self.pending_changes[pending_media_index]
+                else {
                     continue;
                 };
-
-                if !pending_media.matches_answer(
-                    &self.transports,
-                    &self.offered_transports,
-                    remote_media_desc,
-                ) {
-                    continue;
-                }
 
                 // Check which transport to use, (standalone or bundled)
                 let is_bundled = answer
@@ -740,10 +757,10 @@ impl SdpSession {
                 // Build transport if necessary
                 let (transport_id, public_transport_id) = match transport_id {
                     AnyTransportId::Established(id) => (id, self.transports[id].public_id),
-                    AnyTransportId::Offered(id) => {
+                    AnyTransportId::Offered(offered_id) => {
                         let offered_transport = self
                             .offered_transports
-                            .remove(id)
+                            .remove(offered_id)
                             .expect("Internal references must be valid");
 
                         let public_id = offered_transport.public_id;
@@ -757,20 +774,42 @@ impl SdpSession {
                                 remote_media_desc,
                             )?;
 
-                        let id = self.transports.insert(EstablishedTransport {
+                        let established_id = self.transports.insert(EstablishedTransport {
                             public_id,
                             transport,
                             rtp_session: RtpSession::new(),
                             initial_remote_ice_candidates: remote_media_desc.ice_candidates.clone(),
                         });
 
-                        if !early_received_rtp_or_rtcp.is_empty() {
-                            backlog_of_early_received_rtp_or_rtcp
-                                .insert(id, early_received_rtp_or_rtcp);
+                        // Update any other offered media using the bundled transport
+                        for pending_change in &mut self.pending_changes {
+                            if let PendingChange::AddMedia(pending_media) = pending_change {
+                                let offered_id = AnyTransportId::Offered(offered_id);
+                                let established_id = AnyTransportId::Established(established_id);
+
+                                if pending_media.bundle_transport_id == offered_id {
+                                    pending_media.bundle_transport_id = established_id;
+                                }
+
+                                if pending_media.standalone_transport_id == Some(offered_id) {
+                                    pending_media.standalone_transport_id = Some(established_id)
+                                }
+                            }
                         }
 
-                        (id, public_id)
+                        if !early_received_rtp_or_rtcp.is_empty() {
+                            backlog_of_early_received_rtp_or_rtcp
+                                .insert(established_id, early_received_rtp_or_rtcp);
+                        }
+
+                        (established_id, public_id)
                     }
+                };
+
+                let PendingChange::AddMedia(pending_media) =
+                    &self.pending_changes[pending_media_index]
+                else {
+                    unreachable!("re-borrowing the same pending media as before")
                 };
 
                 let chosen_codec = self.local_media[pending_media.local_media_id]
@@ -828,7 +867,7 @@ impl SdpSession {
                 });
 
                 // remove the matched pending added media to avoid doubly matching it
-                self.pending_changes.remove(i);
+                self.pending_changes.remove(pending_media_index);
 
                 continue 'next_media_desc;
             }

@@ -7,7 +7,7 @@ use crate::sdp::{
     OfferedTransportId, transport::OfferedTransport,
 };
 
-pub(super) struct PendingMedia {
+pub struct PendingMedia {
     pub(super) id: MediaId,
     pub(super) local_media_id: LocalMediaId,
     pub(super) media_type: MediaType,
@@ -22,6 +22,33 @@ pub(super) struct PendingMedia {
 }
 
 impl PendingMedia {
+    /// Id of the media being offered
+    pub fn id(&self) -> MediaId {
+        self.id
+    }
+
+    /// Local media used for this offered media
+    pub fn local_media_id(&self) -> LocalMediaId {
+        self.local_media_id
+    }
+
+    /// Media type of the offered media
+    pub fn media_type(&self) -> MediaType {
+        self.media_type
+    }
+
+    /// mid attribute offered by this media
+    ///
+    /// Will be discarded if the peer does not support mid attributes
+    pub fn mid(&self) -> &str {
+        &self.mid
+    }
+
+    /// Media direction being offered
+    pub fn direction(&self) -> Direction {
+        self.direction
+    }
+
     pub(super) fn matches_answer(
         &self,
         transports: &SlotMap<EstablishedTransportId, EstablishedTransport>,
