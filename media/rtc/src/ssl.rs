@@ -1,6 +1,8 @@
+use std::time::SystemTime;
+
 use openssl::{
-    asn1::{Asn1Time, Asn1Type},
-    bn::{BigNum, MsbOption},
+    asn1::{Asn1Integer, Asn1Time, Asn1Type},
+    bn::BigNum,
     error::ErrorStack,
     hash::MessageDigest,
     nid::Nid,
@@ -19,6 +21,8 @@ pub struct OpenSslContext {
 impl OpenSslContext {
     /// Create a new SSL context, with a new certificate used for DTLS
     pub fn try_new() -> Result<Self, ErrorStack> {
+        openssl::init();
+
         let (cert, pkey) = make_ca_cert()?;
 
         let mut ctx = SslAcceptor::mozilla_modern(SslMethod::dtls())?;
@@ -45,35 +49,47 @@ impl OpenSslContext {
     }
 }
 
+/// Used str0m's implementation as reference https://github.com/algesten/str0m/blob/8f118ddd6a267583cddd0115ae8560095232d39a/src/crypto/ossl/cert.rs#L35
 fn make_ca_cert() -> Result<(X509, PKey<Private>), ErrorStack> {
-    openssl::init();
+    const RSA_F4: u32 = 0x10001;
 
-    let rsa = Rsa::generate(2048)?;
-    let pkey = PKey::from_rsa(rsa)?;
+    let f4 = BigNum::from_u32(RSA_F4).unwrap();
 
-    let mut cert_builder = X509::builder()?;
-    cert_builder.set_version(2)?;
+    let key = Rsa::generate_with_e(2048, &f4)?;
+    let pkey = PKey::from_rsa(key)?;
 
-    let serial_number = {
-        let mut serial = BigNum::new()?;
-        serial.rand(159, MsbOption::MAYBE_ZERO, false)?;
-        serial.to_asn1_integer()?
-    };
-    cert_builder.set_serial_number(&serial_number)?;
+    let mut x509b = X509::builder()?;
+    x509b.set_version(2)?; // X509.V3 (zero indexed)
 
-    cert_builder.set_pubkey(&pkey)?;
-    cert_builder.set_not_before(Asn1Time::days_from_now(0)?.as_ref())?;
-    cert_builder.set_not_after(Asn1Time::days_from_now(7)?.as_ref())?;
+    let mut serial_buf = [0u8; 16];
+    openssl::rand::rand_bytes(&mut serial_buf)?;
 
-    let mut x509_name = X509Name::builder()?;
-    x509_name.append_entry_by_nid_with_type(Nid::COMMONNAME, "ezk-rtc", Asn1Type::UTF8STRING)?;
-    let x509_name = x509_name.build();
+    let serial_bn = BigNum::from_slice(&serial_buf)?;
+    let serial = Asn1Integer::from_bn(&serial_bn)?;
+    x509b.set_serial_number(&serial)?;
+    let before = Asn1Time::from_unix((unix_time() - 3600).try_into().unwrap())?;
+    x509b.set_not_before(&before)?;
+    let after = Asn1Time::days_from_now(7)?;
+    x509b.set_not_after(&after)?;
+    x509b.set_pubkey(&pkey)?;
 
-    cert_builder.set_subject_name(&x509_name)?;
-    cert_builder.set_issuer_name(&x509_name)?;
+    let mut nameb = X509Name::builder()?;
+    nameb.append_entry_by_nid_with_type(Nid::COMMONNAME, "ezk-rtc", Asn1Type::UTF8STRING)?;
 
-    cert_builder.sign(&pkey, MessageDigest::sha256())?;
-    let cert = cert_builder.build();
+    let name = nameb.build();
 
-    Ok((cert, pkey))
+    x509b.set_subject_name(&name)?;
+    x509b.set_issuer_name(&name)?;
+
+    x509b.sign(&pkey, MessageDigest::sha256())?;
+    let x509 = x509b.build();
+
+    Ok((x509, pkey))
+}
+
+fn unix_time() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
