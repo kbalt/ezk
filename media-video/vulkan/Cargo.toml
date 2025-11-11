@@ -1,0 +1,15 @@
+[package]
+name = "ezk-vulkan"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ash = "0.38.0"
+log = "0.4"
+ezk-image = "0.3.0"
+
+[lints]
+workspace = true
