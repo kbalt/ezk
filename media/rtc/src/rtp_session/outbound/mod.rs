@@ -61,7 +61,7 @@ impl RtpOutboundStream {
         opt_min(queue, report)
     }
 
-    pub(crate) fn collect_reports(&mut self, now: Instant, reports: &mut ReportsQueue) {
+    pub(super) fn collect_reports(&mut self, now: Instant, reports: &mut ReportsQueue) {
         let make_report = self
             .last_report_sent
             .is_none_or(|instant| now > instant + self.report_interval);

@@ -9,7 +9,7 @@ use crate::Mtu;
 use report::ReportsQueue;
 use rtp::{
     RtpPacket, Ssrc,
-    rtcp_types::{Compound, Packet as RtcpPacket},
+    rtcp_types::{Compound, Fir, Packet as RtcpPacket, Pli, RtcpPacketParser},
 };
 use ssrc_hasher::SsrcHasher;
 use std::{
@@ -44,13 +44,18 @@ pub struct RtpSession {
 
 impl RtpSession {
     /// Create a new RTP session
-    pub fn new() -> Self {
+    pub fn new(rtcp_rsize: bool) -> Self {
         Self {
             next_tx_ssrc: Ssrc(rand::random()),
             tx: HashMap::default(),
             rx: HashMap::default(),
-            reports: ReportsQueue::default(),
+            reports: ReportsQueue::new(rtcp_rsize),
         }
+    }
+
+    /// Is reduced size RTCP allowed
+    pub fn rtcp_rsize(&self) -> bool {
+        self.reports.rtcp_rsize()
     }
 
     /// Create a new outbound RTP stream with the given parameters
@@ -100,13 +105,20 @@ impl RtpSession {
     }
 
     /// Hand of the RTCP packet to the RTP session
-    pub fn receive_rtcp(&mut self, now: Instant, rtcp_packet: Compound<'_>) {
+    #[must_use]
+    pub fn receive_rtcp(
+        &mut self,
+        now: Instant,
+        rtcp_packet: Compound<'_>,
+    ) -> Vec<RtpSessionReceiveRtcpEvent> {
+        let mut events = vec![];
+
         for rtcp_packet in rtcp_packet {
             let rtcp_packet = match rtcp_packet {
                 Ok(rtcp_packet) => rtcp_packet,
                 Err(e) => {
                     log::warn!("Failed to parse RTCP packet in compound packet, {e}");
-                    return;
+                    return events;
                 }
             };
 
@@ -139,14 +151,36 @@ impl RtpSession {
                 RtcpPacket::TransportFeedback(_transport_feedback) => {
                     // TODO: handle feedback
                 }
-                RtcpPacket::PayloadFeedback(_payload_feedback) => {
-                    // TODO: handle feedback
+                RtcpPacket::PayloadFeedback(payload_feedback) => {
+                    if payload_feedback.parse_fci::<Pli>().is_ok() {
+                        events.push(RtpSessionReceiveRtcpEvent::NackPliReceived(Ssrc(
+                            payload_feedback.media_ssrc(),
+                        )));
+                    } else if let Ok(fir) = payload_feedback.parse_fci::<Fir>() {
+                        for entry in fir.entries() {
+                            events.push(RtpSessionReceiveRtcpEvent::CcmFirReceived(Ssrc(
+                                entry.ssrc(),
+                            )));
+                        }
+                    } else {
+                        log::warn!(
+                            "Received unknown RTCP payload feedback packet header={:02X?} sender_ssrc={} media_ssrc={}",
+                            payload_feedback.header_data(),
+                            payload_feedback.sender_ssrc(),
+                            payload_feedback.media_ssrc(),
+                        )
+                    }
+                }
+                RtcpPacket::Xr(_xr) => {
+                    // ignore
                 }
                 RtcpPacket::Unknown(..) => {
                     // ignore
                 }
             }
         }
+
+        events
     }
 
     /// Returns the duration to wait from the given Instant before polling again
@@ -165,7 +199,7 @@ impl RtpSession {
     }
 
     /// Poll the session for any new events
-    pub fn poll(&mut self, now: Instant, mtu: Mtu) -> Option<RtpSessionEvent> {
+    pub fn poll(&mut self, now: Instant, mtu: Mtu) -> Option<RtpSessionPollEvent> {
         let fallback_sender_ssrc = *self.tx.keys().next().unwrap_or(&self.next_tx_ssrc);
 
         for tx in self.tx.values_mut() {
@@ -177,18 +211,18 @@ impl RtpSession {
         }
 
         if let Some(report) = self.reports.make_report(fallback_sender_ssrc, mtu) {
-            return Some(RtpSessionEvent::SendRtcp(report));
+            return Some(RtpSessionPollEvent::SendRtcp(report));
         }
 
         for tx in self.tx.values_mut() {
             if let Some(rtp_packet) = tx.pop(now) {
-                return Some(RtpSessionEvent::SendRtp(rtp_packet));
+                return Some(RtpSessionPollEvent::SendRtp(rtp_packet));
             }
         }
 
         for rx in self.rx.values_mut() {
             if let Some(rtp_packet) = rx.pop(now) {
-                return Some(RtpSessionEvent::ReceiveRtp(rtp_packet));
+                return Some(RtpSessionPollEvent::ReceiveRtp(rtp_packet));
             }
         }
 
@@ -196,15 +230,15 @@ impl RtpSession {
     }
 }
 
-impl Default for RtpSession {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Event returned by [`RtpSession::poll`]
-pub enum RtpSessionEvent {
+pub enum RtpSessionPollEvent {
     ReceiveRtp(RtpPacket),
     SendRtp(RtpPacket),
     SendRtcp(Vec<u8>),
+}
+
+/// Event returned by [`RtpSession::receive_rtcp`]
+pub enum RtpSessionReceiveRtcpEvent {
+    NackPliReceived(Ssrc),
+    CcmFirReceived(Ssrc),
 }

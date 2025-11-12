@@ -13,6 +13,9 @@ mod stats;
 
 pub use stats::{RtpInboundRemoteStats, RtpInboundStats};
 
+/// Minimum interval in which FIR/PLI requests can be sent
+const RTCP_FEEDBACK_COOLDOWN: Duration = Duration::from_millis(250);
+
 /// RTP receive stream
 pub struct RtpInboundStream {
     ssrc: Ssrc,
@@ -22,6 +25,15 @@ pub struct RtpInboundStream {
     last_received_sender_report: Option<NtpTimestamp>,
 
     remote_stats: Option<RtpInboundRemoteStats>,
+
+    // RTCP feedback NACK PLI
+    want_nack_pli: bool,
+    last_nack_pli: Option<Instant>,
+
+    // RTCP feedback CCM FIR
+    want_ccm_fir: bool,
+    next_fir_seq: u8,
+    last_ccm_fir: Option<Instant>,
 }
 
 impl RtpInboundStream {
@@ -33,20 +45,44 @@ impl RtpInboundStream {
             last_report_sent: None,
             last_received_sender_report: None,
             remote_stats: None,
+
+            want_nack_pli: false,
+            last_nack_pli: None,
+
+            want_ccm_fir: false,
+            next_fir_seq: rand::random(),
+            last_ccm_fir: None,
         }
+    }
+
+    pub fn request_nack_pli(&mut self) {
+        self.want_nack_pli = true
+    }
+
+    pub fn request_ccm_fir(&mut self) {
+        self.want_ccm_fir = true
     }
 
     pub(crate) fn timeout(&self, now: Instant) -> Option<Duration> {
         let queue = self.queue.timeout(now);
 
         let report = if self.queue.highest_sequence_number_received().is_some() {
-            Some(
-                self.last_report_sent
-                    .and_then(|(last_report_sent, _)| {
-                        (last_report_sent + self.report_interval).checked_duration_since(now)
-                    })
-                    .unwrap_or_default(),
-            )
+            let report_interval = self
+                .last_report_sent
+                .and_then(|(last_report_sent, _)| {
+                    (last_report_sent + self.report_interval).checked_duration_since(now)
+                })
+                .unwrap_or_default();
+
+            let nack_pli = self
+                .last_nack_pli
+                .map(|ts| (ts + RTCP_FEEDBACK_COOLDOWN).saturating_duration_since(now));
+
+            let ccm_fir = self
+                .last_ccm_fir
+                .map(|ts| (ts + RTCP_FEEDBACK_COOLDOWN).saturating_duration_since(now));
+
+            opt_min(Some(report_interval), opt_min(nack_pli, ccm_fir))
         } else {
             None
         };
@@ -54,10 +90,41 @@ impl RtpInboundStream {
         opt_min(queue, report)
     }
 
-    pub(crate) fn collect_reports(&mut self, now: Instant, reports: &mut ReportsQueue) {
-        let make_report = self
+    pub(super) fn collect_reports(&mut self, now: Instant, reports: &mut ReportsQueue) {
+        if self.want_nack_pli {
+            let cooldown_elapsed = self
+                .last_nack_pli
+                .is_none_or(|i| i + RTCP_FEEDBACK_COOLDOWN <= now);
+
+            if cooldown_elapsed {
+                self.want_nack_pli = false;
+                self.last_nack_pli = Some(now);
+                reports.add_nack_pli(self.ssrc);
+            }
+        }
+
+        if self.want_ccm_fir {
+            let cooldown_elapsed = self
+                .last_ccm_fir
+                .is_none_or(|i| i + RTCP_FEEDBACK_COOLDOWN <= now);
+
+            if cooldown_elapsed {
+                self.want_ccm_fir = false;
+                self.last_ccm_fir = Some(now);
+                reports.add_ccm_fir(self.ssrc, self.next_fir_seq);
+                self.next_fir_seq = self.next_fir_seq.wrapping_add(1);
+            }
+        }
+
+        // When emitting feedback packets & reduced size RTCP is not supported:
+        // Emit a receiver report so the ReportsQueue can generate a valid RTCP packet
+        let receiver_report_for_feedback = reports.has_feedback() && !reports.rtcp_rsize();
+
+        let report_interval_elapsed = self
             .last_report_sent
             .is_none_or(|(instant, _)| now > instant + self.report_interval);
+
+        let make_report = receiver_report_for_feedback || report_interval_elapsed;
 
         if !make_report {
             return;

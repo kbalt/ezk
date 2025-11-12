@@ -2,7 +2,7 @@ use crate::connection::Connection;
 use crate::media::Media;
 use crate::{
     Direction, ExtMap, Fingerprint, Fmtp, IceCandidate, IcePassword, IceUsernameFragment,
-    MediaType, RtpMap, Setup, SrtpCrypto, Ssrc, TransportProtocol, UnknownAttribute,
+    MediaType, RtcpFeedback, RtpMap, Setup, SrtpCrypto, Ssrc, TransportProtocol, UnknownAttribute,
 };
 use crate::{Rtcp, bandwidth::Bandwidth};
 use bytesstr::BytesStr;
@@ -31,6 +31,9 @@ pub struct MediaDescription {
     /// rtcp-mux attribute
     pub rtcp_mux: bool,
 
+    /// rtcp reduced size attribute
+    pub rtcp_rsize: bool,
+
     /// Media ID (a=mid)
     pub mid: Option<BytesStr>,
 
@@ -39,6 +42,9 @@ pub struct MediaDescription {
 
     /// RTP encoding parameters
     pub fmtp: Vec<Fmtp>,
+
+    /// RTCP Feedback message types
+    pub rtcp_fb: Vec<RtcpFeedback>,
 
     /// ICE username fragment
     pub ice_ufrag: Option<IceUsernameFragment>,
@@ -96,6 +102,10 @@ impl fmt::Display for MediaDescription {
             write!(f, "a=rtcp-mux\r\n")?;
         }
 
+        if self.rtcp_rsize {
+            write!(f, "a=rtcp-rsize\r\n")?;
+        }
+
         if let Some(mid) = &self.mid {
             write!(f, "a=mid:{mid}\r\n")?;
         }
@@ -106,6 +116,10 @@ impl fmt::Display for MediaDescription {
 
         for fmtp in &self.fmtp {
             write!(f, "a=fmtp:{fmtp}\r\n")?;
+        }
+
+        for rtcp_fb in &self.rtcp_fb {
+            write!(f, "a=rtcp-fb:{rtcp_fb}\r\n")?;
         }
 
         if let Some(ufrag) = &self.ice_ufrag {
@@ -172,9 +186,11 @@ impl MediaDescription {
             direction: Direction::Inactive,
             rtcp: None,
             rtcp_mux: false,
+            rtcp_rsize: false,
             mid: None,
             rtpmap: vec![],
             fmtp: vec![],
+            rtcp_fb: vec![],
             ice_ufrag: None,
             ice_pwd: None,
             ice_candidates: vec![],

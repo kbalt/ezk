@@ -86,6 +86,11 @@ impl RtpTransport {
         }
     }
 
+    /// Returns if rtcp-mux has been negotiated
+    pub fn rtcp_mux(&self) -> bool {
+        self.rtcp_mux
+    }
+
     /// Must be called after one or two UDP sockets have been created for this transport.
     ///
     /// The number of sockets depends on the `rtcp-mux` parameter given in [`new`](Self::new).

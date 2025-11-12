@@ -128,6 +128,12 @@ pub enum SdpSessionEvent {
         media_id: MediaId,
         rtp_packet: RtpPacket,
     },
+
+    /// Receive a Picture Loss Indication for the given media
+    ReceivePictureLossIndication { media_id: MediaId },
+
+    /// Receive a Full Intra Refresh for the given media
+    ReceiveFullIntraRefresh { media_id: MediaId },
 }
 
 /// Transport changes that have to be made before continuing with SDP negotiation.

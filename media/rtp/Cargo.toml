@@ -12,5 +12,5 @@ workspace = true
 
 [dependencies]
 bytes = "1"
-rtcp-types = "0.1"
+rtcp-types = "0.2"
 rtp-types = "0.1"

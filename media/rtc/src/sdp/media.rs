@@ -29,6 +29,11 @@ pub struct Media {
 
     /// negotiated telephone-event payload type with the same clock-rate as codec
     pub(super) dtmf_pt: Option<u8>,
+
+    /// Picture Loss Indication RTCP feedback was negotiated for the selected coded of this media
+    pub(super) accepts_nack_pli: bool,
+    /// Full Intra Request RTCP feedback was negotiated for the selected coded of this media
+    pub(super) accepts_ccm_fir: bool,
 }
 
 impl Media {
@@ -57,6 +62,16 @@ impl Media {
     /// Direction of this media
     pub fn direction(&self) -> Direction {
         self.direction.into()
+    }
+
+    /// Does the media support sending RTCP "Picture Loss Indication" transport feedback
+    pub fn accepts_pli(&self) -> bool {
+        self.accepts_nack_pli
+    }
+
+    /// Does the media support sending RTCP "Full Intra Refresh" transport feedback
+    pub fn accepts_fir(&self) -> bool {
+        self.accepts_ccm_fir
     }
 
     /// Check if the media matches a media section in SDP

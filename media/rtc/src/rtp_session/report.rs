@@ -2,48 +2,85 @@ use crate::Mtu;
 use rtp::{
     Ssrc,
     rtcp_types::{
-        Bye, CompoundBuilder, ReceiverReport, ReceiverReportBuilder, ReportBlock,
+        Bye, CompoundBuilder, Fir, PayloadFeedback, Pli, ReceiverReport, ReportBlock,
         ReportBlockBuilder, RtcpPacket, RtcpPacketWriter, SenderReport, SenderReportBuilder,
     },
 };
-use std::collections::VecDeque;
-
-const BYE_BYTES_PER_SOURCE: usize = 4;
+use std::{cmp, collections::VecDeque};
 
 /// Collection of RTCP packets to be sent out
-#[derive(Default)]
-pub(crate) struct ReportsQueue {
+pub(super) struct ReportsQueue {
     sender_reports: VecDeque<SenderReportBuilder>,
     report_blocks: VecDeque<ReportBlockBuilder>,
 
+    nack_pli: Vec<Ssrc>,
+    ccm_fir: Vec<(Ssrc, u8)>,
+
     sources_to_bye: Vec<Ssrc>,
+
+    /// If reduced size RTCP is allows, (RTCP packets without SR/RR)
+    rtcp_rsize: bool,
 }
 
 impl ReportsQueue {
-    pub(crate) fn is_empty(&self) -> bool {
+    pub(super) fn new(rtcp_rsize: bool) -> ReportsQueue {
+        ReportsQueue {
+            sender_reports: VecDeque::new(),
+            report_blocks: VecDeque::new(),
+            nack_pli: Vec::new(),
+            ccm_fir: Vec::new(),
+            sources_to_bye: Vec::new(),
+            rtcp_rsize,
+        }
+    }
+
+    pub(super) fn rtcp_rsize(&self) -> bool {
+        self.rtcp_rsize
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
         let Self {
             sender_reports,
             report_blocks,
             sources_to_bye,
+            nack_pli,
+            ccm_fir,
+            rtcp_rsize: _,
         } = self;
 
-        sender_reports.is_empty() && report_blocks.is_empty() && sources_to_bye.is_empty()
+        sender_reports.is_empty()
+            && report_blocks.is_empty()
+            && sources_to_bye.is_empty()
+            && nack_pli.is_empty()
+            && ccm_fir.is_empty()
     }
 
-    pub(crate) fn add_sender_report(&mut self, sr: SenderReportBuilder) {
+    pub(super) fn has_feedback(&self) -> bool {
+        !self.nack_pli.is_empty() || !self.ccm_fir.is_empty()
+    }
+
+    pub(super) fn add_sender_report(&mut self, sr: SenderReportBuilder) {
         self.sender_reports.push_back(sr);
     }
 
-    pub(crate) fn add_report_block(&mut self, rb: ReportBlockBuilder) {
+    pub(super) fn add_report_block(&mut self, rb: ReportBlockBuilder) {
         self.report_blocks.push_back(rb);
     }
 
-    pub(crate) fn add_bye(&mut self, ssrc: Ssrc) {
+    pub(super) fn add_nack_pli(&mut self, ssrc: Ssrc) {
+        self.nack_pli.push(ssrc);
+    }
+
+    pub(super) fn add_ccm_fir(&mut self, ssrc: Ssrc, seq: u8) {
+        self.ccm_fir.push((ssrc, seq));
+    }
+
+    pub(super) fn add_bye(&mut self, ssrc: Ssrc) {
         self.sources_to_bye.push(ssrc);
     }
 
-    pub(crate) fn make_report(&mut self, fallback_sender_ssrc: Ssrc, mtu: Mtu) -> Option<Vec<u8>> {
-        self.make_report_compund(fallback_sender_ssrc, mtu)
+    pub(super) fn make_report(&mut self, fallback_sender_ssrc: Ssrc, mtu: Mtu) -> Option<Vec<u8>> {
+        self.make_report_compound(fallback_sender_ssrc, mtu)
             .map(|compound| {
                 let mut buf = vec![0u8; compound.calculate_size().unwrap()];
                 let len = compound.write_into_unchecked(&mut buf);
@@ -52,7 +89,7 @@ impl ReportsQueue {
             })
     }
 
-    fn make_report_compund(
+    fn make_report_compound(
         &mut self,
         fallback_sender_ssrc: Ssrc,
         mtu: Mtu,
@@ -61,103 +98,131 @@ impl ReportsQueue {
             return None;
         }
 
-        let mtu = mtu.for_rtcp_packets();
-
         let mut compound = CompoundBuilder::default();
 
-        loop {
-            let compound_size = compound.calculate_size().unwrap();
+        let mtu = mtu.for_rtcp_packets();
 
-            let compound_has_size_for_sr = compound_size + SenderReport::MIN_PACKET_LEN <= mtu;
-            let compound_has_size_for_rr =
-                compound_size + ReceiverReport::MIN_PACKET_LEN + ReportBlock::EXPECTED_SIZE <= mtu;
-            let compound_has_size_for_bye =
-                compound_size + (Bye::MIN_PACKET_LEN + BYE_BYTES_PER_SOURCE) <= mtu;
+        let mtu = if !self.sender_reports.is_empty() {
+            mtu.saturating_sub(SenderReport::MIN_PACKET_LEN)
+        } else if !self.report_blocks.is_empty() {
+            mtu.saturating_sub(ReceiverReport::MIN_PACKET_LEN)
+        } else if self.rtcp_rsize {
+            mtu
+        } else {
+            return None;
+        };
 
-            if !self.sender_reports.is_empty() && compound_has_size_for_sr {
-                // If there's a sender report, fill it with report blocks and add it to the compound
-                let sender_report = self
-                    .sender_reports
-                    .pop_front()
-                    .expect("sender_reports is not empty");
-                compound = self.extend_and_add_report(mtu, compound, sender_report);
-            } else if self.sender_reports.is_empty()
-                && !self.report_blocks.is_empty()
-                && compound_has_size_for_rr
-            {
-                // If there's no sender reports left, put the remaining report blocks in a receiver report
-                let receiver_report = ReceiverReport::builder(fallback_sender_ssrc.0);
-                compound = self.extend_and_add_report(mtu, compound, receiver_report);
-            } else if !self.sources_to_bye.is_empty() && compound_has_size_for_bye {
-                compound = self.add_bye_to_compound(mtu, compound, compound_size);
-            } else {
-                return Some(compound);
+        let (mtu, num_pli) = calculate_num_of_packet_type(
+            mtu,
+            0,
+            PayloadFeedback::MIN_PACKET_LEN,
+            self.nack_pli.len(),
+            usize::MAX,
+        );
+
+        let (mtu, num_fir) = calculate_num_of_packet_type(
+            mtu,
+            PayloadFeedback::MIN_PACKET_LEN,
+            8,
+            self.ccm_fir.len(),
+            usize::from(u16::MAX) / 2 - 2,
+        );
+
+        let (mtu, num_bye) = calculate_num_of_packet_type(
+            mtu,
+            Bye::MIN_PACKET_LEN,
+            4,
+            self.sources_to_bye.len(),
+            usize::from(Bye::MAX_COUNT),
+        );
+
+        let (_mtu, num_report_blocks) = calculate_num_of_packet_type(
+            mtu,
+            0,
+            ReportBlock::EXPECTED_SIZE,
+            self.report_blocks.len(),
+            usize::from(SenderReport::MAX_COUNT),
+        );
+
+        if let Some(mut sr) = self.sender_reports.pop_front() {
+            // Add Report Blocks
+            for report_block in self.report_blocks.drain(..num_report_blocks) {
+                sr = sr.add_report_block(report_block);
             }
-        }
-    }
 
-    fn add_bye_to_compound(
-        &mut self,
-        mtu: usize,
-        compound: CompoundBuilder<'static>,
-        compound_size: usize,
-    ) -> CompoundBuilder<'static> {
-        let mut bye = Bye::builder();
+            compound = compound.add_packet(sr);
+        } else if num_report_blocks > 0 {
+            let mut rr = ReceiverReport::builder(fallback_sender_ssrc.0);
 
-        let mut sources_added = 0;
-        while sources_added < 31
-            && compound_size + bye.calculate_size().unwrap() + BYE_BYTES_PER_SOURCE <= mtu
-        {
-            let Some(ssrc) = self.sources_to_bye.pop() else {
-                break;
-            };
-
-            bye = bye.add_source(ssrc.0);
-            sources_added += 1;
-        }
-
-        compound.add_packet(bye)
-    }
-
-    fn extend_and_add_report(
-        &mut self,
-        mtu: usize,
-        compound: CompoundBuilder<'static>,
-        mut report: impl AnyReportBuilder,
-    ) -> CompoundBuilder<'static> {
-        let compound_size = compound.calculate_size().unwrap();
-
-        let mut blocks_added = 0;
-        while blocks_added < 31
-            && compound_size + report.calculate_size().unwrap() + ReportBlock::EXPECTED_SIZE <= mtu
-        {
-            match self.report_blocks.pop_front() {
-                Some(report_block) => {
-                    report = report.add_report_block(report_block);
-                    blocks_added += 1;
-                }
-                None => break,
+            // Add Report Blocks
+            for report_block in self.report_blocks.drain(..num_report_blocks) {
+                rr = rr.add_report_block(report_block);
             }
+
+            compound = compound.add_packet(rr);
         }
 
-        compound.add_packet(report)
+        // Add PLI payload feedback
+        for media_ssrc in self.nack_pli.drain(0..num_pli) {
+            compound = compound.add_packet(
+                PayloadFeedback::builder_owned(Pli::builder())
+                    .sender_ssrc(fallback_sender_ssrc.0)
+                    .media_ssrc(media_ssrc.0),
+            );
+        }
+
+        // Add FIR payload feedback
+        if num_fir > 0 {
+            let mut fir = Fir::builder();
+
+            for (ssrc, sequence) in self.ccm_fir.drain(0..num_fir) {
+                fir = fir.add_ssrc(ssrc.0, sequence);
+            }
+
+            compound = compound.add_packet(
+                PayloadFeedback::builder_owned(fir)
+                    // https://datatracker.ietf.org/doc/html/rfc5104#section-4.3.1.2:
+                    //    Within the common packet header for feedback messages (as defined in
+                    //    indicates the source of the request, and the "SSRC of media source"
+                    //    is not used and SHALL be set to 0
+                    .sender_ssrc(fallback_sender_ssrc.0)
+                    .media_ssrc(0),
+            );
+        }
+
+        // Add Bye packets
+        if num_bye > 0 {
+            let mut bye = Bye::builder();
+
+            for ssrc in self.sources_to_bye.drain(0..num_bye) {
+                bye = bye.add_source(ssrc.0);
+            }
+
+            compound = compound.add_packet(bye);
+        }
+
+        Some(compound)
     }
 }
 
-trait AnyReportBuilder: RtcpPacketWriter + 'static {
-    fn add_report_block(self, report_block: ReportBlockBuilder) -> Self;
-}
+fn calculate_num_of_packet_type(
+    mtu: usize,
+    base_packet_len: usize,
+    len_per_entry: usize,
+    num_entries: usize,
+    max_entries: usize,
+) -> (usize, usize) {
+    let num = mtu.saturating_sub(base_packet_len) / len_per_entry;
+    let num = cmp::min(num, max_entries);
+    let num = cmp::min(num, num_entries);
 
-impl AnyReportBuilder for SenderReportBuilder {
-    fn add_report_block(self, report_block: ReportBlockBuilder) -> Self {
-        SenderReportBuilder::add_report_block(self, report_block)
-    }
-}
+    let mtu = if num == 0 {
+        mtu
+    } else {
+        mtu.saturating_sub(base_packet_len + num * len_per_entry)
+    };
 
-impl AnyReportBuilder for ReceiverReportBuilder {
-    fn add_report_block(self, report_block: ReportBlockBuilder) -> Self {
-        ReceiverReportBuilder::add_report_block(self, report_block)
-    }
+    (mtu, num)
 }
 
 #[cfg(test)]
@@ -167,7 +232,7 @@ mod tests {
 
     #[test]
     fn single_sr() {
-        let mut reports = ReportsQueue::default();
+        let mut reports = ReportsQueue::new(false);
 
         assert!(reports.make_report(Ssrc(0), Mtu::new(1200)).is_none());
 
@@ -187,7 +252,7 @@ mod tests {
 
     #[test]
     fn single_sr_with_report_block() {
-        let mut reports = ReportsQueue::default();
+        let mut reports = ReportsQueue::new(false);
 
         // Single SR with 1 report block
         reports.add_sender_report(SenderReport::builder(0));
@@ -201,48 +266,6 @@ mod tests {
             panic!()
         };
         assert_eq!(sr.n_reports(), 1);
-        assert!(compound.next().is_none());
-        assert!(reports.is_empty());
-    }
-
-    #[test]
-    fn two_sr_with_many_report_blocks() {
-        let mut reports = ReportsQueue::default();
-
-        reports.add_sender_report(SenderReport::builder(0));
-        reports.add_sender_report(SenderReport::builder(1));
-
-        for i in 0..64 {
-            reports.add_report_block(ReportBlock::builder(i));
-        }
-
-        // First RTCP packet
-        let report = reports.make_report(Ssrc(0), Mtu::new(1200)).unwrap();
-        assert!(report.len() <= 1200);
-        let mut compound = Compound::parse(&report).unwrap();
-
-        let Packet::Sr(sr) = compound.next().unwrap().unwrap() else {
-            panic!()
-        };
-        assert_eq!(sr.n_reports(), 31);
-        assert_eq!(sr.ssrc(), 0);
-
-        let Packet::Sr(sr) = compound.next().unwrap().unwrap() else {
-            panic!()
-        };
-        assert_eq!(sr.n_reports(), 16);
-        assert_eq!(sr.ssrc(), 1);
-        assert!(compound.next().is_none());
-
-        // Second RTCP packet
-        let report = reports.make_report(Ssrc(0), Mtu::new(1200)).unwrap();
-        assert!(report.len() <= 1200);
-        let mut compound = Compound::parse(&report).unwrap();
-
-        let Packet::Rr(rr) = compound.next().unwrap().unwrap() else {
-            panic!()
-        };
-        assert_eq!(rr.n_reports(), 17);
         assert!(compound.next().is_none());
         assert!(reports.is_empty());
     }

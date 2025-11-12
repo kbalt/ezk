@@ -11,7 +11,10 @@ use super::{
 };
 use crate::{
     OpenSslContext,
-    rtp_session::{RtpOutboundStream, RtpSession, RtpSessionEvent, SendRtpPacket},
+    rtp_session::{
+        RtpInboundStream, RtpOutboundStream, RtpSession, RtpSessionPollEvent,
+        RtpSessionReceiveRtcpEvent, SendRtpPacket,
+    },
     rtp_transport::{RtpOrRtcp, TransportConnectionState},
     sdp::{local_media::LocalMedia, media::MediaStreams},
 };
@@ -22,8 +25,8 @@ use openssl::hash::MessageDigest;
 use rtp::{RtpExtensions, RtpPacket, rtcp_types::Compound};
 use sdp_types::{
     Connection, Fingerprint, FingerprintAlgorithm, Fmtp, Group, IceCandidate, IceOptions,
-    IcePassword, IceUsernameFragment, MediaDescription, Origin, Rtcp, RtpMap, Time,
-    TransportProtocol,
+    IcePassword, IceUsernameFragment, MediaDescription, Origin, Rtcp, RtcpFeedback,
+    RtcpFeedbackKind, RtcpFeedbackPt, RtpMap, Time, TransportProtocol,
 };
 use slotmap::{SlotMap, new_key_type};
 use std::{
@@ -409,20 +412,6 @@ impl SdpSession {
         (!self.media.is_empty()) || has_pending_media
     }
 
-    pub fn pending_media(&self) -> impl Iterator<Item = &PendingMedia> {
-        self.pending_changes
-            .iter()
-            .filter_map(|pending_change| match pending_change {
-                PendingChange::AddMedia(pending_media) => Some(pending_media),
-                _ => None,
-            })
-    }
-
-    /// Returns a list of all fully negotiated media lines in the SDP session
-    pub fn media(&self) -> impl Iterator<Item = &Media> {
-        self.media.iter()
-    }
-
     /// Set the RTP/RTCP ports of a transport
     pub fn set_transport_ports(
         &mut self,
@@ -565,6 +554,12 @@ impl SdpSession {
                 codec_pt: chosen_codec.remote_pt,
                 codec: chosen_codec.codec,
                 dtmf_pt: chosen_codec.dtmf,
+                accepts_nack_pli: remote_media_desc.rtcp_fb.iter().any(|fb| {
+                    fb.pt.matches(chosen_codec.remote_pt) && fb.kind == RtcpFeedbackKind::NackPli
+                }),
+                accepts_ccm_fir: remote_media_desc.rtcp_fb.iter().any(|fb| {
+                    fb.pt.matches(chosen_codec.remote_pt) && fb.kind == RtcpFeedbackKind::CcmFir
+                }),
             });
         }
 
@@ -618,7 +613,7 @@ impl SdpSession {
         Ok(self.transports.insert(EstablishedTransport {
             public_id: id,
             transport,
-            rtp_session: RtpSession::new(),
+            rtp_session: RtpSession::new(remote_media_desc.rtcp_rsize),
             initial_remote_ice_candidates: remote_media_desc.ice_candidates.clone(),
         }))
     }
@@ -777,7 +772,7 @@ impl SdpSession {
                         let established_id = self.transports.insert(EstablishedTransport {
                             public_id,
                             transport,
-                            rtp_session: RtpSession::new(),
+                            rtp_session: RtpSession::new(remote_media_desc.rtcp_rsize),
                             initial_remote_ice_candidates: remote_media_desc.ice_candidates.clone(),
                         });
 
@@ -864,6 +859,13 @@ impl SdpSession {
                     codec_pt: chosen_codec.remote_pt,
                     codec: chosen_codec.codec,
                     dtmf_pt: chosen_codec.dtmf,
+                    accepts_nack_pli: remote_media_desc.rtcp_fb.iter().any(|fb| {
+                        fb.pt.matches(chosen_codec.remote_pt)
+                            && fb.kind == RtcpFeedbackKind::NackPli
+                    }),
+                    accepts_ccm_fir: remote_media_desc.rtcp_fb.iter().any(|fb| {
+                        fb.pt.matches(chosen_codec.remote_pt) && fb.kind == RtcpFeedbackKind::CcmFir
+                    }),
                 });
 
                 // remove the matched pending added media to avoid doubly matching it
@@ -908,6 +910,7 @@ impl SdpSession {
 
             for (instant, rtp_or_rtcp) in early_received_rtp_or_rtcp {
                 Self::handle_received_rtp_or_rtcp(
+                    &mut self.events,
                     &mut self.media,
                     id,
                     transport,
@@ -1109,6 +1112,7 @@ impl SdpSession {
             let mut rtpmap = vec![];
             let mut fmtp = vec![];
             let mut fmts = vec![];
+            let mut rtcp_fb = vec![];
 
             let local_media = &self.local_media[pending_media.local_media_id];
 
@@ -1128,6 +1132,18 @@ impl SdpSession {
                     fmtp.push(Fmtp {
                         format: pt,
                         params: param.as_str().into(),
+                    });
+                }
+
+                if self.config.offer_avpf && local_media.codecs.media_type == MediaType::Video {
+                    rtcp_fb.push(RtcpFeedback {
+                        pt: RtcpFeedbackPt::Pt(pt),
+                        kind: RtcpFeedbackKind::NackPli,
+                    });
+
+                    rtcp_fb.push(RtcpFeedback {
+                        pt: RtcpFeedbackPt::Pt(pt),
+                        kind: RtcpFeedbackKind::CcmFir,
                     });
                 }
             }
@@ -1159,9 +1175,12 @@ impl SdpSession {
                 }),
                 // always offer rtcp-mux
                 rtcp_mux: true,
+                // only offer rtcp-rsize when avpf is also offered
+                rtcp_rsize: pending_media.use_avpf,
                 mid: Some(pending_media.mid.as_str().into()),
                 rtpmap,
                 fmtp,
+                rtcp_fb,
                 ice_ufrag: None,
                 ice_pwd: None,
                 ice_candidates: vec![],
@@ -1260,6 +1279,7 @@ impl SdpSession {
         let mut rtpmap = vec![];
         let mut fmtp = vec![];
         let mut fmts = vec![media.codec_pt];
+        let mut rtcp_fb = vec![];
 
         rtpmap.push(RtpMap {
             payload: media.codec_pt,
@@ -1273,8 +1293,9 @@ impl SdpSession {
             params: param.as_str().into(),
         }));
 
-        let transport = &self.transports[media.transport_id].transport;
-        let ports = transport.require_ports();
+        let transport = &self.transports[media.transport_id];
+        let rtp_transport = &transport.transport;
+        let ports = rtp_transport.require_ports();
 
         if let Some(dtmf_pt) = media.dtmf_pt {
             fmts.push(dtmf_pt);
@@ -1287,12 +1308,26 @@ impl SdpSession {
             });
         }
 
+        if media.accepts_nack_pli {
+            rtcp_fb.push(RtcpFeedback {
+                pt: RtcpFeedbackPt::Pt(media.codec_pt),
+                kind: RtcpFeedbackKind::NackPli,
+            });
+        }
+
+        if media.accepts_ccm_fir {
+            rtcp_fb.push(RtcpFeedback {
+                pt: RtcpFeedbackPt::Pt(media.codec_pt),
+                kind: RtcpFeedbackKind::CcmFir,
+            });
+        }
+
         let mut media_desc = MediaDescription {
             media: sdp_types::Media {
                 media_type: self.local_media[media.local_media_id].codecs.media_type,
                 port: ports.rtp,
                 ports_num: None,
-                proto: transport.type_().sdp_type(media.use_avpf),
+                proto: rtp_transport.type_().sdp_type(media.use_avpf),
                 fmts,
             },
             connection: None,
@@ -1302,10 +1337,12 @@ impl SdpSession {
                 port,
                 address: None,
             }),
-            rtcp_mux: transport.require_ports().rtcp.is_none(),
+            rtcp_mux: rtp_transport.rtcp_mux(),
+            rtcp_rsize: transport.rtp_session.rtcp_rsize(),
             mid: media.mid.clone(),
             rtpmap,
             fmtp,
+            rtcp_fb,
             ice_ufrag: None,
             ice_pwd: None,
             ice_candidates: vec![],
@@ -1319,7 +1356,7 @@ impl SdpSession {
             attributes: vec![],
         };
 
-        transport::populate_desc(transport, &mut media_desc);
+        transport::populate_desc(rtp_transport, &mut media_desc);
 
         media_desc
     }
@@ -1417,7 +1454,7 @@ impl SdpSession {
 
             while let Some(event) = rtp_session.poll(now, mtu) {
                 match event {
-                    RtpSessionEvent::ReceiveRtp(rtp_packet) => {
+                    RtpSessionPollEvent::ReceiveRtp(rtp_packet) => {
                         let media = self
                             .media
                             .iter()
@@ -1435,12 +1472,12 @@ impl SdpSession {
                             );
                         }
                     }
-                    RtpSessionEvent::SendRtp(rtp_packet) => {
+                    RtpSessionPollEvent::SendRtp(rtp_packet) => {
                         if let Err(e) = writer.send_rtp(rtp_packet) {
                             log::warn!("Failed to send RTP packet, {e:?}");
                         }
                     }
-                    RtpSessionEvent::SendRtcp(rtcp_packet) => {
+                    RtpSessionPollEvent::SendRtcp(rtcp_packet) => {
                         if let Err(e) = writer.send_rctp(rtcp_packet) {
                             log::warn!("Failed to send RTCP packet, {e:?}");
                         }
@@ -1544,6 +1581,7 @@ impl SdpSession {
 
             if let Some(rtp_or_rtcp) = transport.transport.receive(pkt) {
                 Self::handle_received_rtp_or_rtcp(
+                    &mut self.events,
                     &mut self.media,
                     transport_id,
                     transport,
@@ -1562,6 +1600,7 @@ impl SdpSession {
     }
 
     fn handle_received_rtp_or_rtcp(
+        events: &mut VecDeque<SdpSessionEvent>,
         media: &mut [Media],
         transport_id: EstablishedTransportId,
         transport: &mut EstablishedTransport,
@@ -1591,7 +1630,30 @@ impl SdpSession {
                     }
                 };
 
-                transport.rtp_session.receive_rtcp(now, compound);
+                for event in transport.rtp_session.receive_rtcp(now, compound) {
+                    match event {
+                        RtpSessionReceiveRtcpEvent::NackPliReceived(ssrc) => {
+                            let Some(media) = media.iter().find(|m| m.streams.tx == Some(ssrc))
+                            else {
+                                continue;
+                            };
+
+                            events.push_back(SdpSessionEvent::ReceivePictureLossIndication {
+                                media_id: media.id(),
+                            });
+                        }
+                        RtpSessionReceiveRtcpEvent::CcmFirReceived(ssrc) => {
+                            let Some(media) = media.iter().find(|m| m.streams.tx == Some(ssrc))
+                            else {
+                                continue;
+                            };
+
+                            events.push_back(SdpSessionEvent::ReceiveFullIntraRefresh {
+                                media_id: media.id(),
+                            });
+                        }
+                    }
+                }
             }
         }
     }
@@ -1654,8 +1716,28 @@ impl SdpSession {
         )
     }
 
-    /// Returns a temporary [`MediaWriter`] which can be used to send RTP packets
-    pub fn writer(&mut self, id: MediaId) -> Option<MediaWriter<'_>> {
+    /// Returns a list of all pending media lines in the SDP session
+    pub fn pending_media_iter(&self) -> impl Iterator<Item = &PendingMedia> {
+        self.pending_changes
+            .iter()
+            .filter_map(|pending_change| match pending_change {
+                PendingChange::AddMedia(pending_media) => Some(pending_media),
+                _ => None,
+            })
+    }
+
+    /// Returns a list of all fully negotiated media lines in the SDP session
+    pub fn media_iter(&self) -> impl Iterator<Item = &Media> {
+        self.media.iter()
+    }
+
+    /// Returns the media associated with the given id
+    pub fn media(&self, media_id: MediaId) -> Option<&Media> {
+        self.media.iter().find(|m| m.id() == media_id)
+    }
+
+    /// Returns an [`OutboundMedia`] for the given media id when it is negotiated to send RTP
+    pub fn outbound_media(&mut self, id: MediaId) -> Option<OutboundMedia<'_>> {
         let media = self.media.iter_mut().find(|m| m.id == id)?;
 
         if !media.direction.send {
@@ -1673,7 +1755,24 @@ impl SdpSession {
             }
         };
 
-        Some(MediaWriter { media, stream })
+        Some(OutboundMedia { media, stream })
+    }
+
+    /// Returns an [`InboundMedia`] for the given media id when it is negotiated to receive RTP
+    ///
+    /// It is only available after the SSRC of the remote stream is known,
+    /// which means that calling this before receiving the first packet for this media will return `None`.
+    pub fn inbound_media(&mut self, id: MediaId) -> Option<InboundMedia<'_>> {
+        let media = self.media.iter_mut().find(|m| m.id == id)?;
+
+        if !media.direction.recv {
+            return None;
+        }
+
+        let transport = &mut self.transports[media.transport_id];
+        let stream = transport.rtp_session.rx_stream(media.streams.rx?)?;
+
+        Some(InboundMedia { media, stream })
     }
 
     /// Returns the cumulative gathering state of all ice agents
@@ -1747,12 +1846,13 @@ impl From<Direction> for DirectionBools {
     }
 }
 
-pub struct MediaWriter<'a> {
+/// Handle to an outbound media RTP stream, used to send RTP packets
+pub struct OutboundMedia<'a> {
     media: &'a Media,
     stream: &'a mut RtpOutboundStream,
 }
 
-impl MediaWriter<'_> {
+impl OutboundMedia<'_> {
     pub fn send_rtp(&mut self, packet: SendRtpPacket) {
         let mid: Option<&Bytes> = match &self.media.mid {
             Some(e) => Some(e.as_ref()),
@@ -1761,5 +1861,36 @@ impl MediaWriter<'_> {
 
         self.stream
             .send_rtp(packet.with_extensions(RtpExtensions { mid: mid.cloned() }));
+    }
+}
+
+/// Handle to an inbound media RTP stream, used to send feedback
+pub struct InboundMedia<'a> {
+    media: &'a Media,
+    stream: &'a mut RtpInboundStream,
+}
+
+impl InboundMedia<'_> {
+    /// Returns the media associated with this inbound stream
+    pub fn media(&self) -> &Media {
+        self.media
+    }
+
+    /// Send a RTCP Picture Loss Indication for this stream
+    ///
+    /// Does nothing if PLI is not negotiated for this media
+    pub fn send_pli(&mut self) {
+        if self.media.accepts_pli() {
+            self.stream.request_nack_pli();
+        }
+    }
+
+    /// Send a RTCP Full Intra Refresh Request for this stream
+    ///
+    /// Does nothing if FIR is not negotiated for this stream
+    pub fn send_fir(&mut self) {
+        if self.media.accepts_fir() {
+            self.stream.request_ccm_fir();
+        }
     }
 }

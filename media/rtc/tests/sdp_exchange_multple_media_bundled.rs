@@ -21,8 +21,8 @@ fn exchange_multiple_media_bundled() {
     offer_session.add_media(audio, Direction::SendRecv);
     offer_session.add_media(audio, Direction::SendRecv);
 
-    assert_eq!(offer_session.pending_media().count(), 2);
-    assert_eq!(answer_session.pending_media().count(), 0);
+    assert_eq!(offer_session.pending_media_iter().count(), 2);
+    assert_eq!(answer_session.pending_media_iter().count(), 0);
 
     satisfy_transport_changes(&mut offer_session, 1000);
 
@@ -35,6 +35,6 @@ fn exchange_multiple_media_bundled() {
 
     satisfy_transport_changes(&mut offer_session, 1000);
 
-    assert_eq!(offer_session.media().count(), 2);
-    assert_eq!(answer_session.media().count(), 2);
+    assert_eq!(offer_session.media_iter().count(), 2);
+    assert_eq!(answer_session.media_iter().count(), 2);
 }

@@ -1,6 +1,6 @@
 use crate::{
     Bandwidth, Connection, Direction, ExtMap, Fingerprint, Fmtp, Group, IceCandidate, IceOptions,
-    IcePassword, IceUsernameFragment, Media, MediaDescription, Origin, Rtcp, RtpMap,
+    IcePassword, IceUsernameFragment, Media, MediaDescription, Origin, Rtcp, RtcpFeedback, RtpMap,
     SessionDescription, Setup, SrtpCrypto, Ssrc, Time, UnknownAttribute,
 };
 use bytesstr::BytesStr;
@@ -102,16 +102,18 @@ impl Parser {
                     direction: self.direction,
                     rtcp: None,
                     rtcp_mux: false,
+                    rtcp_rsize: false,
                     mid: None,
                     rtpmap: vec![],
                     fmtp: vec![],
+                    rtcp_fb: vec![],
                     ice_ufrag: None,
                     ice_pwd: None,
                     ice_candidates: vec![],
                     ice_end_of_candidates: false,
+                    // inherit extmap allow mixed attr
                     crypto: vec![],
                     extmap: vec![],
-                    // inherit extmap allow mixed atr
                     extmap_allow_mixed: self.extmap_allow_mixed,
                     ssrc: vec![],
                     setup: self.setup,
@@ -160,6 +162,15 @@ impl Parser {
 
                 // TODO error here?
             }
+            "rtcp-fb" => {
+                let (_, rtcp_fb) = RtcpFeedback::parse(src.as_ref(), value).finish()?;
+
+                if let Some(media_description) = self.media_descriptions.last_mut() {
+                    media_description.rtcp_fb.push(rtcp_fb);
+                }
+
+                // TODO error here ?
+            }
             "mid" => {
                 if let Some(media_description) = self.media_descriptions.last_mut() {
                     media_description.mid = Some(BytesStr::from_parse(src.as_ref(), value.trim()));
@@ -185,6 +196,7 @@ impl Parser {
 
                 // TODO error here ?
             }
+
             "ice-lite" => {
                 self.ice_lite = true;
             }
@@ -260,7 +272,6 @@ impl Parser {
                 } else {
                     self.setup = Some(setup);
                 }
-                // TODO error here?
             }
             "fingerprint" => {
                 let (_, fingerprint) = Fingerprint::parse(src.as_ref(), value).finish()?;
@@ -310,6 +321,11 @@ impl Parser {
             "rtcp-mux" => {
                 if let Some(media_description) = self.media_descriptions.last_mut() {
                     media_description.rtcp_mux = true;
+                }
+            }
+            "rtcp-rsize" => {
+                if let Some(media_description) = self.media_descriptions.last_mut() {
+                    media_description.rtcp_rsize = true;
                 }
             }
             "end-of-candidates" => {

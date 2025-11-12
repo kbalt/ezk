@@ -149,7 +149,7 @@ impl MediaBackend for RtcMediaBackend {
 
             let event = tokio::select! {
                 Some((media_id, packet)) = self.rx.recv() => {
-                    if let Some(mut writer) = self.sdp_session.writer(media_id) {
+                    if let Some(mut writer) = self.sdp_session.outbound_media(media_id) {
                         writer.send_rtp(packet);
                     } else {
                         log::warn!("Dropping outbound RTP packet, writer is no longer available");
@@ -256,6 +256,12 @@ impl MediaBackend for RtcMediaBackend {
                 } => self
                     .io_state
                     .send(transport_id, component, data, source, target),
+                SdpSessionEvent::ReceivePictureLossIndication { .. } => {
+                    // TODO
+                }
+                SdpSessionEvent::ReceiveFullIntraRefresh { .. } => {
+                    // TODO
+                }
             }
         }
     }
