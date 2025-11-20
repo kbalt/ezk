@@ -32,3 +32,6 @@ log = "0.4"
 
 [workspace.lints.rust]
 unreachable_pub = "warn"
+
+[patch.crates-io]
+rtcp-types = { git = "https://github.com/kbalt/rtcp-types.git", rev = "dffb2bead61d5bf387fbc031f1c2c9036455f7c3" }

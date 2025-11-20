@@ -2,8 +2,9 @@ use crate::Mtu;
 use rtp::{
     Ssrc,
     rtcp_types::{
-        Bye, CompoundBuilder, Fir, PayloadFeedback, Pli, ReceiverReport, ReportBlock,
+        Bye, CompoundBuilder, PayloadFeedbackBuilder, ReceiverReport, ReportBlock,
         ReportBlockBuilder, RtcpPacket, RtcpPacketWriter, SenderReport, SenderReportBuilder,
+        TransportFeedbackBuilder,
     },
 };
 use std::{cmp, collections::VecDeque};
@@ -13,10 +14,10 @@ pub(super) struct ReportsQueue {
     sender_reports: VecDeque<SenderReportBuilder>,
     report_blocks: VecDeque<ReportBlockBuilder>,
 
-    nack_pli: Vec<Ssrc>,
-    ccm_fir: Vec<(Ssrc, u8)>,
+    payload_feedback: Vec<PayloadFeedbackBuilder<'static>>,
+    transport_feedback: Vec<TransportFeedbackBuilder<'static>>,
 
-    sources_to_bye: Vec<Ssrc>,
+    bye: Vec<Ssrc>,
 
     /// If reduced size RTCP is allows, (RTCP packets without SR/RR)
     rtcp_rsize: bool,
@@ -27,9 +28,9 @@ impl ReportsQueue {
         ReportsQueue {
             sender_reports: VecDeque::new(),
             report_blocks: VecDeque::new(),
-            nack_pli: Vec::new(),
-            ccm_fir: Vec::new(),
-            sources_to_bye: Vec::new(),
+            payload_feedback: Vec::new(),
+            transport_feedback: Vec::new(),
+            bye: Vec::new(),
             rtcp_rsize,
         }
     }
@@ -39,24 +40,24 @@ impl ReportsQueue {
     }
 
     pub(super) fn is_empty(&self) -> bool {
-        let Self {
+        let ReportsQueue {
             sender_reports,
             report_blocks,
-            sources_to_bye,
-            nack_pli,
-            ccm_fir,
+            payload_feedback,
+            transport_feedback,
+            bye,
             rtcp_rsize: _,
         } = self;
 
         sender_reports.is_empty()
             && report_blocks.is_empty()
-            && sources_to_bye.is_empty()
-            && nack_pli.is_empty()
-            && ccm_fir.is_empty()
+            && payload_feedback.is_empty()
+            && transport_feedback.is_empty()
+            && bye.is_empty()
     }
 
     pub(super) fn has_feedback(&self) -> bool {
-        !self.nack_pli.is_empty() || !self.ccm_fir.is_empty()
+        !self.payload_feedback.is_empty() || !self.transport_feedback.is_empty()
     }
 
     pub(super) fn add_sender_report(&mut self, sr: SenderReportBuilder) {
@@ -67,16 +68,16 @@ impl ReportsQueue {
         self.report_blocks.push_back(rb);
     }
 
-    pub(super) fn add_nack_pli(&mut self, ssrc: Ssrc) {
-        self.nack_pli.push(ssrc);
+    pub(super) fn add_payload_feedback(&mut self, feedback: PayloadFeedbackBuilder<'static>) {
+        self.payload_feedback.push(feedback);
     }
 
-    pub(super) fn add_ccm_fir(&mut self, ssrc: Ssrc, seq: u8) {
-        self.ccm_fir.push((ssrc, seq));
+    pub(super) fn add_transport_feedback(&mut self, feedback: TransportFeedbackBuilder<'static>) {
+        self.transport_feedback.push(feedback);
     }
 
     pub(super) fn add_bye(&mut self, ssrc: Ssrc) {
-        self.sources_to_bye.push(ssrc);
+        self.bye.push(ssrc);
     }
 
     pub(super) fn make_report(&mut self, fallback_sender_ssrc: Ssrc, mtu: Mtu) -> Option<Vec<u8>> {
@@ -112,31 +113,7 @@ impl ReportsQueue {
             return None;
         };
 
-        let (mtu, num_pli) = calculate_num_of_packet_type(
-            mtu,
-            0,
-            PayloadFeedback::MIN_PACKET_LEN,
-            self.nack_pli.len(),
-            usize::MAX,
-        );
-
-        let (mtu, num_fir) = calculate_num_of_packet_type(
-            mtu,
-            PayloadFeedback::MIN_PACKET_LEN,
-            8,
-            self.ccm_fir.len(),
-            usize::from(u16::MAX) / 2 - 2,
-        );
-
-        let (mtu, num_bye) = calculate_num_of_packet_type(
-            mtu,
-            Bye::MIN_PACKET_LEN,
-            4,
-            self.sources_to_bye.len(),
-            usize::from(Bye::MAX_COUNT),
-        );
-
-        let (_mtu, num_report_blocks) = calculate_num_of_packet_type(
+        let (mtu, num_report_blocks) = calculate_num_of_packet_type(
             mtu,
             0,
             ReportBlock::EXPECTED_SIZE,
@@ -162,39 +139,36 @@ impl ReportsQueue {
             compound = compound.add_packet(rr);
         }
 
-        // Add PLI payload feedback
-        for media_ssrc in self.nack_pli.drain(0..num_pli) {
-            compound = compound.add_packet(
-                PayloadFeedback::builder_owned(Pli::builder())
-                    .sender_ssrc(fallback_sender_ssrc.0)
-                    .media_ssrc(media_ssrc.0),
-            );
+        let mut remaining_mtu = mtu;
+        while let Some(fb) = self
+            .payload_feedback
+            .pop_if(|fb| remaining_mtu >= fb.calculate_size().unwrap())
+        {
+            compound = compound.add_packet(fb);
+            remaining_mtu = mtu.saturating_sub(compound.calculate_size().unwrap());
         }
 
-        // Add FIR payload feedback
-        if num_fir > 0 {
-            let mut fir = Fir::builder();
-
-            for (ssrc, sequence) in self.ccm_fir.drain(0..num_fir) {
-                fir = fir.add_ssrc(ssrc.0, sequence);
-            }
-
-            compound = compound.add_packet(
-                PayloadFeedback::builder_owned(fir)
-                    // https://datatracker.ietf.org/doc/html/rfc5104#section-4.3.1.2:
-                    //    Within the common packet header for feedback messages (as defined in
-                    //    indicates the source of the request, and the "SSRC of media source"
-                    //    is not used and SHALL be set to 0
-                    .sender_ssrc(fallback_sender_ssrc.0)
-                    .media_ssrc(0),
-            );
+        while let Some(fb) = self
+            .transport_feedback
+            .pop_if(|fb| remaining_mtu >= fb.calculate_size().unwrap())
+        {
+            compound = compound.add_packet(fb);
+            remaining_mtu = mtu.saturating_sub(compound.calculate_size().unwrap());
         }
+
+        let (_remaining_mtu, num_bye) = calculate_num_of_packet_type(
+            remaining_mtu,
+            Bye::MIN_PACKET_LEN,
+            4,
+            self.bye.len(),
+            usize::from(Bye::MAX_COUNT),
+        );
 
         // Add Bye packets
         if num_bye > 0 {
             let mut bye = Bye::builder();
 
-            for ssrc in self.sources_to_bye.drain(0..num_bye) {
+            for ssrc in self.bye.drain(0..num_bye) {
                 bye = bye.add_source(ssrc.0);
             }
 

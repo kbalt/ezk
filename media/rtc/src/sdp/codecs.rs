@@ -4,12 +4,15 @@ use std::borrow::Cow;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Codec {
     /// Either set by the codec itself if it's static, or assigned later when added to a session
-    pub(crate) pt: Option<u8>,
+    pub(crate) offer_pt: Option<u8>,
     pub(crate) pt_is_static: bool,
     pub(crate) name: Cow<'static, str>,
     pub(crate) clock_rate: u32,
     pub(crate) channels: Option<u32>,
     pub(crate) fmtp: Option<String>,
+
+    pub(crate) offer_rtx_pt: Option<u8>,
+    pub(crate) allow_rtx: bool,
 }
 
 impl Codec {
@@ -25,12 +28,14 @@ impl Codec {
 
     pub const fn new(name: &'static str, clock_rate: u32) -> Self {
         Codec {
-            pt: None,
+            offer_pt: None,
             pt_is_static: false,
             name: Cow::Borrowed(name),
             clock_rate,
             channels: None,
             fmtp: None,
+            offer_rtx_pt: None,
+            allow_rtx: false,
         }
     }
 
@@ -39,7 +44,7 @@ impl Codec {
             static_pt < 35,
             "static payload type must not be in the dynamic/rtcp range"
         );
-        self.pt = Some(static_pt);
+        self.offer_pt = Some(static_pt);
         self.pt_is_static = true;
         self
     }
@@ -53,7 +58,7 @@ impl Codec {
             "payload type must be in the dynamic range"
         );
 
-        self.pt = Some(pt);
+        self.offer_pt = Some(pt);
         self
     }
 
@@ -64,6 +69,11 @@ impl Codec {
 
     pub fn with_fmtp(mut self, fmtp: String) -> Self {
         self.fmtp = Some(fmtp);
+        self
+    }
+
+    pub fn with_rtx(mut self) -> Self {
+        self.allow_rtx = true;
         self
     }
 
@@ -94,11 +104,6 @@ impl Codecs {
             codecs: vec![],
             allow_dtmf: false,
         }
-    }
-
-    pub fn with_dtmf(mut self) -> Self {
-        self.allow_dtmf = true;
-        self
     }
 
     pub fn with_codec(mut self, codec: Codec) -> Self {

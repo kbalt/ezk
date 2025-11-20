@@ -1,4 +1,4 @@
-use crate::sdp::{Codec, Codecs, DirectionBools};
+use crate::sdp::{Codec, Codecs, DirectionBools, media::PtPair};
 use sdp_types::{Direction, MediaDescription};
 
 slotmap::new_key_type! {
@@ -15,9 +15,10 @@ pub(super) struct LocalMedia {
 
 pub(super) struct ChosenCodec {
     pub(super) codec: Codec,
-    pub(super) remote_pt: u8,
+    pub(super) pt: PtPair,
+    pub(super) rtx_pt: Option<PtPair>,
+    pub(super) dtmf_pt: Option<PtPair>,
     pub(super) direction: DirectionBools,
-    pub(super) dtmf: Option<u8>,
 }
 
 impl LocalMedia {
@@ -26,7 +27,7 @@ impl LocalMedia {
             return None;
         }
 
-        self.choose_codec(desc)
+        self.choose_codec(desc, true)
     }
 
     pub(super) fn choose_codec_from_answer(
@@ -37,16 +38,16 @@ impl LocalMedia {
             return None;
         }
 
-        self.choose_codec(desc)
+        self.choose_codec(desc, false)
     }
 
-    fn choose_codec(&mut self, desc: &MediaDescription) -> Option<ChosenCodec> {
-        for codec in &mut self.codecs.codecs {
-            let pt = codec.pt.expect("pt is set when added to session");
+    fn choose_codec(&self, desc: &MediaDescription, is_remote_offer: bool) -> Option<ChosenCodec> {
+        for codec in &self.codecs.codecs {
+            let codec_pt = codec.offer_pt.expect("pt is set when added to session");
 
             let codec_pt = if codec.pt_is_static {
-                if desc.media.fmts.contains(&pt) {
-                    Some(pt)
+                if desc.media.fmts.contains(&codec_pt) {
+                    Some(codec_pt)
                 } else {
                     None
                 }
@@ -76,23 +77,86 @@ impl LocalMedia {
                 return None;
             }
 
-            let dtmf = desc
-                .rtpmap
-                .iter()
-                .find(|rtpmap| {
-                    rtpmap.encoding.eq_ignore_ascii_case("telephone-event")
-                        && rtpmap.clock_rate == codec.clock_rate
+            let rtx_pt = if codec.allow_rtx {
+                desc.rtpmap.iter().find_map(|rtpmap| {
+                    if !rtpmap.encoding.eq_ignore_ascii_case("rtx")
+                        || rtpmap.clock_rate != codec.clock_rate
+                    {
+                        return None;
+                    }
+
+                    let fmtp = desc
+                        .fmtp
+                        .iter()
+                        .find(|fmtp| fmtp.format == rtpmap.payload)?;
+
+                    let apt_index = fmtp.params.find("apt=")?;
+                    let apt_value = &fmtp.params[apt_index + 4..];
+                    let apt_value_len =
+                        apt_value.bytes().take_while(|b| b.is_ascii_digit()).count();
+
+                    let apt_pt: u8 = apt_value[..apt_value_len].parse().ok()?;
+
+                    if apt_pt != codec_pt {
+                        return None;
+                    }
+
+                    Some(PtPair {
+                        local: if is_remote_offer {
+                            rtpmap.payload
+                        } else {
+                            codec.offer_rtx_pt?
+                        },
+                        remote: rtpmap.payload,
+                    })
                 })
-                .map(|rtpmap| rtpmap.payload);
+            } else {
+                None
+            };
+
+            let dtmf_pt = desc.rtpmap.iter().find_map(|rtpmap| {
+                // Must be telephone event
+                if !rtpmap.encoding.eq_ignore_ascii_case("telephone-event") {
+                    return None;
+                }
+
+                // Must match the codecs clock rate
+                if rtpmap.clock_rate != codec.clock_rate {
+                    return None;
+                }
+
+                Some(PtPair {
+                    local: if is_remote_offer {
+                        rtpmap.payload
+                    } else {
+                        // Make sure to use our offered payload type as local pt
+                        self.dtmf
+                            .iter()
+                            .find(|(_, clock_rate)| *clock_rate == codec.clock_rate)?
+                            .0
+                    },
+                    remote: rtpmap.payload,
+                })
+            });
+
+            let pt = PtPair {
+                local: if is_remote_offer {
+                    codec_pt
+                } else {
+                    codec.offer_pt.unwrap()
+                },
+                remote: codec_pt,
+            };
 
             return Some(ChosenCodec {
                 codec: codec.clone(),
-                remote_pt: codec_pt,
+                pt,
+                rtx_pt,
+                dtmf_pt,
                 direction: DirectionBools {
                     send: do_send,
                     recv: do_receive,
                 },
-                dtmf,
             });
         }
 

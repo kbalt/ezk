@@ -12,7 +12,7 @@ fn offer_mid_exists() {
         ..Default::default()
     });
 
-    session.add_media(audio, Direction::SendRecv);
+    session.add_media(audio, Direction::SendRecv, None, None);
 
     satisfy_transport_changes(&mut session, 1000);
 
@@ -119,7 +119,7 @@ a=rtpmap:9 G722/8000/1
         )
         .unwrap();
 
-    session.add_media(video, Direction::SendRecv);
+    session.add_media(video, Direction::SendRecv, None, None);
 
     satisfy_transport_changes(&mut session, 2000);
 

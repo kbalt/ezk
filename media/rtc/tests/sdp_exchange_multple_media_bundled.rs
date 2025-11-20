@@ -18,8 +18,8 @@ fn exchange_multiple_media_bundled() {
         ..Default::default()
     });
 
-    offer_session.add_media(audio, Direction::SendRecv);
-    offer_session.add_media(audio, Direction::SendRecv);
+    offer_session.add_media(audio, Direction::SendRecv, None, None);
+    offer_session.add_media(audio, Direction::SendRecv, None, None);
 
     assert_eq!(offer_session.pending_media_iter().count(), 2);
     assert_eq!(answer_session.pending_media_iter().count(), 0);

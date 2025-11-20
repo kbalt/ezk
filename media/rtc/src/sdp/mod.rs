@@ -13,7 +13,7 @@ use crate::{
     OpenSslContext,
     rtp_session::{
         RtpInboundStream, RtpOutboundStream, RtpSession, RtpSessionPollEvent,
-        RtpSessionReceiveRtcpEvent, SendRtpPacket,
+        RtpSessionReceiveRtcpEvent, RxStream, SendRtpPacket,
     },
     rtp_transport::{RtpOrRtcp, TransportConnectionState},
     sdp::{local_media::LocalMedia, media::MediaStreams},
@@ -25,8 +25,8 @@ use openssl::hash::MessageDigest;
 use rtp::{RtpExtensions, RtpPacket, rtcp_types::Compound};
 use sdp_types::{
     Connection, Fingerprint, FingerprintAlgorithm, Fmtp, Group, IceCandidate, IceOptions,
-    IcePassword, IceUsernameFragment, MediaDescription, Origin, Rtcp, RtcpFeedback,
-    RtcpFeedbackKind, RtcpFeedbackPt, RtpMap, Time, TransportProtocol,
+    IcePassword, IceUsernameFragment, MediaDescription, MsId, Origin, Rtcp, RtcpFeedback,
+    RtcpFeedbackKind, RtcpFeedbackPt, RtpMap, Time, TransportProtocol, UnknownAttribute,
 };
 use slotmap::{SlotMap, new_key_type};
 use std::{
@@ -209,7 +209,7 @@ impl SdpSession {
 
         // Assign dynamic payload type numbers
         for codec in &mut codecs.codecs {
-            if codec.pt.is_some() {
+            if codec.offer_pt.is_some() {
                 continue;
             }
 
@@ -222,14 +222,31 @@ impl SdpSession {
                         .codecs
                         .iter()
                         .find(|existing_codec| existing_codec.is_same_encoding(codec))
-                        .map(|same_codec| same_codec.pt.expect("payload type must be set"))
+                        .map(|same_codec| same_codec.offer_pt.expect("payload type must be set"))
                 }
             });
 
-            if let Some(existing_pt) = existing_pt {
-                codec.pt = Some(existing_pt);
+            // Find out which payload type to use for the codec
+            let pt = if let Some(existing_pt) = existing_pt {
+                existing_pt
             } else {
-                codec.pt = Some(self.next_pt);
+                let pt = self.next_pt;
+
+                self.next_pt += 1;
+
+                if self.next_pt > 127 {
+                    self.next_pt = prev_next_pt;
+                    return None;
+                }
+
+                pt
+            };
+
+            codec.offer_pt = Some(pt);
+
+            // Assign a payload number for RTX payload type
+            if codec.allow_rtx {
+                codec.offer_rtx_pt = Some(self.next_pt);
 
                 self.next_pt += 1;
 
@@ -282,7 +299,13 @@ impl SdpSession {
     }
 
     /// Request a new media session to be created
-    pub fn add_media(&mut self, local_media_id: LocalMediaId, direction: Direction) -> MediaId {
+    pub fn add_media(
+        &mut self,
+        local_media_id: LocalMediaId,
+        direction: Direction,
+        stream_id: Option<String>,
+        track_id: Option<String>,
+    ) -> MediaId {
         let media_id = self.next_media_id.increment();
 
         // Find out which type of transport to use for this media
@@ -357,6 +380,8 @@ impl SdpSession {
                 local_media_id,
                 media_type: self.local_media[local_media_id].codecs.media_type,
                 mid: media_id.0.to_string().into(),
+                stream_id: stream_id.map(Into::into),
+                track_id: track_id.map(Into::into),
                 direction,
                 use_avpf: self.config.offer_avpf,
                 standalone_transport_id: standalone_transport,
@@ -410,6 +435,15 @@ impl SdpSession {
             .any(|c| matches!(c, PendingChange::AddMedia(..)));
 
         (!self.media.is_empty()) || has_pending_media
+    }
+
+    pub fn pending_media(&self) -> impl Iterator<Item = &PendingMedia> {
+        self.pending_changes
+            .iter()
+            .filter_map(|pending_change| match pending_change {
+                PendingChange::AddMedia(pending_media) => Some(pending_media),
+                _ => None,
+            })
     }
 
     /// Set the RTP/RTCP ports of a transport
@@ -507,14 +541,14 @@ impl SdpSession {
             let recv_fmtp = remote_media_desc
                 .fmtp
                 .iter()
-                .find(|f| f.format == chosen_codec.remote_pt)
+                .find(|f| f.format == chosen_codec.pt.remote)
                 .map(|f| f.params.to_string());
 
-            let dtmf = if let Some(dtmf_pt) = chosen_codec.dtmf {
+            let dtmf = if let Some(dtmf_pt) = chosen_codec.dtmf_pt {
                 let fmtp = remote_media_desc
                     .fmtp
                     .iter()
-                    .find(|fmtp| fmtp.format == dtmf_pt)
+                    .find(|fmtp| fmtp.format == dtmf_pt.remote)
                     .map(|fmtp| fmtp.params.to_string());
 
                 Some(NegotiatedDtmf { pt: dtmf_pt, fmtp })
@@ -530,8 +564,7 @@ impl SdpSession {
                     local_media_id,
                     direction: chosen_codec.direction.into(),
                     codec: NegotiatedCodec {
-                        send_pt: chosen_codec.remote_pt,
-                        recv_pt: chosen_codec.remote_pt,
+                        pt: chosen_codec.pt,
                         name: chosen_codec.codec.name.clone(),
                         clock_rate: chosen_codec.codec.clock_rate,
                         channels: chosen_codec.codec.channels,
@@ -542,23 +575,36 @@ impl SdpSession {
                 }));
 
             response.push(SdpResponseEntry::Active(media_id));
+
+            let (stream_id, track_id) = msid_to_ids(remote_media_desc.msid.as_ref());
+
             new_state.push(Media {
                 id: media_id,
                 local_media_id,
                 media_type: remote_media_desc.media.media_type,
+                stream_id,
+                track_id,
                 use_avpf: is_avpf(&remote_media_desc.media.proto),
                 mid: remote_media_desc.mid.clone(),
                 direction: chosen_codec.direction,
                 streams: MediaStreams::default(),
                 transport_id,
-                codec_pt: chosen_codec.remote_pt,
+                codec_pt: chosen_codec.pt,
                 codec: chosen_codec.codec,
-                dtmf_pt: chosen_codec.dtmf,
+                rtx_pt: chosen_codec.rtx_pt,
+                dtmf_pt: chosen_codec.dtmf_pt,
+                accepts_nack: remote_media_desc.rtcp_fb.iter().any(|fb| {
+                    fb.pt.matches(chosen_codec.pt.remote) && fb.kind == RtcpFeedbackKind::Nack
+                }),
                 accepts_nack_pli: remote_media_desc.rtcp_fb.iter().any(|fb| {
-                    fb.pt.matches(chosen_codec.remote_pt) && fb.kind == RtcpFeedbackKind::NackPli
+                    fb.pt.matches(chosen_codec.pt.remote) && fb.kind == RtcpFeedbackKind::NackPli
                 }),
                 accepts_ccm_fir: remote_media_desc.rtcp_fb.iter().any(|fb| {
-                    fb.pt.matches(chosen_codec.remote_pt) && fb.kind == RtcpFeedbackKind::CcmFir
+                    fb.pt.matches(chosen_codec.pt.remote) && fb.kind == RtcpFeedbackKind::CcmFir
+                }),
+                accepts_transport_cc: remote_media_desc.rtcp_fb.iter().any(|fb| {
+                    fb.pt.matches(chosen_codec.pt.remote)
+                        && fb.kind == RtcpFeedbackKind::TransportCC
                 }),
             });
         }
@@ -610,10 +656,16 @@ impl SdpSession {
             remote_media_desc,
         )?;
 
+        // Enable twcc when transport-cc is mentioned anywhere
+        let transport_cc = remote_media_desc
+            .rtcp_fb
+            .iter()
+            .any(|fb| fb.kind == RtcpFeedbackKind::TransportCC);
+
         Ok(self.transports.insert(EstablishedTransport {
             public_id: id,
             transport,
-            rtp_session: RtpSession::new(remote_media_desc.rtcp_rsize),
+            rtp_session: RtpSession::new(remote_media_desc.rtcp_rsize, transport_cc),
             initial_remote_ice_candidates: remote_media_desc.ice_candidates.clone(),
         }))
     }
@@ -769,10 +821,19 @@ impl SdpSession {
                                 remote_media_desc,
                             )?;
 
+                        // Enable twcc when transport-cc is mentioned anywhere
+                        let transport_cc = remote_media_desc
+                            .rtcp_fb
+                            .iter()
+                            .any(|fb| fb.kind == RtcpFeedbackKind::TransportCC);
+
                         let established_id = self.transports.insert(EstablishedTransport {
                             public_id,
                             transport,
-                            rtp_session: RtpSession::new(remote_media_desc.rtcp_rsize),
+                            rtp_session: RtpSession::new(
+                                remote_media_desc.rtcp_rsize,
+                                transport_cc,
+                            ),
                             initial_remote_ice_candidates: remote_media_desc.ice_candidates.clone(),
                         });
 
@@ -814,14 +875,14 @@ impl SdpSession {
                 let recv_fmtp = remote_media_desc
                     .fmtp
                     .iter()
-                    .find(|f| f.format == chosen_codec.remote_pt)
+                    .find(|f| f.format == chosen_codec.pt.remote)
                     .map(|f| f.params.to_string());
 
-                let dtmf = if let Some(dtmf_pt) = chosen_codec.dtmf {
+                let dtmf = if let Some(dtmf_pt) = chosen_codec.dtmf_pt {
                     let fmtp = remote_media_desc
                         .fmtp
                         .iter()
-                        .find(|fmtp| fmtp.format == dtmf_pt)
+                        .find(|fmtp| fmtp.format == dtmf_pt.remote)
                         .map(|fmtp| fmtp.params.to_string());
 
                     Some(NegotiatedDtmf { pt: dtmf_pt, fmtp })
@@ -836,8 +897,7 @@ impl SdpSession {
                         local_media_id: pending_media.local_media_id,
                         direction: chosen_codec.direction.into(),
                         codec: NegotiatedCodec {
-                            send_pt: chosen_codec.remote_pt,
-                            recv_pt: chosen_codec.remote_pt,
+                            pt: chosen_codec.pt,
                             name: chosen_codec.codec.name.clone(),
                             clock_rate: chosen_codec.codec.clock_rate,
                             channels: chosen_codec.codec.channels,
@@ -847,24 +907,36 @@ impl SdpSession {
                         },
                     }));
 
+                let (stream_id, track_id) = msid_to_ids(remote_media_desc.msid.as_ref());
+
                 self.media.push(Media {
                     id: pending_media.id,
                     local_media_id: pending_media.local_media_id,
                     media_type: pending_media.media_type,
                     use_avpf: pending_media.use_avpf,
                     mid: remote_media_desc.mid.clone(),
+                    stream_id,
+                    track_id,
                     direction: chosen_codec.direction,
                     streams: MediaStreams::default(),
                     transport_id,
-                    codec_pt: chosen_codec.remote_pt,
+                    codec_pt: chosen_codec.pt,
                     codec: chosen_codec.codec,
-                    dtmf_pt: chosen_codec.dtmf,
+                    rtx_pt: chosen_codec.rtx_pt,
+                    dtmf_pt: chosen_codec.dtmf_pt,
+                    accepts_nack: remote_media_desc.rtcp_fb.iter().any(|fb| {
+                        fb.pt.matches(chosen_codec.pt.remote) && fb.kind == RtcpFeedbackKind::Nack
+                    }),
                     accepts_nack_pli: remote_media_desc.rtcp_fb.iter().any(|fb| {
-                        fb.pt.matches(chosen_codec.remote_pt)
+                        fb.pt.matches(chosen_codec.pt.remote)
                             && fb.kind == RtcpFeedbackKind::NackPli
                     }),
                     accepts_ccm_fir: remote_media_desc.rtcp_fb.iter().any(|fb| {
-                        fb.pt.matches(chosen_codec.remote_pt) && fb.kind == RtcpFeedbackKind::CcmFir
+                        fb.pt.matches(chosen_codec.pt.remote) && fb.kind == RtcpFeedbackKind::CcmFir
+                    }),
+                    accepts_transport_cc: remote_media_desc.rtcp_fb.iter().any(|fb| {
+                        fb.pt.matches(chosen_codec.pt.remote)
+                            && fb.kind == RtcpFeedbackKind::TransportCC
                     }),
                 });
 
@@ -1117,7 +1189,7 @@ impl SdpSession {
             let local_media = &self.local_media[pending_media.local_media_id];
 
             for codec in &local_media.codecs.codecs {
-                let pt = codec.pt.expect("pt is set when adding the codec");
+                let pt = codec.offer_pt.expect("pt is set when adding the codec");
 
                 fmts.push(pt);
 
@@ -1135,7 +1207,29 @@ impl SdpSession {
                     });
                 }
 
+                if self.config.offer_avpf && codec.allow_rtx {
+                    let rtx_pt = codec
+                        .offer_rtx_pt
+                        .expect("rtx_pt must be set if allow_rtx is true");
+
+                    rtpmap.push(RtpMap {
+                        payload: rtx_pt,
+                        encoding: BytesStr::from_static("rtx"),
+                        clock_rate: codec.clock_rate,
+                        params: None,
+                    });
+                    fmtp.push(Fmtp {
+                        format: rtx_pt,
+                        params: format!("apt={pt}").into(),
+                    });
+                }
+
                 if self.config.offer_avpf && local_media.codecs.media_type == MediaType::Video {
+                    rtcp_fb.push(RtcpFeedback {
+                        pt: RtcpFeedbackPt::Pt(pt),
+                        kind: RtcpFeedbackKind::Nack,
+                    });
+
                     rtcp_fb.push(RtcpFeedback {
                         pt: RtcpFeedbackPt::Pt(pt),
                         kind: RtcpFeedbackKind::NackPli,
@@ -1144,6 +1238,11 @@ impl SdpSession {
                     rtcp_fb.push(RtcpFeedback {
                         pt: RtcpFeedbackPt::Pt(pt),
                         kind: RtcpFeedbackKind::CcmFir,
+                    });
+
+                    rtcp_fb.push(RtcpFeedback {
+                        pt: RtcpFeedbackPt::Pt(pt),
+                        kind: RtcpFeedbackKind::TransportCC,
                     });
                 }
             }
@@ -1178,6 +1277,7 @@ impl SdpSession {
                 // only offer rtcp-rsize when avpf is also offered
                 rtcp_rsize: pending_media.use_avpf,
                 mid: Some(pending_media.mid.as_str().into()),
+                msid: ids_to_msid(&pending_media.stream_id, &pending_media.track_id),
                 rtpmap,
                 fmtp,
                 rtcp_fb,
@@ -1269,6 +1369,33 @@ impl SdpSession {
         if use_dtls {
             sess_desc.fingerprint.push(self.fingerprint.clone());
         }
+
+        let mut stream_ids = BTreeSet::new();
+        for pending_media in self.pending_media() {
+            if let Some(stream_id) = &pending_media.stream_id {
+                stream_ids.insert(stream_id);
+            }
+        }
+
+        for media in self.media_iter() {
+            if let Some(stream_id) = &media.stream_id {
+                stream_ids.insert(stream_id);
+            }
+        }
+
+        if !stream_ids.is_empty() {
+            let mut value = " WMS".to_owned();
+
+            for stream_id in stream_ids {
+                value.push(' ');
+                value.push_str(stream_id);
+            }
+
+            sess_desc.attributes.push(UnknownAttribute {
+                name: BytesStr::from_static("msid-semantic"),
+                value: Some(value.into()),
+            });
+        }
     }
 
     fn media_description_for_active(
@@ -1278,18 +1405,18 @@ impl SdpSession {
     ) -> MediaDescription {
         let mut rtpmap = vec![];
         let mut fmtp = vec![];
-        let mut fmts = vec![media.codec_pt];
+        let mut fmts = vec![media.codec_pt.local];
         let mut rtcp_fb = vec![];
 
         rtpmap.push(RtpMap {
-            payload: media.codec_pt,
+            payload: media.codec_pt.local,
             encoding: media.codec.name.as_ref().into(),
             clock_rate: media.codec.clock_rate,
             params: Default::default(),
         });
 
         fmtp.extend(media.codec.fmtp.as_ref().map(|param| Fmtp {
-            format: media.codec_pt,
+            format: media.codec_pt.local,
             params: param.as_str().into(),
         }));
 
@@ -1297,28 +1424,58 @@ impl SdpSession {
         let rtp_transport = &transport.transport;
         let ports = rtp_transport.require_ports();
 
-        if let Some(dtmf_pt) = media.dtmf_pt {
-            fmts.push(dtmf_pt);
+        if let Some(rtx_pt) = media.rtx_pt {
+            fmts.push(rtx_pt.local);
 
             rtpmap.push(RtpMap {
-                payload: dtmf_pt,
+                payload: rtx_pt.local,
+                encoding: "rtx".into(),
+                clock_rate: media.codec.clock_rate,
+                params: None,
+            });
+
+            fmtp.push(Fmtp {
+                format: rtx_pt.local,
+                params: format!("apt={}", media.codec_pt.local).into(),
+            });
+        }
+
+        if let Some(dtmf_pt) = media.dtmf_pt {
+            fmts.push(dtmf_pt.local);
+
+            rtpmap.push(RtpMap {
+                payload: dtmf_pt.local,
                 encoding: "telephone-event".into(),
                 clock_rate: media.codec.clock_rate,
                 params: None,
             });
         }
 
+        if media.accepts_nack {
+            rtcp_fb.push(RtcpFeedback {
+                pt: RtcpFeedbackPt::Pt(media.codec_pt.local),
+                kind: RtcpFeedbackKind::Nack,
+            });
+        }
+
         if media.accepts_nack_pli {
             rtcp_fb.push(RtcpFeedback {
-                pt: RtcpFeedbackPt::Pt(media.codec_pt),
+                pt: RtcpFeedbackPt::Pt(media.codec_pt.local),
                 kind: RtcpFeedbackKind::NackPli,
             });
         }
 
         if media.accepts_ccm_fir {
             rtcp_fb.push(RtcpFeedback {
-                pt: RtcpFeedbackPt::Pt(media.codec_pt),
+                pt: RtcpFeedbackPt::Pt(media.codec_pt.local),
                 kind: RtcpFeedbackKind::CcmFir,
+            });
+        }
+
+        if media.accepts_transport_cc {
+            rtcp_fb.push(RtcpFeedback {
+                pt: RtcpFeedbackPt::Pt(media.codec_pt.local),
+                kind: RtcpFeedbackKind::TransportCC,
             });
         }
 
@@ -1340,6 +1497,7 @@ impl SdpSession {
             rtcp_mux: rtp_transport.rtcp_mux(),
             rtcp_rsize: transport.rtp_session.rtcp_rsize(),
             mid: media.mid.clone(),
+            msid: ids_to_msid(&media.stream_id, &media.track_id),
             rtpmap,
             fmtp,
             rtcp_fb,
@@ -1610,7 +1768,19 @@ impl SdpSession {
         match rtp_or_rtcp {
             RtpOrRtcp::Rtp(rtp_packet) => {
                 if let Some(rx_stream) = transport.rtp_session.rx_stream(rtp_packet.ssrc) {
-                    rx_stream.receive_rtp(now, rtp_packet);
+                    match rx_stream {
+                        RxStream::Original(stream) => stream.receive_rtp(now, rtp_packet),
+                        RxStream::Rtx(ssrc) => {
+                            let ssrc = *ssrc;
+
+                            transport
+                                .rtp_session
+                                .rx_stream(ssrc)
+                                .unwrap()
+                                .expect_original()
+                                .receive_rtx(rtp_packet);
+                        }
+                    }
                 } else {
                     Self::handle_new_ssrc(
                         media,
@@ -1690,11 +1860,27 @@ impl SdpSession {
             return;
         };
 
-        let rx_stream = rtp_session.new_rx_stream(rtp_packet.ssrc, media.codec.clock_rate);
+        if media.is_remote_media_pt(rtp_packet.pt) {
+            // The SSRC is media payload, create a new inbound RTP stream
+            let rx_stream = rtp_session.new_rx_stream(
+                media.codec_pt.local,
+                rtp_packet.ssrc,
+                media.codec.clock_rate,
+                // Emit NACK feedback if RTX is setup for this media
+                media.rtx_pt.is_some() && media.accepts_nack,
+            );
 
-        media.streams.rx = Some(rtp_packet.ssrc);
+            media.streams.rx = Some(rtp_packet.ssrc);
 
-        rx_stream.receive_rtp(now, rtp_packet);
+            rx_stream.receive_rtp(now, rtp_packet);
+        } else if let Some(rtx_pt) = media.rtx_pt
+            && rtx_pt.remote == rtp_packet.pt
+            && let Some(original_ssrc) = media.streams.rx
+        {
+            // The SSRC matches the rtx payload type for the negotiated codec, associate to existing inbound ssrc
+            let rx_stream = rtp_session.new_rx_rtx_stream(rtp_packet.ssrc, original_ssrc);
+            rx_stream.receive_rtx(rtp_packet);
+        }
     }
 
     /// Maximum allowed RTP payload size for given media
@@ -1706,6 +1892,12 @@ impl SdpSession {
             self.config.mtu.with_additional_rtp_extension(mid.len())
         } else {
             self.config.mtu
+        };
+
+        let mtu = if media.accepts_transport_cc {
+            mtu.with_additional_rtp_extension(2)
+        } else {
+            mtu
         };
 
         Some(
@@ -1749,8 +1941,18 @@ impl SdpSession {
         let stream = match media.streams.tx {
             Some(ssrc) => transport.rtp_session.tx_stream(ssrc)?,
             None => {
-                let stream = transport.rtp_session.new_tx_stream(media.codec.clock_rate);
+                // Only include RTX if NACK feedback is accepted by the peer
+                let rtx_pt = media
+                    .rtx_pt
+                    .filter(|_| media.accepts_nack)
+                    .map(|rtx_pt| rtx_pt.local);
+
+                let stream = transport
+                    .rtp_session
+                    .new_tx_stream(media.codec.clock_rate, rtx_pt);
+
                 media.streams.tx = Some(stream.ssrc());
+
                 stream
             }
         };
@@ -1770,7 +1972,10 @@ impl SdpSession {
         }
 
         let transport = &mut self.transports[media.transport_id];
-        let stream = transport.rtp_session.rx_stream(media.streams.rx?)?;
+        let stream = transport
+            .rtp_session
+            .rx_stream(media.streams.rx?)?
+            .expect_original();
 
         Some(InboundMedia { media, stream })
     }
@@ -1800,6 +2005,36 @@ impl SdpSession {
             .map(|t| t.transport.connection_state())
             .min()
     }
+}
+
+fn ids_to_msid(stream_id: &Option<BytesStr>, track_id: &Option<BytesStr>) -> Option<MsId> {
+    match (stream_id, track_id) {
+        (Some(stream_id), Some(track_id)) => Some(MsId {
+            id: stream_id.clone(),
+            appdata: Some(track_id.clone()),
+        }),
+        (None, Some(track_id)) => Some(MsId {
+            id: BytesStr::from_static("-"),
+            appdata: Some(track_id.clone()),
+        }),
+        _ => None,
+    }
+}
+
+fn msid_to_ids(msid: Option<&MsId>) -> (Option<BytesStr>, Option<BytesStr>) {
+    let Some(msid) = msid else {
+        return (None, None);
+    };
+
+    let stream_id = if msid.id == "-" {
+        None
+    } else {
+        Some(msid.id.clone())
+    };
+
+    let track_id = msid.appdata.clone();
+
+    (stream_id, track_id)
 }
 
 fn is_avpf(t: &TransportProtocol) -> bool {
@@ -1859,8 +2094,10 @@ impl OutboundMedia<'_> {
             None => None,
         };
 
-        self.stream
-            .send_rtp(packet.with_extensions(RtpExtensions { mid: mid.cloned() }));
+        self.stream.send_rtp(packet.with_extensions(RtpExtensions {
+            mid: mid.cloned(),
+            twcc_sequence_number: None,
+        }));
     }
 }
 

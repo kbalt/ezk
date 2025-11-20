@@ -3,32 +3,35 @@ use crate::{
     sdp::{SdpSession, SdpSessionEvent, TransportChange, TransportId},
 };
 use ice::{Component, ReceivedPkt};
+use quinn_udp::{BATCH_SIZE, RecvMeta};
 use socket::Socket;
 use std::{
     collections::HashMap,
     future::poll_fn,
     hash::{BuildHasher, Hasher},
-    io,
-    mem::MaybeUninit,
+    io::{self, IoSliceMut},
     net::{IpAddr, SocketAddr},
     pin::Pin,
     task::{Context, Poll},
     time::{Duration, Instant},
 };
 use tokio::{
-    io::ReadBuf,
     net::UdpSocket,
     time::{Sleep, sleep_until},
 };
 
 mod socket;
 
+const RECV_BUFFER_SIZE: usize = 2500;
+
 /// IO implementation to be used alongside [`SdpSession`]
 pub struct TokioIoState {
     ips: Vec<IpAddr>,
     sockets: HashMap<(TransportId, Component), Socket, BuildTransportHasher>,
     sleep: Option<Pin<Box<Sleep>>>,
-    buf: Vec<MaybeUninit<u8>>,
+
+    bufs: Box<[[u8; RECV_BUFFER_SIZE]; BATCH_SIZE]>,
+    meta: Box<[RecvMeta; BATCH_SIZE]>,
 }
 
 impl TokioIoState {
@@ -38,7 +41,8 @@ impl TokioIoState {
             ips,
             sockets: HashMap::with_hasher(BuildTransportHasher),
             sleep: Some(Box::pin(sleep_until(Instant::now().into()))),
-            buf: vec![MaybeUninit::uninit(); 65535],
+            bufs: Box::new([[0u8; RECV_BUFFER_SIZE]; BATCH_SIZE]),
+            meta: Box::new([RecvMeta::default(); BATCH_SIZE]),
         }
     }
 
@@ -143,26 +147,42 @@ impl TokioIoState {
 
         let mut received = false;
 
-        for (socket_id, socket) in self.sockets.iter_mut() {
+        for ((transport_id, component), socket) in self.sockets.iter_mut() {
             socket.send_pending(cx);
 
-            let mut buf = ReadBuf::uninit(&mut self.buf);
+            while let Poll::Ready(result) = {
+                let mut slices = self.bufs.each_mut().map(|buf| IoSliceMut::new(buf));
 
-            while let Poll::Ready(result) = socket.poll_recv_from(cx, &mut buf) {
-                let (dst, src) = result?;
+                socket.poll_recv_from(cx, &mut slices, &mut *self.meta)
+            } {
+                let num_msg = result?;
 
-                let pkt = ReceivedPkt {
-                    data: buf.filled().to_vec(),
-                    source: src,
-                    destination: dst,
-                    component: socket_id.1,
-                };
+                for i in 0..num_msg {
+                    let len = self.meta[i].len;
 
-                session.receive(now, socket_id.0, pkt);
-                received = true;
+                    let pkt = ReceivedPkt {
+                        data: self.bufs[i][..len].to_vec(),
+                        source: self.meta[i].addr,
+                        destination: self.meta[i].dst_ip.map_or(socket.local_addr(), |ip| {
+                            (ip, socket.local_addr().port()).into()
+                        }),
+                        component: *component,
+                    };
 
-                buf.clear();
+                    session.receive(now, *transport_id, pkt);
+
+                    received = true;
+                }
             }
+        }
+
+        // Don't attempt to poll the session if theres too many outbound packets queued
+        if self
+            .sockets
+            .iter()
+            .any(|(_, socket)| socket.queue_is_full())
+        {
+            return Poll::Pending;
         }
 
         // Polled without IO being the reason, ignore sleep and poll session once

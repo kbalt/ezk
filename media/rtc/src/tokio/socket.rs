@@ -1,14 +1,13 @@
-use quinn_udp::{RecvMeta, Transmit, UdpSockRef, UdpSocketState};
+use quinn_udp::{BATCH_SIZE, RecvMeta, Transmit, UdpSockRef, UdpSocketState};
 use std::{
     collections::VecDeque,
     io::{self, IoSliceMut},
     net::{IpAddr, SocketAddr},
     task::{Context, Poll, ready},
 };
-use tokio::{
-    io::{Interest, ReadBuf},
-    net::UdpSocket,
-};
+use tokio::{io::Interest, net::UdpSocket};
+
+const QUEUE_MAX_SIZE: usize = 200;
 
 pub(super) struct Socket {
     state: UdpSocketState,
@@ -29,14 +28,16 @@ impl Socket {
         })
     }
 
+    pub(super) fn queue_is_full(&self) -> bool {
+        self.to_send.len() >= QUEUE_MAX_SIZE
+    }
+
+    pub(super) fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
+
     pub(super) fn enqueue(&mut self, data: Vec<u8>, source: Option<IpAddr>, target: SocketAddr) {
         self.to_send.push_back((data, source, target));
-
-        if self.to_send.len() > 100 {
-            self.to_send.pop_front();
-
-            log::warn!("to_send queue too large, dropping oldest packet");
-        }
     }
 
     pub(super) fn send_pending(&mut self, cx: &mut Context<'_>) {
@@ -75,29 +76,18 @@ impl Socket {
     pub(super) fn poll_recv_from(
         &mut self,
         cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<(SocketAddr, SocketAddr)>> {
+        bufs: &mut [IoSliceMut<'_>; BATCH_SIZE],
+        addrs: &mut [RecvMeta],
+    ) -> Poll<io::Result<usize>> {
         // Loop makes sure that the waker is registered with the runtime,
-        // if poll_recv_ready returns Ready but recv returns WouldBlock
+        // if poll_recv_ready returns 'Ready', but then recv returns WouldBlock
         loop {
             ready!(self.socket.poll_recv_ready(cx))?;
 
             let res = self.socket.try_io(Interest::READABLE, || {
                 let udp_ref = UdpSockRef::from(&self.socket);
-                let mut bufs = [IoSliceMut::new(buf.initialize_unfilled())];
-                let mut meta = [RecvMeta::default()];
 
-                self.state.recv(udp_ref, &mut bufs, &mut meta)?;
-
-                buf.set_filled(meta[0].len);
-
-                Ok((
-                    meta[0]
-                        .dst_ip
-                        .map(|ip| SocketAddr::new(ip, self.local_addr.port()))
-                        .unwrap_or(self.local_addr),
-                    meta[0].addr,
-                ))
+                self.state.recv(udp_ref, bufs, addrs)
             });
 
             if let Ok(v) = res {

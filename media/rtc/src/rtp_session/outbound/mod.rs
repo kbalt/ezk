@@ -15,7 +15,6 @@ pub use stats::{RtpOutboundRemoteStats, RtpOutboundStats};
 
 /// RTP send stream
 pub struct RtpOutboundStream {
-    ssrc: Ssrc,
     queue: OutboundQueue,
 
     stats: RtpOutboundStats,
@@ -25,10 +24,14 @@ pub struct RtpOutboundStream {
 }
 
 impl RtpOutboundStream {
-    pub(crate) fn new(ssrc: Ssrc, clock_rate: u32, report_interval: Duration) -> Self {
+    pub(crate) fn new(
+        ssrc: Ssrc,
+        clock_rate: u32,
+        report_interval: Duration,
+        rtx: Option<(u8, Ssrc)>,
+    ) -> Self {
         RtpOutboundStream {
-            ssrc,
-            queue: OutboundQueue::new(clock_rate),
+            queue: OutboundQueue::new(ssrc, clock_rate, rtx),
             stats: RtpOutboundStats {
                 bytes_sent: 0,
                 packets_sent: 0,
@@ -40,7 +43,7 @@ impl RtpOutboundStream {
     }
 
     pub fn ssrc(&self) -> Ssrc {
-        self.ssrc
+        self.queue.ssrc
     }
 
     pub(crate) fn timeout(&self, now: Instant) -> Option<Duration> {
@@ -74,7 +77,7 @@ impl RtpOutboundStream {
             return;
         };
 
-        let report = SenderReport::builder(self.ssrc.0)
+        let report = SenderReport::builder(self.queue.ssrc.0)
             .ntp_timestamp(NtpTimestamp::from_instant(now).to_fixed_u64())
             .rtp_timestamp(rtp_timestamp.truncated().0)
             .packet_count(self.stats.packets_sent as u32)
@@ -110,25 +113,37 @@ impl RtpOutboundStream {
         });
     }
 
+    pub(crate) fn handle_nack(&mut self, entries: impl Iterator<Item = u16>) {
+        self.queue.handle_nack(entries);
+    }
+
     /// Queue the RTP packet to be sent.
     pub fn send_rtp(&mut self, packet: SendRtpPacket) {
         self.queue.push(packet);
     }
 
     /// Check for a RTP packet that is ready to be sent
-    pub(crate) fn pop(&mut self, now: Instant) -> Option<RtpPacket> {
-        let mut packet = self.queue.pop(now)?;
-        packet.ssrc = self.ssrc;
+    pub(crate) fn poll(&mut self, now: Instant) -> Option<RtpOutboundStreamEvent> {
+        match self.queue.poll(now)? {
+            RtpOutboundStreamEvent::SendRtpPacket { rtp_packet, is_rtx } => {
+                if !is_rtx {
+                    self.stats.packets_sent += 1;
+                    self.stats.bytes_sent += rtp_packet.payload.len() as u64;
+                }
 
-        self.stats.packets_sent += 1;
-        self.stats.bytes_sent += packet.payload.len() as u64;
-
-        Some(packet)
+                Some(RtpOutboundStreamEvent::SendRtpPacket { rtp_packet, is_rtx })
+            }
+        }
     }
 
     pub fn stats(&self) -> RtpOutboundStats {
         self.stats
     }
+}
+
+#[derive(Debug)]
+pub enum RtpOutboundStreamEvent {
+    SendRtpPacket { rtp_packet: RtpPacket, is_rtx: bool },
 }
 
 /// Outbound RTP packet builder

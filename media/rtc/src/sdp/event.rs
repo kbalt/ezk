@@ -1,6 +1,10 @@
 use crate::{
     rtp_transport::TransportConnectionState,
-    sdp::{TransportId, local_media::LocalMediaId, media::MediaId},
+    sdp::{
+        TransportId,
+        local_media::LocalMediaId,
+        media::{MediaId, PtPair},
+    },
 };
 use ice::{Component, IceConnectionState, IceGatheringState};
 use rtp::RtpPacket;
@@ -32,10 +36,8 @@ pub struct MediaAdded {
 /// Contains the send & receive Codec information of the media stream
 #[derive(Debug, Clone)]
 pub struct NegotiatedCodec {
-    /// Payload type which must be used when sending media with this codec
-    pub send_pt: u8,
-    /// Payload type expected in the received RTP packets
-    pub recv_pt: u8,
+    /// Payload types for sending/receiving the codec data
+    pub pt: PtPair,
     /// Encoding name of the codec
     pub name: Cow<'static, str>,
     /// Clock-rate of the codec
@@ -54,7 +56,7 @@ pub struct NegotiatedCodec {
 #[derive(Debug, Clone)]
 pub struct NegotiatedDtmf {
     /// Payload type used for DTMF RTP packets
-    pub pt: u8,
+    pub pt: PtPair,
     /// FMTP line for telephone-event
     pub fmtp: Option<String>,
 }

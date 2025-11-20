@@ -1,4 +1,8 @@
-use rtp::{ExtendedRtpTimestamp, ExtendedSequenceNumber, RtpPacket};
+use crate::opt_min;
+use rtp::{
+    ExtendedRtpTimestamp, ExtendedSequenceNumber, RtpPacket, SequenceNumber, Ssrc,
+    rtcp_types::NackBuilder,
+};
 use std::{
     cmp::Ordering,
     collections::VecDeque,
@@ -7,10 +11,28 @@ use std::{
 };
 use time::ext::InstantExt as _;
 
-const RX_BUFFER_DURATION: Duration = Duration::from_millis(50);
+/// Fixed size of the jitter buffer
+const RX_BUFFER_DURATION: Duration = Duration::from_millis(100);
 
+/// Time to wait before generating a NACK packet
+const NACK_DELAY: Duration = Duration::from_millis(20);
+
+/// Maximum number of entries to keep in buffer to avoid excessive memory usage
+const MAX_ENTRIES: usize = 1024;
+
+/// Fixed time inbound jitter buffer with loss detection
+///
+/// Generates NACK when encountering gaps in incoming packets
 pub(crate) struct InboundQueue {
-    max_entries: usize,
+    /// Payload type of the "main" media received over this ssrc
+    ///
+    /// Used to reassign the payload type of retransmitted packets back to the media type
+    pub(crate) pt: u8,
+
+    /// SSRC of the receiving RTP stream
+    pub(crate) ssrc: Ssrc,
+
+    /// Clock rate of the media received, used convert the RTP timestamp to wall time
     pub(crate) clock_rate: u32,
 
     queue: VecDeque<QueueEntry>,
@@ -24,14 +46,21 @@ pub(crate) struct InboundQueue {
     pub(crate) dropped: u64,
     pub(crate) received: u64,
     pub(crate) received_bytes: u64,
+
     /// packets that were never received
     pub(crate) lost: u64,
     pub(crate) jitter: f64,
 }
 
 enum QueueEntry {
-    Vacant(ExtendedSequenceNumber),
+    Vacant {
+        sequence_number: ExtendedSequenceNumber,
+        detected_at: Instant,
+        nacked_at: Option<Instant>,
+    },
     Occupied {
+        /// Instant the packet was received. None if it was a retransmission to keep it out of RTP statistics.
+        received_at: Option<Instant>,
         timestamp: ExtendedRtpTimestamp,
         sequence_number: ExtendedSequenceNumber,
         packet: RtpPacket,
@@ -41,7 +70,9 @@ enum QueueEntry {
 impl QueueEntry {
     fn sequence_number(&self) -> ExtendedSequenceNumber {
         match self {
-            QueueEntry::Vacant(sequence_number) => *sequence_number,
+            QueueEntry::Vacant {
+                sequence_number, ..
+            } => *sequence_number,
             QueueEntry::Occupied {
                 sequence_number, ..
             } => *sequence_number,
@@ -52,7 +83,16 @@ impl QueueEntry {
 impl fmt::Debug for QueueEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Vacant(arg0) => f.debug_tuple("Vacant").field(arg0).finish(),
+            Self::Vacant {
+                sequence_number,
+                detected_at,
+                nacked_at,
+            } => f
+                .debug_struct("Vacant")
+                .field("sequence_number", &sequence_number)
+                .field("detected_at", &detected_at)
+                .field("nacked_at", &nacked_at)
+                .finish(),
             Self::Occupied {
                 timestamp: ts,
                 sequence_number: seq,
@@ -67,9 +107,10 @@ impl fmt::Debug for QueueEntry {
 }
 
 impl InboundQueue {
-    pub(crate) fn new(clock_rate: u32) -> Self {
+    pub(crate) fn new(pt: u8, ssrc: Ssrc, clock_rate: u32) -> Self {
         InboundQueue {
-            max_entries: 1000,
+            pt,
+            ssrc,
             clock_rate,
             queue: VecDeque::new(),
             last_rtp_received: None,
@@ -112,14 +153,14 @@ impl InboundQueue {
 
                 self.last_rtp_received = Some((now, timestamp, sequence_number));
 
-                self.push_extended(timestamp, sequence_number, packet)
+                self.push_extended(now, timestamp, sequence_number, packet)
             } else {
                 let timestamp = ExtendedRtpTimestamp(u64::from(packet.timestamp.0));
                 let sequence_number = ExtendedSequenceNumber(packet.sequence_number.0.into());
 
                 self.last_rtp_received = Some((now, timestamp, sequence_number));
 
-                self.push_extended(timestamp, sequence_number, packet)
+                self.push_extended(now, timestamp, sequence_number, packet)
             };
 
         match push_result {
@@ -127,7 +168,7 @@ impl InboundQueue {
                 self.received += 1;
                 self.received_bytes += payload_size as u64;
 
-                if self.queue.len() > self.max_entries {
+                if self.queue.len() > MAX_ENTRIES {
                     self.queue.pop_front();
                     self.dropped += 1;
                 }
@@ -140,6 +181,7 @@ impl InboundQueue {
 
     fn push_extended(
         &mut self,
+        received_at: Instant,
         timestamp: ExtendedRtpTimestamp,
         sequence_number: ExtendedSequenceNumber,
         packet: RtpPacket,
@@ -154,6 +196,7 @@ impl InboundQueue {
         let Some(entry) = self.queue.back_mut() else {
             // queue is empty, insert entry and return
             self.queue.push_back(QueueEntry::Occupied {
+                received_at: Some(received_at),
                 timestamp,
                 sequence_number,
                 packet,
@@ -166,8 +209,9 @@ impl InboundQueue {
             Ordering::Greater => {
                 for entry in self.queue.iter_mut().rev() {
                     if entry.sequence_number() == sequence_number {
-                        if matches!(entry, QueueEntry::Vacant(..)) {
+                        if matches!(entry, QueueEntry::Vacant { .. }) {
                             *entry = QueueEntry::Occupied {
+                                received_at: Some(received_at),
                                 timestamp,
                                 sequence_number,
                                 packet,
@@ -183,8 +227,9 @@ impl InboundQueue {
             }
             Ordering::Equal => {
                 // last entry is equal, insert if its vacant
-                if matches!(entry, QueueEntry::Vacant(..)) {
+                if matches!(entry, QueueEntry::Vacant { .. }) {
                     *entry = QueueEntry::Occupied {
+                        received_at: Some(received_at),
                         timestamp,
                         sequence_number,
                         packet,
@@ -200,16 +245,21 @@ impl InboundQueue {
                 let entry_seq = entry.sequence_number();
 
                 // Ignore the packet if the gap is too large
-                if gap > self.max_entries as u64 {
+                if gap > MAX_ENTRIES as u64 {
                     return PushResult::Dropped;
                 }
 
                 for i in 1..gap {
-                    self.queue
-                        .push_back(QueueEntry::Vacant(ExtendedSequenceNumber(entry_seq.0 + i)));
+                    let sequence_number = ExtendedSequenceNumber(entry_seq.0 + i);
+                    self.queue.push_back(QueueEntry::Vacant {
+                        sequence_number,
+                        detected_at: received_at,
+                        nacked_at: None,
+                    });
                 }
 
                 self.queue.push_back(QueueEntry::Occupied {
+                    received_at: Some(received_at),
                     timestamp,
                     sequence_number,
                     packet,
@@ -220,7 +270,94 @@ impl InboundQueue {
         }
     }
 
-    pub(crate) fn pop(&mut self, now: Instant) -> Option<RtpPacket> {
+    pub(crate) fn push_rtx(&mut self, rtp_packet: RtpPacket) {
+        let Some((_, last_rtp_received_timestamp, last_rtp_received_sequence_number)) =
+            self.last_rtp_received
+        else {
+            log::warn!("Got rtx rtp packet before any other packets");
+            return;
+        };
+
+        let [b0, b1, original_payload @ ..] = &rtp_packet.payload[..] else {
+            log::warn!("Got rtx rtp packet with invalid payload");
+            return;
+        };
+
+        let sequence_number = SequenceNumber(u16::from_be_bytes([*b0, *b1]));
+
+        let rtp_packet = RtpPacket {
+            pt: self.pt,
+            sequence_number,
+            ssrc: self.ssrc,
+            timestamp: rtp_packet.timestamp,
+            marker: rtp_packet.marker,
+            extensions: rtp_packet.extensions,
+            payload: rtp_packet.payload.slice_ref(original_payload),
+        };
+
+        let sequence_number = last_rtp_received_sequence_number.guess_extended(sequence_number);
+        let timestamp = last_rtp_received_timestamp.guess_extended(rtp_packet.timestamp);
+
+        match self
+            .queue
+            .iter_mut()
+            .find(|entry| entry.sequence_number() == sequence_number)
+        {
+            Some(QueueEntry::Occupied { .. }) => {
+                // Retransmission was redundant
+            }
+            Some(vacant @ QueueEntry::Vacant { .. }) => {
+                *vacant = QueueEntry::Occupied {
+                    received_at: None,
+                    timestamp,
+                    sequence_number,
+                    packet: rtp_packet,
+                }
+            }
+            None => {
+                // Retransmission is late
+            }
+        }
+    }
+
+    /// Returns a list of sequence numbers to NACK
+    pub(crate) fn poll_nack(&mut self, now: Instant) -> Option<NackBuilder> {
+        let mut nack = NackBuilder::default();
+        let mut empty = true;
+
+        for entry in &mut self.queue {
+            if let QueueEntry::Vacant {
+                sequence_number,
+                detected_at,
+                nacked_at,
+            } = entry
+            {
+                // Don't immediately NACK vacant entries, wait at least NACK_DELAY
+                if *detected_at + NACK_DELAY > now {
+                    continue;
+                }
+
+                // Wait NACK_DELAY before sending NACK again for a sequence number
+                if let Some(nacked_at) = *nacked_at
+                    && (nacked_at + NACK_DELAY) > now
+                {
+                    continue;
+                }
+
+                *nacked_at = Some(now);
+                nack = nack.add_rtp_sequence(sequence_number.truncated().0);
+                empty = false;
+            }
+        }
+
+        if empty {
+            return None;
+        }
+
+        Some(nack)
+    }
+
+    pub(crate) fn poll(&mut self, now: Instant) -> Option<(RtpPacket, Option<Instant>)> {
         let (last_rtp_received_instant, last_rtp_received_timestamp, _) = self.last_rtp_received?;
 
         let pop_earliest = now - RX_BUFFER_DURATION;
@@ -233,14 +370,14 @@ impl InboundQueue {
         )?;
 
         let num_vacant = self.queue.iter().position(|e| match e {
-            QueueEntry::Vacant(..) => false,
+            QueueEntry::Vacant { .. } => false,
             QueueEntry::Occupied { timestamp, .. } => timestamp.0 <= max_timestamp.0,
         })?;
 
         for _ in 0..num_vacant {
             assert!(matches!(
                 self.queue.pop_front(),
-                Some(QueueEntry::Vacant(..))
+                Some(QueueEntry::Vacant { .. })
             ));
         }
 
@@ -248,12 +385,13 @@ impl InboundQueue {
 
         match self.queue.pop_front() {
             Some(QueueEntry::Occupied {
+                received_at,
                 packet,
                 sequence_number,
                 ..
             }) => {
                 self.last_sequence_number_returned = Some(sequence_number);
-                Some(packet)
+                Some((packet, received_at))
             }
             _ => {
                 log::warn!("InboundQueue::pop() reached unreachable code");
@@ -262,10 +400,10 @@ impl InboundQueue {
         }
     }
 
-    pub(crate) fn timeout(&self, now: Instant) -> Option<Duration> {
+    pub(crate) fn timeout_receive(&self, now: Instant) -> Option<Duration> {
         let (last_rtp_received_instant, last_rtp_received_timestamp, _) = self.last_rtp_received?;
         let earliest_timestamp = self.queue.iter().find_map(|e| match e {
-            QueueEntry::Vacant(..) => None,
+            QueueEntry::Vacant { .. } => None,
             QueueEntry::Occupied { timestamp, .. } => Some(*timestamp),
         })?;
 
@@ -279,6 +417,31 @@ impl InboundQueue {
                 .checked_duration_since(now)
                 .unwrap_or(Duration::ZERO),
         )
+    }
+
+    pub(crate) fn timeout_nack(&self, now: Instant) -> Option<Duration> {
+        let mut timeout = None;
+
+        for entry in &self.queue {
+            if let QueueEntry::Vacant {
+                detected_at,
+                nacked_at,
+                ..
+            } = entry
+            {
+                let ts = match nacked_at {
+                    Some(nacked_at) => *nacked_at,
+                    None => *detected_at,
+                };
+
+                timeout = opt_min(
+                    timeout,
+                    Some((ts + NACK_DELAY).saturating_duration_since(now)),
+                );
+            }
+        }
+
+        timeout
     }
 }
 
@@ -358,7 +521,7 @@ mod tests {
 
     #[test]
     fn it_reorders() {
-        let mut jb = InboundQueue::new(1000);
+        let mut jb = InboundQueue::new(0, Ssrc(0), 1000);
 
         let now = Instant::now();
 
@@ -371,26 +534,29 @@ mod tests {
         assert_eq!(jb.queue.len(), 4);
 
         assert!(
-            jb.pop(now + Duration::from_millis(100) + RX_BUFFER_DURATION / 2)
+            jb.poll(now + Duration::from_millis(100) + RX_BUFFER_DURATION / 2)
                 .is_none()
         );
         assert_eq!(
-            jb.pop(now + Duration::from_millis(100) + RX_BUFFER_DURATION)
+            jb.poll(now + Duration::from_millis(100) + RX_BUFFER_DURATION)
                 .unwrap()
+                .0
                 .sequence_number
                 .0,
             1
         );
         assert_eq!(
-            jb.pop(now + Duration::from_millis(300) + RX_BUFFER_DURATION)
+            jb.poll(now + Duration::from_millis(300) + RX_BUFFER_DURATION)
                 .unwrap()
+                .0
                 .sequence_number
                 .0,
             3
         );
         assert_eq!(
-            jb.pop(now + Duration::from_millis(400) + RX_BUFFER_DURATION)
+            jb.poll(now + Duration::from_millis(400) + RX_BUFFER_DURATION)
                 .unwrap()
+                .0
                 .sequence_number
                 .0,
             4
@@ -400,7 +566,7 @@ mod tests {
 
     #[test]
     fn sequence_rollover() {
-        let mut jb = InboundQueue::new(1000);
+        let mut jb = InboundQueue::new(0, Ssrc(0), 1000);
 
         let now = Instant::now();
 
@@ -417,8 +583,9 @@ mod tests {
 
         for i in 0..10 {
             let packet = jb
-                .pop(now + Duration::from_millis(i * 10) + RX_BUFFER_DURATION)
-                .unwrap();
+                .poll(now + Duration::from_millis(i * 10) + RX_BUFFER_DURATION)
+                .unwrap()
+                .0;
 
             assert_eq!(packet.sequence_number.0, BASE_SEQ.wrapping_add(i as u16));
         }

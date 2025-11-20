@@ -12,7 +12,7 @@ fn offer_ice_credentials_not_in_offer_when_ice_is_disabled() {
         ..Default::default()
     });
 
-    session.add_media(audio, Direction::SendRecv);
+    session.add_media(audio, Direction::SendRecv, None, None);
 
     satisfy_transport_changes(&mut session, 1000);
 
@@ -26,7 +26,7 @@ fn offer_ice_credentials_not_in_offer_when_ice_is_disabled() {
         assert!(offer.media_descriptions[0].ice_pwd.is_none());
     }
 
-    session.add_media(audio, Direction::SendRecv);
+    session.add_media(audio, Direction::SendRecv, None, None);
 
     satisfy_transport_changes(&mut session, 2000);
 
@@ -49,7 +49,7 @@ fn offer_ice_credentials_in_offer_when_ice_is_enabled() {
         ..Default::default()
     });
 
-    session.add_media(audio, Direction::SendRecv);
+    session.add_media(audio, Direction::SendRecv, None, None);
 
     satisfy_transport_changes(&mut session, 1000);
 
@@ -63,7 +63,7 @@ fn offer_ice_credentials_in_offer_when_ice_is_enabled() {
         assert!(offer.media_descriptions[0].ice_pwd.is_none());
     }
 
-    session.add_media(audio, Direction::SendRecv);
+    session.add_media(audio, Direction::SendRecv, None, None);
 
     satisfy_transport_changes(&mut session, 2000);
 
@@ -88,7 +88,7 @@ fn offer_ice_candidates_when_bundle_policy_max_compat() {
         ..Default::default()
     });
 
-    session.add_media(audio, Direction::SendRecv);
+    session.add_media(audio, Direction::SendRecv, None, None);
 
     satisfy_transport_changes(&mut session, 1000);
 
@@ -103,7 +103,7 @@ fn offer_ice_candidates_when_bundle_policy_max_compat() {
         assert_eq!(offer.media_descriptions[0].ice_candidates[0].port, 1000);
     }
 
-    session.add_media(audio, Direction::SendRecv);
+    session.add_media(audio, Direction::SendRecv, None, None);
 
     satisfy_transport_changes(&mut session, 2000);
 
@@ -127,7 +127,7 @@ fn offer_ice_candidates_when_bundle_policy_max_bundle() {
         ..Default::default()
     });
 
-    session.add_media(audio, Direction::SendRecv);
+    session.add_media(audio, Direction::SendRecv, None, None);
 
     satisfy_transport_changes(&mut session, 1000);
 
@@ -142,7 +142,7 @@ fn offer_ice_candidates_when_bundle_policy_max_bundle() {
         assert_eq!(offer.media_descriptions[0].ice_candidates[0].port, 1000);
     }
 
-    session.add_media(audio, Direction::SendRecv);
+    session.add_media(audio, Direction::SendRecv, None, None);
 
     {
         let offer = session.create_sdp_offer();
@@ -164,7 +164,7 @@ fn offer_ice_candidates_when_rtcp_mux_policy_negotiate() {
         ..Default::default()
     });
 
-    session.add_media(audio, Direction::SendRecv);
+    session.add_media(audio, Direction::SendRecv, None, None);
 
     satisfy_transport_changes(&mut session, 1000);
 
@@ -193,7 +193,7 @@ fn offer_ice_candidates_when_rtcp_mux_policy_require() {
         ..Default::default()
     });
 
-    session.add_media(audio, Direction::SendRecv);
+    session.add_media(audio, Direction::SendRecv, None, None);
 
     satisfy_transport_changes(&mut session, 1000);
 

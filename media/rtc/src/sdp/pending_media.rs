@@ -12,6 +12,8 @@ pub struct PendingMedia {
     pub(super) local_media_id: LocalMediaId,
     pub(super) media_type: MediaType,
     pub(super) mid: BytesStr,
+    pub(super) stream_id: Option<BytesStr>,
+    pub(super) track_id: Option<BytesStr>,
     pub(super) direction: Direction,
     pub(super) use_avpf: bool,
     /// Transport to use when not bundling,
@@ -42,6 +44,16 @@ impl PendingMedia {
     /// Will be discarded if the peer does not support mid attributes
     pub fn mid(&self) -> &str {
         &self.mid
+    }
+
+    /// WebRTC MediaStream stream identifier
+    pub fn stream_id(&self) -> Option<&str> {
+        self.stream_id.as_deref()
+    }
+
+    /// WebRTC MediaStream track identifier
+    pub fn track_id(&self) -> Option<&str> {
+        self.track_id.as_deref()
     }
 
     /// Media direction being offered

@@ -12,7 +12,7 @@ fn sdes_srtp_offer_contains_crypto_attributes() {
         ..Default::default()
     });
 
-    session.add_media(audio, Direction::SendRecv);
+    session.add_media(audio, Direction::SendRecv, None, None);
 
     satisfy_transport_changes(&mut session, 1000);
 

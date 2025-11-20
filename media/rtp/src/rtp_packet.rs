@@ -16,12 +16,14 @@ pub struct RtpPacket {
 #[derive(Debug, Default, Clone)]
 pub struct RtpExtensions {
     pub mid: Option<Bytes>,
+    pub twcc_sequence_number: Option<u16>,
 }
 
 /// ID to attribute type map to use when parsing or serializing RTP packets
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RtpExtensionIds {
     pub mid: Option<u8>,
+    pub twcc_sequence_number: Option<u8>,
 }
 
 impl RtpPacket {
@@ -62,7 +64,10 @@ impl RtpPacket {
         let extensions = if let Some((profile, extension_data)) = parsed.extension() {
             RtpExtensions::from_packet(extension_ids, &packet, profile, extension_data)
         } else {
-            RtpExtensions { mid: None }
+            RtpExtensions {
+                mid: None,
+                twcc_sequence_number: None,
+            }
         };
 
         Ok(RtpPacket {
@@ -84,11 +89,20 @@ impl RtpExtensions {
         profile: u16,
         extension_data: &[u8],
     ) -> Self {
-        let mut this = Self { mid: None };
+        let mut this = Self {
+            mid: None,
+            twcc_sequence_number: None,
+        };
 
         for (id, data) in parse_extensions(profile, extension_data) {
             if Some(id) == ids.mid {
                 this.mid = Some(bytes.slice_ref(data));
+            }
+
+            if Some(id) == ids.twcc_sequence_number
+                && let &[b0, b1, ..] = data
+            {
+                this.twcc_sequence_number = Some(u16::from_be_bytes([b0, b1]));
             }
         }
 
@@ -100,17 +114,27 @@ impl RtpExtensions {
         ids: RtpExtensionIds,
         packet_builder: RtpPacketBuilder<&'b [u8], Vec<u8>>,
     ) -> RtpPacketBuilder<&'b [u8], Vec<u8>> {
-        let Some((id, mid)) = ids.mid.zip(self.mid.as_ref()) else {
-            return packet_builder;
-        };
-
         let mut buf = vec![];
 
-        let profile = RtpExtensionsWriter::new(&mut buf, mid.len() <= 16)
-            .with(id, mid)
-            .finish();
+        let mut written = false;
+        let mut writer = RtpExtensionsWriter::new(&mut buf, true);
 
-        packet_builder.extension(profile, buf)
+        if let Some((mid_id, mid)) = ids.mid.zip(self.mid.as_ref()) {
+            writer = writer.with(mid_id, mid);
+            written = true;
+        }
+
+        if let Some((twcc_id, twcc)) = ids.twcc_sequence_number.zip(self.twcc_sequence_number) {
+            writer = writer.with(twcc_id, &twcc.to_be_bytes());
+            written = true;
+        }
+
+        if written {
+            let profile = writer.finish();
+            packet_builder.extension(profile, buf)
+        } else {
+            packet_builder
+        }
     }
 }
 

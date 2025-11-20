@@ -4,7 +4,7 @@ use super::{ntp_timestamp::NtpTimestamp, report::ReportsQueue};
 use queue::InboundQueue;
 use rtp::{
     RtpPacket, Ssrc,
-    rtcp_types::{ReportBlock, SenderReport},
+    rtcp_types::{Fir, PayloadFeedback, Pli, ReportBlock, SenderReport},
 };
 use std::time::{Duration, Instant};
 
@@ -14,7 +14,7 @@ mod stats;
 pub use stats::{RtpInboundRemoteStats, RtpInboundStats};
 
 /// Minimum interval in which FIR/PLI requests can be sent
-const RTCP_FEEDBACK_COOLDOWN: Duration = Duration::from_millis(250);
+const RTCP_FEEDBACK_COOLDOWN: Duration = Duration::from_millis(500);
 
 /// RTP receive stream
 pub struct RtpInboundStream {
@@ -25,6 +25,8 @@ pub struct RtpInboundStream {
     last_received_sender_report: Option<NtpTimestamp>,
 
     remote_stats: Option<RtpInboundRemoteStats>,
+
+    emit_nack: bool,
 
     // RTCP feedback NACK PLI
     want_nack_pli: bool,
@@ -37,18 +39,25 @@ pub struct RtpInboundStream {
 }
 
 impl RtpInboundStream {
-    pub(crate) fn new(ssrc: Ssrc, clock_rate: u32, report_interval: Duration) -> Self {
+    pub(crate) fn new(
+        pt: u8,
+        ssrc: Ssrc,
+        clock_rate: u32,
+        report_interval: Duration,
+        emit_nack: bool,
+    ) -> Self {
         RtpInboundStream {
             ssrc,
-            queue: InboundQueue::new(clock_rate),
+            queue: InboundQueue::new(pt, ssrc, clock_rate),
             report_interval,
             last_report_sent: None,
             last_received_sender_report: None,
             remote_stats: None,
 
+            emit_nack,
             want_nack_pli: false,
-            last_nack_pli: None,
 
+            last_nack_pli: None,
             want_ccm_fir: false,
             next_fir_seq: rand::random(),
             last_ccm_fir: None,
@@ -64,7 +73,11 @@ impl RtpInboundStream {
     }
 
     pub(crate) fn timeout(&self, now: Instant) -> Option<Duration> {
-        let queue = self.queue.timeout(now);
+        let mut timeout = self.queue.timeout_receive(now);
+
+        if self.emit_nack {
+            timeout = opt_min(timeout, self.queue.timeout_nack(now));
+        }
 
         let report = if self.queue.highest_sequence_number_received().is_some() {
             let report_interval = self
@@ -76,21 +89,38 @@ impl RtpInboundStream {
 
             let nack_pli = self
                 .last_nack_pli
-                .map(|ts| (ts + RTCP_FEEDBACK_COOLDOWN).saturating_duration_since(now));
+                .map(|ts| (ts + RTCP_FEEDBACK_COOLDOWN).saturating_duration_since(now))
+                .filter(|_| self.want_nack_pli);
 
             let ccm_fir = self
                 .last_ccm_fir
-                .map(|ts| (ts + RTCP_FEEDBACK_COOLDOWN).saturating_duration_since(now));
+                .map(|ts| (ts + RTCP_FEEDBACK_COOLDOWN).saturating_duration_since(now))
+                .filter(|_| self.want_ccm_fir);
 
             opt_min(Some(report_interval), opt_min(nack_pli, ccm_fir))
         } else {
             None
         };
 
-        opt_min(queue, report)
+        opt_min(timeout, report)
     }
 
-    pub(super) fn collect_reports(&mut self, now: Instant, reports: &mut ReportsQueue) {
+    pub(super) fn collect_reports(
+        &mut self,
+        now: Instant,
+        fallback_sender_ssrc: Ssrc,
+        reports: &mut ReportsQueue,
+    ) {
+        if self.emit_nack
+            && let Some(nack) = self.queue.poll_nack(now)
+        {
+            reports.add_payload_feedback(
+                PayloadFeedback::builder_owned(nack)
+                    .media_ssrc(self.ssrc.0)
+                    .sender_ssrc(fallback_sender_ssrc.0),
+            );
+        }
+
         if self.want_nack_pli {
             let cooldown_elapsed = self
                 .last_nack_pli
@@ -99,7 +129,11 @@ impl RtpInboundStream {
             if cooldown_elapsed {
                 self.want_nack_pli = false;
                 self.last_nack_pli = Some(now);
-                reports.add_nack_pli(self.ssrc);
+                reports.add_payload_feedback(
+                    PayloadFeedback::builder_owned(Pli::builder())
+                        .media_ssrc(self.ssrc.0)
+                        .sender_ssrc(fallback_sender_ssrc.0),
+                );
             }
         }
 
@@ -111,7 +145,14 @@ impl RtpInboundStream {
             if cooldown_elapsed {
                 self.want_ccm_fir = false;
                 self.last_ccm_fir = Some(now);
-                reports.add_ccm_fir(self.ssrc, self.next_fir_seq);
+
+                reports.add_payload_feedback(
+                    PayloadFeedback::builder_owned(
+                        Fir::builder().add_ssrc(self.ssrc.0, self.next_fir_seq),
+                    )
+                    .sender_ssrc(fallback_sender_ssrc.0),
+                );
+
                 self.next_fir_seq = self.next_fir_seq.wrapping_add(1);
             }
         }
@@ -174,16 +215,26 @@ impl RtpInboundStream {
         });
     }
 
-    /// Hand of the given RTP packet to the RTP receive stream
+    /// Hand the given RTP packet to the RTP receive stream
     ///
     /// The stream will internally keep the packet for a short time to perform reordering and deduplication.
     pub fn receive_rtp(&mut self, now: Instant, packet: RtpPacket) {
         self.queue.push(now, packet);
     }
 
+    /// Hand off a RTX (retransmission) rtp packet to the RTP receive stream
+    pub fn receive_rtx(&mut self, packet: RtpPacket) {
+        self.queue.push_rtx(packet)
+    }
+
     /// Check for a RTP packet that is ready to be received
-    pub(crate) fn pop(&mut self, now: Instant) -> Option<RtpPacket> {
-        self.queue.pop(now)
+    pub(crate) fn poll(&mut self, now: Instant) -> Option<RtpInboundStreamEvent> {
+        let (rtp_packet, received_at) = self.queue.poll(now)?;
+
+        Some(RtpInboundStreamEvent::ReceiveRtpPacket {
+            received_at,
+            rtp_packet,
+        })
     }
 
     pub fn stats(&self) -> RtpInboundStats {
@@ -196,4 +247,11 @@ impl RtpInboundStream {
             remote: self.remote_stats,
         }
     }
+}
+
+pub enum RtpInboundStreamEvent {
+    ReceiveRtpPacket {
+        received_at: Option<Instant>,
+        rtp_packet: RtpPacket,
+    },
 }

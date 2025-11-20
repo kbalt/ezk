@@ -39,7 +39,7 @@ impl<B: BufMut> RtpExtensionsWriter<B> {
     }
 
     pub fn finish(mut self) -> u16 {
-        let id = if self.two_byte { 0xBEDE } else { 0x0100 };
+        let id = if self.two_byte { 0x0100 } else { 0xBEDE };
 
         let padding = padding_32_bit_boundry(self.len);
         self.writer.put_bytes(0, padding);

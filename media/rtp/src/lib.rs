@@ -21,7 +21,11 @@ pub struct ExtendedSequenceNumber(pub u64);
 impl ExtendedSequenceNumber {
     pub fn increase_one(&mut self) -> SequenceNumber {
         self.0 += 1;
-        SequenceNumber((self.0 & u16::MAX as u64) as u16)
+        self.truncated()
+    }
+
+    pub fn truncated(&self) -> SequenceNumber {
+        SequenceNumber(self.0 as u16)
     }
 
     pub fn rollover_count(&self) -> u64 {
@@ -82,4 +86,18 @@ pub trait Payloader: Send + 'static {
 
 pub trait DePayloader: Send + 'static {
     fn depayload(&mut self, payload: &Bytes) -> Option<Bytes>;
+}
+
+#[test]
+fn rollover() {
+    let reference = ExtendedSequenceNumber(65535);
+
+    assert_eq!(
+        reference.guess_extended(SequenceNumber(65535)),
+        ExtendedSequenceNumber(65535)
+    );
+    assert_eq!(
+        reference.guess_extended(SequenceNumber(0)),
+        ExtendedSequenceNumber(65536)
+    );
 }

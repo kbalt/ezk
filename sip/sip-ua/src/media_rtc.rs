@@ -284,12 +284,12 @@ fn add_sender(
             tx: PollSender::new(this_tx.clone()),
         },
         codec: Codec {
-            pt: media_state.codec.send_pt,
+            pt: media_state.codec.pt.local,
             name: media_state.codec.name.clone(),
             clock_rate: media_state.codec.clock_rate,
             channels: media_state.codec.channels,
             fmtp: media_state.codec.send_fmtp.clone(),
-            dtmf_pt: media_state.codec.dtmf.as_ref().map(|dtmf| dtmf.pt),
+            dtmf_pt: media_state.codec.dtmf.as_ref().map(|dtmf| dtmf.pt.local),
         },
     }
 }
@@ -304,12 +304,12 @@ fn add_receiver(media_id: MediaId, media_state: &mut MediaState) -> MediaEvent {
             receiver: rx,
         },
         codec: Codec {
-            pt: media_state.codec.recv_pt,
+            pt: media_state.codec.pt.remote,
             name: media_state.codec.name.clone(),
             clock_rate: media_state.codec.clock_rate,
             channels: media_state.codec.channels,
             fmtp: media_state.codec.recv_fmtp.clone(),
-            dtmf_pt: media_state.codec.dtmf.as_ref().map(|dtmf| dtmf.pt),
+            dtmf_pt: media_state.codec.dtmf.as_ref().map(|dtmf| dtmf.pt.remote),
         },
     }
 }

@@ -58,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap();
 
     // Add an audio stream using the previously defined codecs
-    sdp_session.add_media(audio, Direction::SendRecv);
+    sdp_session.add_media(audio, Direction::SendRecv, None, None);
 
     let mut outbound_call = registration
         .make_call(

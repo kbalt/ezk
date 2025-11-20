@@ -32,8 +32,8 @@ fn rtcp_fb_exchange_avp() {
         false,
     );
 
-    let audio_media_id = offer_session.add_media(audio, Direction::SendRecv);
-    let video_media_id = offer_session.add_media(video, Direction::SendRecv);
+    let audio_media_id = offer_session.add_media(audio, Direction::SendRecv, None, None);
+    let video_media_id = offer_session.add_media(video, Direction::SendRecv, None, None);
 
     satisfy_transport_changes(&mut offer_session, 1000);
 
@@ -92,14 +92,14 @@ fn rtcp_fb_exchange_avp() {
 }
 
 #[test]
-fn rtcp_fb_avpf_offer_contains_pli_and_fir() {
+fn rtcp_fb_avpf_offer_contains_fb() {
     let (audio, video, mut offer_session) = make_audio_video_session(
         // DO offer AVPF
         true,
     );
 
-    let audio_media_id = offer_session.add_media(audio, Direction::SendRecv);
-    let video_media_id = offer_session.add_media(video, Direction::SendRecv);
+    let audio_media_id = offer_session.add_media(audio, Direction::SendRecv, None, None);
+    let video_media_id = offer_session.add_media(video, Direction::SendRecv, None, None);
 
     satisfy_transport_changes(&mut offer_session, 1000);
 
@@ -117,9 +117,11 @@ fn rtcp_fb_avpf_offer_contains_pli_and_fir() {
         TransportProtocol::RtpAvpf
     );
     // Video must contain PLI & FIR feedback types
-    assert_eq!(offer.media_descriptions[1].rtcp_fb.len(), 2);
-    assert!(offer.media_descriptions[1].rtcp_fb[0].kind == RtcpFeedbackKind::NackPli);
-    assert!(offer.media_descriptions[1].rtcp_fb[1].kind == RtcpFeedbackKind::CcmFir);
+    assert_eq!(offer.media_descriptions[1].rtcp_fb.len(), 4);
+    assert!(offer.media_descriptions[1].rtcp_fb[0].kind == RtcpFeedbackKind::Nack);
+    assert!(offer.media_descriptions[1].rtcp_fb[1].kind == RtcpFeedbackKind::NackPli);
+    assert!(offer.media_descriptions[1].rtcp_fb[2].kind == RtcpFeedbackKind::CcmFir);
+    assert!(offer.media_descriptions[1].rtcp_fb[3].kind == RtcpFeedbackKind::TransportCC);
 
     let (_, _, mut answer_session) = make_audio_video_session(true);
 
@@ -137,9 +139,11 @@ fn rtcp_fb_avpf_offer_contains_pli_and_fir() {
     );
 
     assert!(answer.media_descriptions[0].rtcp_fb.is_empty());
-    assert_eq!(answer.media_descriptions[1].rtcp_fb.len(), 2);
-    assert!(answer.media_descriptions[1].rtcp_fb[0].kind == RtcpFeedbackKind::NackPli);
-    assert!(answer.media_descriptions[1].rtcp_fb[1].kind == RtcpFeedbackKind::CcmFir);
+    assert_eq!(answer.media_descriptions[1].rtcp_fb.len(), 4);
+    assert!(answer.media_descriptions[1].rtcp_fb[0].kind == RtcpFeedbackKind::Nack);
+    assert!(answer.media_descriptions[1].rtcp_fb[1].kind == RtcpFeedbackKind::NackPli);
+    assert!(answer.media_descriptions[1].rtcp_fb[2].kind == RtcpFeedbackKind::CcmFir);
+    assert!(answer.media_descriptions[1].rtcp_fb[3].kind == RtcpFeedbackKind::TransportCC);
 
     offer_session.receive_sdp_answer(answer).unwrap();
 

@@ -12,7 +12,7 @@ fn dtls_srtp_offer_contains_fingerprint_and_setup_attributes() {
         ..Default::default()
     });
 
-    session.add_media(audio, Direction::SendRecv);
+    session.add_media(audio, Direction::SendRecv, None, None);
 
     satisfy_transport_changes(&mut session, 1000);
 
