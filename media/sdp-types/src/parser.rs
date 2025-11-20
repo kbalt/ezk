@@ -1,7 +1,7 @@
 use crate::{
     Bandwidth, Connection, Direction, ExtMap, Fingerprint, Fmtp, Group, IceCandidate, IceOptions,
-    IcePassword, IceUsernameFragment, Media, MediaDescription, Origin, Rtcp, RtcpFeedback, RtpMap,
-    SessionDescription, Setup, SrtpCrypto, Ssrc, Time, UnknownAttribute,
+    IcePassword, IceUsernameFragment, Media, MediaDescription, MsId, Origin, Rtcp, RtcpFeedback,
+    RtpMap, SessionDescription, Setup, SrtpCrypto, Ssrc, Time, UnknownAttribute,
 };
 use bytesstr::BytesStr;
 use internal::verbose_error_to_owned;
@@ -104,14 +104,15 @@ impl Parser {
                     rtcp_mux: false,
                     rtcp_rsize: false,
                     mid: None,
+                    msid: None,
                     rtpmap: vec![],
                     fmtp: vec![],
                     rtcp_fb: vec![],
                     ice_ufrag: None,
                     ice_pwd: None,
                     ice_candidates: vec![],
-                    ice_end_of_candidates: false,
                     // inherit extmap allow mixed attr
+                    ice_end_of_candidates: false,
                     crypto: vec![],
                     extmap: vec![],
                     extmap_allow_mixed: self.extmap_allow_mixed,
@@ -174,6 +175,15 @@ impl Parser {
             "mid" => {
                 if let Some(media_description) = self.media_descriptions.last_mut() {
                     media_description.mid = Some(BytesStr::from_parse(src.as_ref(), value.trim()));
+                }
+
+                // TODO error here ?
+            }
+            "msid" => {
+                let (_, msid) = MsId::parse(src.as_ref(), value).finish()?;
+
+                if let Some(media_description) = self.media_descriptions.last_mut() {
+                    media_description.msid = Some(msid)
                 }
 
                 // TODO error here ?

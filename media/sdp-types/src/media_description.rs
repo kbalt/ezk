@@ -2,7 +2,8 @@ use crate::connection::Connection;
 use crate::media::Media;
 use crate::{
     Direction, ExtMap, Fingerprint, Fmtp, IceCandidate, IcePassword, IceUsernameFragment,
-    MediaType, RtcpFeedback, RtpMap, Setup, SrtpCrypto, Ssrc, TransportProtocol, UnknownAttribute,
+    MediaType, MsId, RtcpFeedback, RtpMap, Setup, SrtpCrypto, Ssrc, TransportProtocol,
+    UnknownAttribute,
 };
 use crate::{Rtcp, bandwidth::Bandwidth};
 use bytesstr::BytesStr;
@@ -36,6 +37,9 @@ pub struct MediaDescription {
 
     /// Media ID (a=mid)
     pub mid: Option<BytesStr>,
+
+    /// MediaStream ID
+    pub msid: Option<MsId>,
 
     /// RTP Payload mappings
     pub rtpmap: Vec<RtpMap>,
@@ -108,6 +112,10 @@ impl fmt::Display for MediaDescription {
 
         if let Some(mid) = &self.mid {
             write!(f, "a=mid:{mid}\r\n")?;
+        }
+
+        if let Some(msid) = &self.msid {
+            write!(f, "a=msid:{msid}\r\n")?;
         }
 
         for rtpmap in &self.rtpmap {
@@ -188,6 +196,7 @@ impl MediaDescription {
             rtcp_mux: false,
             rtcp_rsize: false,
             mid: None,
+            msid: None,
             rtpmap: vec![],
             fmtp: vec![],
             rtcp_fb: vec![],
