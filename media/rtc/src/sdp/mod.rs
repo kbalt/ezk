@@ -1178,6 +1178,7 @@ impl SdpSession {
                 // only offer rtcp-rsize when avpf is also offered
                 rtcp_rsize: pending_media.use_avpf,
                 mid: Some(pending_media.mid.as_str().into()),
+                msid: None,
                 rtpmap,
                 fmtp,
                 rtcp_fb,
@@ -1340,6 +1341,7 @@ impl SdpSession {
             rtcp_mux: rtp_transport.rtcp_mux(),
             rtcp_rsize: transport.rtp_session.rtcp_rsize(),
             mid: media.mid.clone(),
+            msid: None,
             rtpmap,
             fmtp,
             rtcp_fb,
