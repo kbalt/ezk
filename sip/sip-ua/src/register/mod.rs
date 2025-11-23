@@ -47,6 +47,7 @@ impl Registration {
         let mut request = Request::new(Method::REGISTER, self.registrar.clone());
 
         request.headers.insert_type(Name::FROM, &self.from);
+        request.headers.insert_type(Name::TO, &self.to);
         request.headers.insert_named(&self.call_id);
 
         self.cseq += 1;
