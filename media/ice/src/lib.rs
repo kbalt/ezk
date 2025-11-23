@@ -1272,18 +1272,23 @@ impl IceAgent {
     /// Returns a duration after which to call [`poll`](IceAgent::poll)
     pub fn timeout(&self, now: Instant) -> Option<Duration> {
         // Next TA trigger
-        let ta = self
-            .last_ta_trigger
-            .map(|it| {
-                let poll_at = it + Duration::from_millis(50);
-                poll_at.checked_duration_since(now).unwrap_or_default()
-            })
-            .unwrap_or_default();
+        let ta = if self.remote_credentials.is_some() {
+            Some(
+                self.last_ta_trigger
+                    .map(|it| {
+                        let poll_at = it + Duration::from_millis(50);
+                        poll_at.checked_duration_since(now).unwrap_or_default()
+                    })
+                    .unwrap_or_default(),
+            )
+        } else {
+            None
+        };
 
         // Next stun binding refresh/retransmit
         let stun_bindings = self.stun_server.iter().filter_map(|b| b.timeout(now)).min();
 
-        opt_min(Some(ta), stun_bindings)
+        opt_min(ta, stun_bindings)
     }
 
     /// Returns all discovered local ice agents, does not include peer-reflexive candidates
