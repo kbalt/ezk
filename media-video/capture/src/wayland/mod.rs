@@ -16,7 +16,7 @@ pub use ashpd::{
 #[derive(Debug)]
 pub struct ScreenCaptureOptions {
     /// Embed the cursor in the video
-    pub embed_cursor: bool,
+    pub show_cursor: bool,
 
     /// Which sources to captures
     pub source_types: BitFlags<SourceType>,
@@ -31,7 +31,7 @@ pub struct ScreenCaptureOptions {
 impl Default for ScreenCaptureOptions {
     fn default() -> Self {
         Self {
-            embed_cursor: true,
+            show_cursor: true,
             source_types: SourceType::all(),
             persist_mode: PersistMode::DoNot,
             pipewire: PipewireOptions::default(),
@@ -42,7 +42,13 @@ impl Default for ScreenCaptureOptions {
 #[derive(Debug, Clone)]
 pub struct PipewireOptions {
     /// Maximum framerate to negotiate in the pipewire stream
+    ///
+    /// > Note: This does not guarantee that the framerate is exceeded and a proper frame limit can only be achieved by
+    /// >       blocking the frame callback.
     pub max_framerate: u32,
+
+    /// Set the supported pixel formats, only they will be negotiated
+    pub pixel_formats: Vec<PixelFormat>,
 
     /// Configure usage of DMA buffers
     pub dma_usage: Option<DmaUsageOptions>,
@@ -50,8 +56,16 @@ pub struct PipewireOptions {
 
 impl Default for PipewireOptions {
     fn default() -> Self {
-        Self {
+        PipewireOptions {
             max_framerate: 30,
+            pixel_formats: vec![
+                PixelFormat::NV12,
+                PixelFormat::I420,
+                PixelFormat::RGBA(RgbaSwizzle::RGBA),
+                PixelFormat::RGBA(RgbaSwizzle::BGRA),
+                PixelFormat::RGBA(RgbaSwizzle::ARGB),
+                PixelFormat::RGBA(RgbaSwizzle::ABGR),
+            ],
             dma_usage: None,
         }
     }
@@ -75,7 +89,7 @@ pub struct DmaUsageOptions {
     pub supported_modifier: Vec<u64>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum PixelFormat {
     /// 2 Plane YUV with 4:2:0 subsampling
     NV12,
@@ -85,7 +99,7 @@ pub enum PixelFormat {
     RGBA(RgbaSwizzle),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum RgbaSwizzle {
     RGBA,
     BGRA,
@@ -181,6 +195,8 @@ impl StreamHandle {
 
 #[derive(Debug, thiserror::Error)]
 pub enum StartCaptureError {
+    #[error("Config contains an empty list of pixel formats")]
+    NoPixelFormats,
     #[error(transparent)]
     DesktopPortal(#[from] ashpd::Error),
     #[error("no streams were selected")]
@@ -208,11 +224,15 @@ async fn start_screen_capture_boxed(
     options: ScreenCaptureOptions,
     on_frame: Box<dyn FnMut(CapturedFrame) -> bool + Send>,
 ) -> Result<StreamHandle, StartCaptureError> {
+    if options.pipewire.pixel_formats.is_empty() {
+        return Err(StartCaptureError::NoPixelFormats);
+    }
+
     let proxy = Screencast::new().await?;
 
     let session = proxy.create_session().await?;
 
-    let cursor_mode = if options.embed_cursor {
+    let cursor_mode = if options.show_cursor {
         CursorMode::Embedded
     } else {
         CursorMode::Hidden
