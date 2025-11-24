@@ -121,10 +121,12 @@ impl Device {
             };
 
             // Query all available queues families
-            let queue_family_properties = vk_adapter
-                .shared_instance()
-                .raw_instance()
-                .get_physical_device_queue_family_properties(vk_adapter.raw_physical_device());
+            let queue_family_properties = dbg!(
+                vk_adapter
+                    .shared_instance()
+                    .raw_instance()
+                    .get_physical_device_queue_family_properties(vk_adapter.raw_physical_device())
+            );
 
             let mut separate_encode_queue_family_index = None;
 

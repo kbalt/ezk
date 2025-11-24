@@ -1,6 +1,6 @@
 use crate::wayland::{
     CapturedDmaBuffer, CapturedDmaBufferSync, CapturedFrame, CapturedFrameBuffer,
-    CapturedFrameFormat, PipewireOptions, RgbaSwizzle,
+    CapturedFrameFormat, PipewireOptions, PixelFormat, RgbaSwizzle,
 };
 use pipewire::{
     context::ContextRc,
@@ -52,6 +52,13 @@ struct UserStreamState {
 impl UserStreamState {
     fn handle_state_changed(&mut self, _stream: &Stream, old: StreamState, new: StreamState) {
         log::debug!("stream changed: {old:?} -> {new:?}");
+
+        if old == StreamState::Streaming
+            && matches!(new, StreamState::Unconnected | StreamState::Error(..))
+            && let Some(main_loop) = self.main_loop.upgrade()
+        {
+            main_loop.quit();
+        }
     }
 
     fn handle_param_changed(&mut self, stream: &Stream, id: u32, param: Option<&Pod>) {
@@ -543,7 +550,7 @@ fn build_stream(
 
     // Add the format params with the video drm modifier property first if dma buffers are to be used
     if let Some(dma_usage) = options.dma_usage {
-        let mut format_params = format_params(options.max_framerate);
+        let mut format_params = format_params(&options.pixel_formats, options.max_framerate);
         format_params
             .properties
             .push(drm_modifier_property(&dma_usage.supported_modifier));
@@ -551,7 +558,10 @@ fn build_stream(
     }
 
     // Add format without video drm modifier property
-    connect_params.push(serialize_object(format_params(options.max_framerate)));
+    connect_params.push(serialize_object(format_params(
+        &options.pixel_formats,
+        options.max_framerate,
+    )));
 
     let mut connect_params: SmallVec<[&Pod; 2]> = connect_params
         .iter()
@@ -569,31 +579,44 @@ fn build_stream(
 }
 
 /// Build the video format capabilities which will be used to negotiate a video stream with pipewire
-fn format_params(max_framerate: u32) -> Object {
+fn format_params(pixel_formats: &[PixelFormat], max_framerate: u32) -> Object {
+    fn map(p: PixelFormat) -> &'static [VideoFormat] {
+        match p {
+            PixelFormat::NV12 => &[VideoFormat::NV12],
+            PixelFormat::I420 => &[VideoFormat::I420],
+            PixelFormat::RGBA(rgba_swizzle) => match rgba_swizzle {
+                RgbaSwizzle::RGBA => &[VideoFormat::RGBA, VideoFormat::RGBx],
+                RgbaSwizzle::BGRA => &[VideoFormat::BGRA, VideoFormat::BGRx],
+                RgbaSwizzle::ARGB => &[VideoFormat::ARGB, VideoFormat::xRGB],
+                RgbaSwizzle::ABGR => &[VideoFormat::ABGR, VideoFormat::xBGR],
+            },
+        }
+    }
+
+    let video_formats = Value::Choice(ChoiceValue::Id(Choice(
+        ChoiceFlags::empty(),
+        ChoiceEnum::Enum {
+            default: Id(map(pixel_formats[0])[0].0),
+            alternatives: pixel_formats
+                .iter()
+                .flat_map(|p| map(*p).iter().copied())
+                .map(|video_format| Id(video_format.as_raw()))
+                .collect(),
+        },
+    )));
+
+    let video_formats_property = Property {
+        key: FormatProperties::VideoFormat.as_raw(),
+        flags: PropertyFlags::empty(),
+        value: video_formats,
+    };
+
     object!(
         SpaTypes::ObjectParamFormat,
         ParamType::EnumFormat,
         property!(FormatProperties::MediaType, Id, MediaType::Video),
         property!(FormatProperties::MediaSubtype, Id, MediaSubtype::Raw),
-        property!(
-            FormatProperties::VideoFormat,
-            Choice,
-            Enum,
-            Id,
-            // Default
-            VideoFormat::NV12,
-            // Alternatives
-            VideoFormat::NV12,
-            VideoFormat::I420,
-            VideoFormat::RGBA,
-            VideoFormat::BGRA,
-            VideoFormat::ARGB,
-            VideoFormat::ABGR,
-            VideoFormat::RGBx,
-            VideoFormat::BGRx,
-            VideoFormat::xRGB,
-            VideoFormat::xBGR,
-        ),
+        video_formats_property,
         property!(
             FormatProperties::VideoSize,
             Choice,

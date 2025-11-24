@@ -1,6 +1,6 @@
 use capture::wayland::{
     BitFlag, CapturedDmaBufferSync, CapturedFrameBuffer, CapturedFrameFormat, DmaUsageOptions,
-    PersistMode, PipewireOptions, ScreenCaptureOptions, SourceType,
+    PersistMode, PipewireOptions, PixelFormat, RgbaSwizzle, ScreenCaptureOptions, SourceType,
 };
 use ezk_h264::{
     Level, Profile,
@@ -48,11 +48,12 @@ async fn vk_encode_dma_inner() {
     let (tx, mut rx) = mpsc::channel(8);
 
     let options = ScreenCaptureOptions {
-        embed_cursor: true,
+        show_cursor: true,
         source_types: SourceType::all(),
         persist_mode: PersistMode::DoNot,
         pipewire: PipewireOptions {
             max_framerate: 30,
+            pixel_formats: vec![PixelFormat::RGBA(RgbaSwizzle::BGRA)],
             dma_usage: Some(DmaUsageOptions {
                 request_sync_obj: true,
                 num_buffers: 16,
@@ -257,11 +258,12 @@ async fn vk_encode_memory_inner() {
     let (tx, mut rx) = mpsc::channel(8);
 
     let options = ScreenCaptureOptions {
-        embed_cursor: true,
+        show_cursor: true,
         source_types: SourceType::all(),
         persist_mode: PersistMode::DoNot,
         pipewire: PipewireOptions {
             max_framerate: 30,
+            pixel_formats: vec![PixelFormat::RGBA(RgbaSwizzle::BGRA)],
             dma_usage: None,
         },
     };
