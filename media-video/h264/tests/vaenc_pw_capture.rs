@@ -1,5 +1,6 @@
 use capture::wayland::{
-    BitFlag, CapturedFrameBuffer, PersistMode, PipewireOptions, ScreenCaptureOptions, SourceType,
+    BitFlag, CapturedFrameBuffer, PersistMode, PipewireOptions, PixelFormat, RgbaSwizzle,
+    ScreenCaptureOptions, SourceType,
 };
 use ezk_h264::{
     Level, Profile,
@@ -30,11 +31,12 @@ async fn va_encode_memory_inner() {
     let (tx, mut rx) = mpsc::channel(8);
 
     let options = ScreenCaptureOptions {
-        embed_cursor: true,
+        show_cursor: true,
         source_types: SourceType::all(),
         persist_mode: PersistMode::DoNot,
         pipewire: PipewireOptions {
             max_framerate: 30,
+            pixel_formats: vec![PixelFormat::RGBA(RgbaSwizzle::BGRA)],
             dma_usage: None,
         },
     };
