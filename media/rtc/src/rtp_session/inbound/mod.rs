@@ -4,7 +4,7 @@ use super::{ntp_timestamp::NtpTimestamp, report::ReportsQueue};
 use queue::InboundQueue;
 use rtp::{
     RtpPacket, Ssrc,
-    rtcp_types::{Fir, PayloadFeedback, Pli, ReportBlock, SenderReport},
+    rtcp_types::{Fir, PayloadFeedback, Pli, ReportBlock, SenderReport, TransportFeedback},
 };
 use std::time::{Duration, Instant};
 
@@ -114,8 +114,8 @@ impl RtpInboundStream {
         if self.emit_nack
             && let Some(nack) = self.queue.poll_nack(now)
         {
-            reports.add_payload_feedback(
-                PayloadFeedback::builder_owned(nack)
+            reports.add_transport_feedback(
+                TransportFeedback::builder_owned(nack)
                     .media_ssrc(self.ssrc.0)
                     .sender_ssrc(fallback_sender_ssrc.0),
             );
