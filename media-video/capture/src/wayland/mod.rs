@@ -1,5 +1,8 @@
 use ashpd::{
-    desktop::screencast::{CursorMode, Screencast},
+    desktop::{
+        Session,
+        screencast::{CursorMode, Screencast},
+    },
     enumflags2::BitFlags,
 };
 use std::{os::fd::OwnedFd, thread};
@@ -168,8 +171,8 @@ pub struct CapturedDmaBufferSync {
 #[error("Stream has been closed")]
 pub struct StreamClosedError;
 
-#[derive(Clone)]
 pub struct StreamHandle {
+    session: Session<'static, Screencast<'static>>,
     sender: pipewire::channel::Sender<stream::Command>,
 }
 
@@ -186,7 +189,11 @@ impl StreamHandle {
             .map_err(|_| StreamClosedError)
     }
 
-    pub fn close(&self) -> Result<(), StreamClosedError> {
+    pub async fn close(&self) -> Result<(), StreamClosedError> {
+        if let Err(e) = self.session.close().await {
+            log::warn!("Failed to close xdg session properly {e}");
+        }
+
         self.sender
             .send(stream::Command::Close)
             .map_err(|_| StreamClosedError)
@@ -279,5 +286,5 @@ async fn start_screen_capture_boxed(
         .await
         .map_err(|_| StartCaptureError::CaptureThreadPanicked)??;
 
-    Ok(StreamHandle { sender })
+    Ok(StreamHandle { session, sender })
 }
