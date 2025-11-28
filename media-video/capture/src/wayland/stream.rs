@@ -25,7 +25,7 @@ use smallvec::SmallVec;
 use std::{
     io::Cursor,
     os::fd::{BorrowedFd, OwnedFd, RawFd},
-    ptr,
+    ptr::{null, null_mut},
     slice::from_raw_parts,
 };
 use tokio::sync::oneshot;
@@ -99,7 +99,7 @@ impl UserStreamState {
         let video_modifier_is_set = unsafe {
             let prop = spa::sys::spa_pod_find_prop(
                 param.as_raw_ptr(),
-                ptr::null(),
+                null(),
                 spa::sys::SPA_FORMAT_VIDEO_modifier,
             );
 
@@ -141,7 +141,24 @@ impl UserStreamState {
     }
 
     fn handle_process(&mut self, stream: &Stream) {
-        let pw_buffer = unsafe { stream.dequeue_raw_buffer() };
+        let mut pw_buffer: *mut pipewire::sys::pw_buffer = null_mut();
+
+        // Get the newest buffer from the queue
+        loop {
+            let tmp = unsafe { stream.dequeue_raw_buffer() };
+
+            if tmp.is_null() {
+                break;
+            }
+
+            if !pw_buffer.is_null() {
+                unsafe {
+                    stream.queue_raw_buffer(pw_buffer);
+                }
+            }
+
+            pw_buffer = tmp;
+        }
 
         let Some(buffer) = (unsafe { pw_buffer.as_ref() }) else {
             return;
@@ -176,7 +193,10 @@ impl UserStreamState {
         } else {
             let dma_data: SmallVec<[_; 3]> = datas
                 .iter()
-                .filter(|data| data.type_ == spa::sys::SPA_DATA_DmaBuf)
+                .filter(|data| {
+                    (data.flags & spa::sys::SPA_DATA_FLAG_READABLE != 0)
+                        && data.type_ == spa::sys::SPA_DATA_DmaBuf
+                })
                 .collect();
 
             if dma_data.is_empty() {
@@ -687,6 +707,12 @@ fn dma_buffer_params(num_buffers: i32, request_sync_obj: bool) -> Object {
         key: spa::sys::SPA_PARAM_BUFFERS_buffers,
         flags: PropertyFlags::MANDATORY,
         value: Value::Int(num_buffers),
+    });
+
+    params.properties.push(Property {
+        key: spa::sys::SPA_PARAM_BUFFERS_blocks,
+        flags: PropertyFlags::MANDATORY,
+        value: Value::Int(1),
     });
 
     if request_sync_obj {
