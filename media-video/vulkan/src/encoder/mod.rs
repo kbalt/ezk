@@ -689,6 +689,13 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
     }
 }
 
+impl<C: VulkanEncCodec> Drop for VulkanEncoder<C> {
+    fn drop(&mut self) {
+        // Wait for all encode operations to complete
+        while let Ok(Some(..)) = self.wait_result() {}
+    }
+}
+
 /// Rate control parameters
 ///
 /// See [`VulkanEncoder::update_rc`]
