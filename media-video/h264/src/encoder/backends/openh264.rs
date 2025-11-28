@@ -130,7 +130,7 @@ impl OpenH264Encoder {
             openh264::encoder::FrameType::Invalid
             | openh264::encoder::FrameType::Skip
             | openh264::encoder::FrameType::IPMixed => {
-                println!("Got invalid frame type: {:?}", bitstream.frame_type());
+                log::warn!("Got invalid frame type: {:?}", bitstream.frame_type());
                 return Ok(());
             }
             openh264::encoder::FrameType::IDR => {}
