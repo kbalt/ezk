@@ -118,7 +118,7 @@ pub struct CapturedFrame {
     pub buffer: CapturedFrameBuffer,
 }
 
-/// Defines the layout of the data inside a [`CapturedFrameBuffer`]
+/// Defines the data layout inside a [`CapturedFrameBuffer`]
 #[derive(Debug)]
 pub enum CapturedFrameFormat {
     NV12 {
@@ -155,7 +155,16 @@ impl std::fmt::Debug for CapturedFrameBuffer {
 pub struct CapturedDmaBuffer {
     pub fd: OwnedFd,
     pub modifier: u64,
+    pub region: Option<CapturedDmaRegion>,
     pub sync: Option<CapturedDmaBufferSync>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CapturedDmaRegion {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Debug)]
@@ -171,24 +180,34 @@ pub struct CapturedDmaBufferSync {
 #[error("Stream has been closed")]
 pub struct StreamClosedError;
 
+/// Handle to a current capture stream
+///
+/// Dropping it does **not** end the stream.
+///
+/// To properly close a capture stream call [`StreamHandle::close`].
 pub struct StreamHandle {
     session: Session<'static, Screencast<'static>>,
     sender: pipewire::channel::Sender<stream::Command>,
 }
 
 impl StreamHandle {
+    /// Continue playing the stream.
+    ///
+    /// Should only be called after pausing the stream - created captures are automatically playing
     pub fn play(&self) -> Result<(), StreamClosedError> {
         self.sender
             .send(stream::Command::Play)
             .map_err(|_| StreamClosedError)
     }
 
+    /// Pause the stream, can be unpaused using [`StreamHandle::play`].
     pub fn pause(&self) -> Result<(), StreamClosedError> {
         self.sender
             .send(stream::Command::Pause)
             .map_err(|_| StreamClosedError)
     }
 
+    /// Gracefully close the pipewire stream and close the dbus connection.
     pub async fn close(&self) -> Result<(), StreamClosedError> {
         if let Err(e) = self.session.close().await {
             log::warn!("Failed to close xdg session properly {e}");
@@ -196,6 +215,15 @@ impl StreamHandle {
 
         self.sender
             .send(stream::Command::Close)
+            .map_err(|_| StreamClosedError)
+    }
+
+    /// Renegotiate the stream without the given DRM modifier
+    ///
+    /// All future renegotiations will not include this modifier.
+    pub fn remove_modifier(&self, modifier: u64) -> Result<(), StreamClosedError> {
+        self.sender
+            .send(stream::Command::RemoveModifier(modifier))
             .map_err(|_| StreamClosedError)
     }
 }
