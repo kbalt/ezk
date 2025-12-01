@@ -201,16 +201,16 @@ impl Input {
         device: &Device,
         video_profile_info: vk::VideoProfileInfoKHR<'_>,
         pixel_format: InputPixelFormat,
-        input_extent: vk::Extent2D,
+        #[expect(unused_variables)] input_extent: vk::Extent2D,
         encode_extent: vk::Extent2D,
         num: u32,
     ) -> Result<Vec<Input>, VulkanError> {
         use InputPixelFormat::*;
 
         match pixel_format {
-            NV12 => {
-                todo!()
-            }
+            NV12 => Err(VulkanError::InvalidArgument {
+                message: "NV12 Vulkan Image Input to VulkanEncoder is currently not supported",
+            }),
             RGBA { primaries } => {
                 let mut converter: Vec<RgbToNV12Converter> =
                     RgbToNV12Converter::create(device, primaries, encode_extent, num)?;

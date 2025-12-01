@@ -1,6 +1,6 @@
 use crate::wayland::{
-    CapturedDmaBuffer, CapturedDmaBufferSync, CapturedFrame, CapturedFrameBuffer,
-    CapturedFrameFormat, PipewireOptions, PixelFormat, RgbaSwizzle,
+    CapturedDmaBuffer, CapturedDmaBufferSync, CapturedDmaRegion, CapturedFrame,
+    CapturedFrameBuffer, CapturedFrameFormat, PipewireOptions, PixelFormat, RgbaSwizzle,
 };
 use pipewire::{
     context::ContextRc,
@@ -23,9 +23,11 @@ use pipewire::{
 };
 use smallvec::SmallVec;
 use std::{
+    cell::RefCell,
     io::Cursor,
     os::fd::{BorrowedFd, OwnedFd, RawFd},
     ptr::{null, null_mut},
+    rc::Rc,
     slice::from_raw_parts,
 };
 use tokio::sync::oneshot;
@@ -44,12 +46,52 @@ impl Drop for BufferGuard<'_> {
 struct UserStreamState {
     main_loop: MainLoopWeak,
     options: PipewireOptions,
+    has_video_modifier: bool,
 
     format: VideoInfoRaw,
     on_frame: Box<dyn FnMut(CapturedFrame) -> bool + Send>,
 }
 
 impl UserStreamState {
+    fn update_params(&mut self, stream: &Stream) {
+        if let Some(dma_options) = &self.options.dma_usage
+            && self.has_video_modifier
+        {
+            let dma_buffer_params = serialize_object(dma_buffer_params(
+                dma_options.num_buffers as i32,
+                dma_options.request_sync_obj,
+            ));
+            let sync_obj_params = serialize_object(sync_obj_params());
+            let crop_region_params = serialize_object(crop_region_param());
+
+            let mut update_params: SmallVec<[&Pod; 2]> = smallvec::SmallVec::new();
+
+            update_params
+                .push(Pod::from_bytes(&dma_buffer_params).expect("object is serialized as pod"));
+
+            if dma_options.request_sync_obj {
+                update_params
+                    .push(Pod::from_bytes(&sync_obj_params).expect("object is serialized as pod"));
+            }
+
+            update_params
+                .push(Pod::from_bytes(&crop_region_params).expect("object is serialized as pod"));
+
+            if let Err(e) = stream.update_params(&mut update_params) {
+                log::error!("Failed to update stream params: {e}");
+            }
+        } else {
+            let mem_buffer_params = serialize_object(mem_buffer_params());
+
+            let mut update_params =
+                [Pod::from_bytes(&mem_buffer_params).expect("object is serialized as pod")];
+
+            if let Err(e) = stream.update_params(&mut update_params) {
+                log::error!("Failed to update stream params: {e}");
+            }
+        }
+    }
+
     fn handle_state_changed(&mut self, _stream: &Stream, old: StreamState, new: StreamState) {
         log::debug!("stream changed: {old:?} -> {new:?}");
 
@@ -96,7 +138,7 @@ impl UserStreamState {
         );
 
         // Check explicitly if the Video modifier property has been set
-        let video_modifier_is_set = unsafe {
+        self.has_video_modifier = unsafe {
             let prop = spa::sys::spa_pod_find_prop(
                 param.as_raw_ptr(),
                 null(),
@@ -106,38 +148,7 @@ impl UserStreamState {
             !prop.is_null()
         };
 
-        if let Some(dma_options) = &self.options.dma_usage
-            && video_modifier_is_set
-        {
-            let dma_buffer_params = serialize_object(dma_buffer_params(
-                dma_options.num_buffers as i32,
-                dma_options.request_sync_obj,
-            ));
-            let sync_obj_params = serialize_object(sync_obj_params());
-
-            let mut update_params: SmallVec<[&Pod; 2]> = smallvec::SmallVec::new();
-
-            update_params
-                .push(Pod::from_bytes(&dma_buffer_params).expect("object is serialized as pod"));
-
-            if dma_options.request_sync_obj {
-                update_params
-                    .push(Pod::from_bytes(&sync_obj_params).expect("object is serialized as pod"));
-            }
-
-            if let Err(e) = stream.update_params(&mut update_params) {
-                log::error!("Failed to update stream params: {e}");
-            }
-        } else {
-            let mem_buffer_params = serialize_object(mem_buffer_params());
-
-            let mut update_params =
-                [Pod::from_bytes(&mem_buffer_params).expect("object is serialized as pod")];
-
-            if let Err(e) = stream.update_params(&mut update_params) {
-                log::error!("Failed to update stream params: {e}");
-            }
-        }
+        self.update_params(stream);
     }
 
     fn handle_process(&mut self, stream: &Stream) {
@@ -293,6 +304,25 @@ impl UserStreamState {
             _ => unreachable!(),
         };
 
+        let region = metas.iter().find_map(|meta| {
+            if meta.type_ == spa::sys::SPA_META_VideoCrop {
+                let meta = unsafe {
+                    meta.data
+                        .cast::<spa::sys::spa_meta_region>()
+                        .read_unaligned()
+                };
+
+                Some(CapturedDmaRegion {
+                    x: meta.region.position.x,
+                    y: meta.region.position.y,
+                    width: meta.region.size.width,
+                    height: meta.region.size.height,
+                })
+            } else {
+                None
+            }
+        });
+
         let sync_timeline = metas
             .iter()
             .find(|m| m.type_ == spa::sys::SPA_META_SyncTimeline);
@@ -330,6 +360,7 @@ impl UserStreamState {
             buffer: CapturedFrameBuffer::DmaBuf(CapturedDmaBuffer {
                 fd: clone_fd(dma_data[0].fd as RawFd),
                 modifier: self.format.modifier(),
+                region,
                 sync,
             }),
         }
@@ -471,6 +502,7 @@ pub(super) enum Command {
     Play,
     Pause,
     Close,
+    RemoveModifier(u64),
 }
 
 pub(super) fn start(
@@ -493,7 +525,7 @@ pub(super) fn start(
 
     let (tx, rx) = pipewire::channel::channel();
 
-    let (stream, _listener) = match build_stream(&mainloop, node_id, fd, options, role, on_frame) {
+    let data = match build_stream(&mainloop, node_id, fd, options, role, on_frame) {
         Ok(data_to_not_drop) => data_to_not_drop,
         Err(e) => {
             let _ = result_tx.send(Err(e));
@@ -503,18 +535,30 @@ pub(super) fn start(
 
     let _attach_guard = rx.attach(mainloop.loop_(), move |command| match command {
         Command::Play => {
-            if let Err(e) = stream.set_active(true) {
+            if let Err(e) = data.stream.set_active(true) {
                 log::warn!("Failed to handle Play command: {e}");
             }
         }
         Command::Pause => {
-            if let Err(e) = stream.set_active(false) {
+            if let Err(e) = data.stream.set_active(false) {
                 log::warn!("Failed to handle Pause command: {e}");
             }
         }
         Command::Close => {
-            if let Err(e) = stream.disconnect() {
+            if let Err(e) = data.stream.disconnect() {
                 log::warn!("Failed to handle Close command: {e}");
+            }
+        }
+        Command::RemoveModifier(modifier) => {
+            let mut user_data = data.user_data.borrow_mut();
+
+            if let Some(dma_usage) = &mut user_data.options.dma_usage {
+                let prev_modifier_len = dma_usage.supported_modifier.len();
+                dma_usage.supported_modifier.retain(|m| *m != modifier);
+
+                if prev_modifier_len != dma_usage.supported_modifier.len() {
+                    user_data.update_params(&data.stream);
+                }
             }
         }
     });
@@ -526,6 +570,14 @@ pub(super) fn start(
     mainloop.run();
 }
 
+struct StreamData {
+    stream: StreamRc,
+    // This is just a guard object needed to keep alive
+    #[expect(dead_code)]
+    listener: StreamListener<Rc<RefCell<UserStreamState>>>,
+    user_data: Rc<RefCell<UserStreamState>>,
+}
+
 fn build_stream(
     mainloop: &MainLoopRc,
     node_id: Option<u32>,
@@ -533,15 +585,16 @@ fn build_stream(
     options: PipewireOptions,
     role: &'static str,
     on_frame: Box<dyn FnMut(CapturedFrame) -> bool + Send>,
-) -> Result<(StreamRc, StreamListener<UserStreamState>), pipewire::Error> {
+) -> Result<StreamData, pipewire::Error> {
     let context = ContextRc::new(mainloop, None)?;
     let core = context.connect_fd_rc(fd, None)?;
-    let data = UserStreamState {
+    let user_data = Rc::new(RefCell::new(UserStreamState {
         format: Default::default(),
         main_loop: mainloop.downgrade(),
         on_frame,
         options: options.clone(),
-    };
+        has_video_modifier: false,
+    }));
 
     let stream = StreamRc::new(
         core,
@@ -554,15 +607,19 @@ fn build_stream(
     )?;
 
     let listener = stream
-        .add_local_listener_with_user_data(data)
+        .add_local_listener_with_user_data(user_data.clone())
         .state_changed(|stream, user_data, old, new| {
-            user_data.handle_state_changed(stream, old, new);
+            user_data
+                .borrow_mut()
+                .handle_state_changed(stream, old, new);
         })
         .param_changed(|stream, user_data, id, param| {
-            user_data.handle_param_changed(stream, id, param);
+            user_data
+                .borrow_mut()
+                .handle_param_changed(stream, id, param);
         })
         .process(move |stream, user_data| {
-            user_data.handle_process(stream);
+            user_data.borrow_mut().handle_process(stream);
         })
         .register()?;
 
@@ -595,7 +652,11 @@ fn build_stream(
         &mut connect_params,
     )?;
 
-    Ok((stream, listener))
+    Ok(StreamData {
+        stream,
+        listener,
+        user_data,
+    })
 }
 
 /// Build the video format capabilities which will be used to negotiate a video stream with pipewire
@@ -769,6 +830,26 @@ fn sync_obj_params() -> Object {
                 key: spa::sys::SPA_PARAM_META_size,
                 flags: PropertyFlags::empty(),
                 value: Value::Int(size_of::<spa::sys::spa_meta_sync_timeline>() as i32),
+            },
+        ]
+        .into(),
+    }
+}
+
+fn crop_region_param() -> Object {
+    Object {
+        type_: spa::sys::SPA_TYPE_OBJECT_ParamMeta,
+        id: spa::sys::SPA_PARAM_Meta,
+        properties: [
+            Property {
+                key: spa::sys::SPA_PARAM_META_type,
+                flags: PropertyFlags::empty(),
+                value: Value::Id(Id(spa::sys::SPA_META_VideoCrop)),
+            },
+            Property {
+                key: spa::sys::SPA_PARAM_META_size,
+                flags: PropertyFlags::empty(),
+                value: Value::Int(size_of::<spa::sys::spa_meta_region>() as i32),
             },
         ]
         .into(),
