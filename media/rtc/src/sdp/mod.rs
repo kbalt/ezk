@@ -1241,10 +1241,10 @@ impl SdpSession {
                     });
 
                     //TODO: transport-cc doesn't actually do anything yet, so disable for now
-                    rtcp_fb.push(RtcpFeedback {
-                        pt: RtcpFeedbackPt::Pt(pt),
-                        kind: RtcpFeedbackKind::TransportCC,
-                    });
+                    // rtcp_fb.push(RtcpFeedback {
+                    //     pt: RtcpFeedbackPt::Pt(pt),
+                    //     kind: RtcpFeedbackKind::TransportCC,
+                    // });
                 }
             }
 
