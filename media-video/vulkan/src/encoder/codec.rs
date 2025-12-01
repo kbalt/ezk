@@ -28,6 +28,7 @@ pub trait VulkanEncCodec {
         + fmt::Debug
         + Copy;
 
+    #[allow(private_interfaces)]
     fn get_encoded_video_session_parameters(
         video_session_parameters: &VideoSessionParameters,
     ) -> Vec<u8>;
@@ -57,6 +58,7 @@ impl VulkanEncCodec for H264 {
     type RateControlInfo<'a> = vk::VideoEncodeH264RateControlInfoKHR<'a>;
     type RateControlLayerInfo<'a> = vk::VideoEncodeH264RateControlLayerInfoKHR<'a>;
 
+    #[allow(private_interfaces)]
     fn get_encoded_video_session_parameters(
         video_session_parameters: &VideoSessionParameters,
     ) -> Vec<u8> {
@@ -96,6 +98,7 @@ impl VulkanEncCodec for H265 {
     type RateControlInfo<'a> = vk::VideoEncodeH265RateControlInfoKHR<'a>;
     type RateControlLayerInfo<'a> = vk::VideoEncodeH265RateControlLayerInfoKHR<'a>;
 
+    #[allow(private_interfaces)]
     fn get_encoded_video_session_parameters(
         video_session_parameters: &VideoSessionParameters,
     ) -> Vec<u8> {
