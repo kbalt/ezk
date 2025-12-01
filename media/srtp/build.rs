@@ -1,5 +1,5 @@
 use cmake::Config;
-use std::env;
+use std::{env, path::PathBuf};
 
 fn main() {
     build_and_link();
@@ -25,7 +25,7 @@ fn build_and_link() {
     let dst = Config::new("libsrtp")
         .define("ENABLE_OPENSSL", "ON")
         .define("LIBSRTP_TEST_APPS", "OFF")
-        .define("OPENSSL_ROOT_DIR", openssl_dir)
+        .define("OPENSSL_ROOT_DIR", PathBuf::from(openssl_dir).join(".."))
         .build();
 
     println!(
