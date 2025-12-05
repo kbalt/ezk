@@ -10,7 +10,7 @@ use crate::{
 use ash::vk;
 use ezk_image::{ColorInfo, ColorSpace, ImageRef, PixelFormat, YuvColorInfo};
 use smallvec::SmallVec;
-use std::{collections::VecDeque, pin::Pin};
+use std::{collections::VecDeque, pin::Pin, time::Instant};
 
 pub mod capabilities;
 pub mod codec;
@@ -108,7 +108,7 @@ pub struct VulkanEncoder<C: VulkanEncCodec> {
 
     dpb_slots: Vec<DpbSlot<C>>,
 
-    output: VecDeque<Vec<u8>>,
+    output: VecDeque<(Instant, Vec<u8>)>,
 }
 
 #[derive(Debug)]
@@ -123,7 +123,7 @@ pub struct VulkanEncodeSlot {
     index: u32,
 
     emit_parameters: bool,
-
+    submitted_at: Instant,
     input: input::Input,
 
     output_buffer: Buffer,
@@ -204,9 +204,10 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
     ) -> Result<(), VulkanError> {
         if encode_slot.emit_parameters {
             let parameters =
-                C::get_encoded_video_session_parameters(&self.video_session_parameters);
+                C::get_encoded_video_session_parameters(&self.video_session_parameters)?;
 
-            self.output.push_back(parameters);
+            self.output
+                .push_back((encode_slot.submitted_at, parameters));
         }
 
         unsafe {
@@ -216,7 +217,8 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
 
             let mapped_buffer = encode_slot.output_buffer.map(bytes_written as usize)?;
 
-            self.output.push_back(mapped_buffer.data().to_vec());
+            self.output
+                .push_back((encode_slot.submitted_at, mapped_buffer.data().to_vec()));
         }
 
         encode_slot.input.drop_borrowed_resources();
@@ -244,7 +246,7 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
 
     /// Poll for encoder results, returns `None` immediately if there's no in-flight encodings or all of them are still
     /// in progress.
-    pub fn poll_result(&mut self) -> Result<Option<Vec<u8>>, VulkanError> {
+    pub fn poll_result(&mut self) -> Result<Option<(Instant, Vec<u8>)>, VulkanError> {
         if let Some(output) = self.output.pop_front() {
             return Ok(Some(output));
         }
@@ -270,7 +272,7 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
     }
 
     /// Blocks until an encoding slot has finished, returns `None` if no slots are in-flight.
-    pub fn wait_result(&mut self) -> Result<Option<Vec<u8>>, VulkanError> {
+    pub fn wait_result(&mut self) -> Result<Option<(Instant, Vec<u8>)>, VulkanError> {
         if let Some(output) = self.output.pop_front() {
             return Ok(Some(output));
         }
@@ -299,6 +301,8 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
                 maximum: [self.max_input_extent.width, self.max_input_extent.height],
             });
         }
+
+        encode_slot.submitted_at = Instant::now();
 
         match input_data {
             InputData::Image(image) => self.copy_image_to_encode_slot(encode_slot, image),
@@ -416,7 +420,7 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
                 ];
 
                 let command_buffers = [vk::CommandBufferSubmitInfo::default()
-                    .command_buffer(encode_slot.command_buffer.command_buffer())];
+                    .command_buffer(encode_slot.command_buffer.handle())];
 
                 encode_slot.input.submit_graphics_queue_add_semaphores(
                     &mut wait_semaphores,
@@ -478,7 +482,7 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
                     .map(|d| d.encode_queue)
                     .unwrap_or(self.graphics_queue),
                 &[submit_info],
-                encode_slot.completion_fence.fence(),
+                encode_slot.completion_fence.handle(),
             )?;
 
             self.in_flight.push_back(encode_slot);

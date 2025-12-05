@@ -9,6 +9,8 @@ pub enum VulkanError {
         result: vk::Result,
     },
 
+    MissingExtension(&'static str),
+
     CannotFindMemoryType {
         memory_type_bits: u32,
         properties: vk::MemoryPropertyFlags,
@@ -41,6 +43,9 @@ impl fmt::Display for VulkanError {
                     f,
                     "Vulkan call failed with result={result}, backtrace={backtrace}"
                 )
+            }
+            VulkanError::MissingExtension(extension) => {
+                write!(f, "Missing required extensions {extension}")
             }
             VulkanError::CannotFindMemoryType {
                 memory_type_bits,

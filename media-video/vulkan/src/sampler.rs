@@ -2,13 +2,13 @@ use crate::{Device, VulkanError};
 use ash::vk;
 
 #[derive(Debug)]
-pub(crate) struct Sampler {
+pub struct Sampler {
     device: Device,
     sampler: vk::Sampler,
 }
 
 impl Sampler {
-    pub(crate) unsafe fn create(
+    pub unsafe fn create(
         device: &Device,
         create_info: &vk::SamplerCreateInfo,
     ) -> Result<Sampler, VulkanError> {
@@ -20,7 +20,7 @@ impl Sampler {
         })
     }
 
-    pub(crate) unsafe fn sampler(&self) -> vk::Sampler {
+    pub unsafe fn sampler(&self) -> vk::Sampler {
         self.sampler
     }
 }

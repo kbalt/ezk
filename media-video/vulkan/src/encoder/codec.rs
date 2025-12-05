@@ -1,4 +1,4 @@
-use crate::VideoSessionParameters;
+use crate::{VideoSessionParameters, VulkanError};
 use ash::vk;
 use std::{ffi::CStr, fmt};
 
@@ -31,7 +31,7 @@ pub trait VulkanEncCodec {
     #[allow(private_interfaces)]
     fn get_encoded_video_session_parameters(
         video_session_parameters: &VideoSessionParameters,
-    ) -> Vec<u8>;
+    ) -> Result<Vec<u8>, VulkanError>;
 }
 
 #[derive(Debug)]
@@ -61,16 +61,12 @@ impl VulkanEncCodec for H264 {
     #[allow(private_interfaces)]
     fn get_encoded_video_session_parameters(
         video_session_parameters: &VideoSessionParameters,
-    ) -> Vec<u8> {
+    ) -> Result<Vec<u8>, VulkanError> {
         let mut info = vk::VideoEncodeH264SessionParametersGetInfoKHR::default()
             .write_std_sps(true)
             .write_std_pps(true);
 
-        unsafe {
-            video_session_parameters
-                .get_encoded_video_session_parameters(&mut info)
-                .unwrap()
-        }
+        unsafe { video_session_parameters.get_encoded_video_session_parameters(&mut info) }
     }
 }
 
@@ -101,16 +97,12 @@ impl VulkanEncCodec for H265 {
     #[allow(private_interfaces)]
     fn get_encoded_video_session_parameters(
         video_session_parameters: &VideoSessionParameters,
-    ) -> Vec<u8> {
+    ) -> Result<Vec<u8>, VulkanError> {
         let mut info = vk::VideoEncodeH265SessionParametersGetInfoKHR::default()
             .write_std_sps(true)
             .write_std_pps(true)
             .write_std_vps(true);
 
-        unsafe {
-            video_session_parameters
-                .get_encoded_video_session_parameters(&mut info)
-                .unwrap()
-        }
+        unsafe { video_session_parameters.get_encoded_video_session_parameters(&mut info) }
     }
 }

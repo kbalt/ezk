@@ -2,13 +2,13 @@ use crate::{Device, VulkanError};
 use ash::vk;
 
 #[derive(Debug)]
-pub(crate) struct Fence {
+pub struct Fence {
     device: Device,
     fence: vk::Fence,
 }
 
 impl Fence {
-    pub(crate) fn create(device: &Device) -> Result<Self, VulkanError> {
+    pub fn create(device: &Device) -> Result<Self, VulkanError> {
         unsafe {
             let fence = device
                 .ash()
@@ -21,11 +21,11 @@ impl Fence {
         }
     }
 
-    pub(crate) unsafe fn fence(&self) -> vk::Fence {
+    pub unsafe fn handle(&self) -> vk::Fence {
         self.fence
     }
 
-    pub(crate) fn wait(&self, timeout: u64) -> Result<bool, VulkanError> {
+    pub fn wait(&self, timeout: u64) -> Result<bool, VulkanError> {
         unsafe {
             match self
                 .device
@@ -39,7 +39,7 @@ impl Fence {
         }
     }
 
-    pub(crate) fn reset(&self) -> Result<(), VulkanError> {
+    pub fn reset(&self) -> Result<(), VulkanError> {
         unsafe { Ok(self.device.ash().reset_fences(&[self.fence])?) }
     }
 }

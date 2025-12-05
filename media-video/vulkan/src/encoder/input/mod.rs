@@ -40,7 +40,7 @@ pub struct VulkanImageInput {
     pub release: Option<InputSync>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InputSync {
     pub semaphore: Semaphore,
     pub timeline_point: Option<u64>,
