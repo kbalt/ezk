@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::{Device, VulkanError};
 
 #[derive(Debug)]
-pub(crate) struct CommandBuffer {
+pub struct CommandBuffer {
     inner: Arc<Inner>,
     command_buffer: vk::CommandBuffer,
 }
@@ -16,7 +16,7 @@ struct Inner {
 }
 
 impl CommandBuffer {
-    pub(crate) fn create(
+    pub fn create(
         device: &Device,
         queue_family_index: u32,
         command_buffer_count: u32,
@@ -57,17 +57,17 @@ impl CommandBuffer {
         &self.inner.device
     }
 
-    pub(crate) unsafe fn command_buffer(&self) -> vk::CommandBuffer {
+    pub unsafe fn handle(&self) -> vk::CommandBuffer {
         self.command_buffer
     }
 
-    pub(crate) unsafe fn begin(
+    pub unsafe fn begin(
         &self,
         begin_info: &vk::CommandBufferBeginInfo,
     ) -> Result<RecordingCommandBuffer<'_>, vk::Result> {
         self.device()
             .ash()
-            .begin_command_buffer(self.command_buffer(), begin_info)?;
+            .begin_command_buffer(self.handle(), begin_info)?;
 
         Ok(RecordingCommandBuffer {
             command_buffer: self,
@@ -96,17 +96,17 @@ impl Drop for CommandBuffer {
 }
 
 #[derive(Debug)]
-pub(crate) struct RecordingCommandBuffer<'a> {
+pub struct RecordingCommandBuffer<'a> {
     command_buffer: &'a CommandBuffer,
     ended: bool,
 }
 
 impl RecordingCommandBuffer<'_> {
-    pub(crate) unsafe fn command_buffer(&self) -> vk::CommandBuffer {
-        self.command_buffer.command_buffer()
+    pub unsafe fn command_buffer(&self) -> vk::CommandBuffer {
+        self.command_buffer.handle()
     }
 
-    pub(crate) fn end(mut self) -> Result<(), vk::Result> {
+    pub fn end(mut self) -> Result<(), vk::Result> {
         self.ended = true;
         self.end_ref()
     }

@@ -95,8 +95,7 @@ impl UserStreamState {
     fn handle_state_changed(&mut self, _stream: &Stream, old: StreamState, new: StreamState) {
         log::debug!("stream changed: {old:?} -> {new:?}");
 
-        if old == StreamState::Streaming
-            && matches!(new, StreamState::Unconnected | StreamState::Error(..))
+        if matches!(new, StreamState::Unconnected | StreamState::Error(..))
             && let Some(main_loop) = self.main_loop.upgrade()
         {
             main_loop.quit();
@@ -772,8 +771,8 @@ fn dma_buffer_params(num_buffers: i32, request_sync_obj: bool) -> Object {
 
     params.properties.push(Property {
         key: spa::sys::SPA_PARAM_BUFFERS_blocks,
-        flags: PropertyFlags::MANDATORY,
-        value: Value::Int(1),
+        flags: PropertyFlags::empty(),
+        value: Value::Int(if request_sync_obj { 3 } else { 1 }),
     });
 
     if request_sync_obj {

@@ -4,7 +4,7 @@ use crate::{DescriptorSetLayout, Device, ShaderModule, VulkanError};
 use ash::vk;
 
 #[derive(Debug, Clone)]
-pub(crate) struct PipelineLayout {
+pub struct PipelineLayout {
     inner: Arc<PipelineLayoutInner>,
 }
 
@@ -15,7 +15,7 @@ struct PipelineLayoutInner {
 }
 
 impl PipelineLayout {
-    pub(crate) fn create(
+    pub fn create(
         device: &Device,
         descriptor_set_layout: &DescriptorSetLayout,
     ) -> Result<PipelineLayout, VulkanError> {
@@ -31,7 +31,7 @@ impl PipelineLayout {
         })
     }
 
-    pub(crate) unsafe fn pipeline_layout(&self) -> vk::PipelineLayout {
+    pub unsafe fn pipeline_layout(&self) -> vk::PipelineLayout {
         self.inner.pipeline_layout
     }
 }
@@ -48,14 +48,14 @@ impl Drop for PipelineLayoutInner {
 }
 
 #[derive(Debug)]
-pub(crate) struct Pipeline {
+pub struct Pipeline {
     _shader_module: ShaderModule,
     layout: PipelineLayout,
     pipeline: vk::Pipeline,
 }
 
 impl Pipeline {
-    pub(crate) fn create(
+    pub fn create(
         device: &Device,
         layout: PipelineLayout,
         shader_module: ShaderModule,
@@ -101,11 +101,11 @@ impl Pipeline {
             .collect())
     }
 
-    pub(crate) unsafe fn pipeline_layout(&self) -> vk::PipelineLayout {
+    pub unsafe fn pipeline_layout(&self) -> vk::PipelineLayout {
         self.layout.pipeline_layout()
     }
 
-    pub(crate) unsafe fn pipeline(&self) -> vk::Pipeline {
+    pub unsafe fn pipeline(&self) -> vk::Pipeline {
         self.pipeline
     }
 }

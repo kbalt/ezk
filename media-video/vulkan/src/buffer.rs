@@ -8,7 +8,7 @@ use ash::vk;
 use crate::{Device, VulkanError};
 
 #[derive(Debug)]
-pub(crate) struct Buffer<T = u8> {
+pub struct Buffer<T = u8> {
     device: Device,
     buffer: vk::Buffer,
     memory: vk::DeviceMemory,
@@ -17,7 +17,7 @@ pub(crate) struct Buffer<T = u8> {
 }
 
 impl<T> Buffer<T> {
-    pub(crate) unsafe fn create(
+    pub unsafe fn create(
         device: &Device,
         create_info: &vk::BufferCreateInfo<'_>,
     ) -> Result<Self, VulkanError> {
@@ -56,16 +56,16 @@ impl<T> Buffer<T> {
         })
     }
 
-    pub(crate) unsafe fn buffer(&self) -> vk::Buffer {
+    pub unsafe fn buffer(&self) -> vk::Buffer {
         self.buffer
     }
 
     #[allow(clippy::len_without_is_empty)]
-    pub(crate) fn capacity(&self) -> usize {
+    pub fn capacity(&self) -> usize {
         self.capacity
     }
 
-    pub(crate) fn map(&mut self, len: usize) -> Result<MappedBuffer<'_, T>, VulkanError> {
+    pub fn map(&mut self, len: usize) -> Result<MappedBuffer<'_, T>, VulkanError> {
         if len == 0 {
             return Err(VulkanError::InvalidArgument {
                 message: "Cannot map buffer with size 0",
@@ -105,18 +105,18 @@ impl<T> Drop for Buffer<T> {
 }
 
 #[derive(Debug)]
-pub(crate) struct MappedBuffer<'a, T> {
+pub struct MappedBuffer<'a, T> {
     buffer: &'a mut Buffer<T>,
     ptr: *mut T,
     len: usize,
 }
 
 impl<'a, T> MappedBuffer<'a, T> {
-    pub(crate) fn data(&self) -> &'a [T] {
+    pub fn data(&self) -> &'a [T] {
         unsafe { from_raw_parts(self.ptr.cast(), self.len) }
     }
 
-    pub(crate) fn data_mut(&mut self) -> &'a mut [T] {
+    pub fn data_mut(&mut self) -> &'a mut [T] {
         unsafe { from_raw_parts_mut(self.ptr.cast(), self.len) }
     }
 }

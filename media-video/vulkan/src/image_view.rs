@@ -24,11 +24,11 @@ impl ImageView {
         })
     }
 
-    pub(crate) fn image(&self) -> &Image {
+    pub fn image(&self) -> &Image {
         &self.image
     }
 
-    pub(crate) unsafe fn handle(&self) -> vk::ImageView {
+    pub unsafe fn handle(&self) -> vk::ImageView {
         self.image_view
     }
 

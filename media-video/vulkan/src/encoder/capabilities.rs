@@ -9,7 +9,7 @@ use crate::{
     image::ImageMemoryBarrier,
 };
 use ash::vk;
-use std::{collections::VecDeque, mem::zeroed, pin::Pin};
+use std::{collections::VecDeque, mem::zeroed, pin::Pin, time::Instant};
 
 #[derive(Debug, thiserror::Error)]
 pub enum VulkanEncoderCapabilitiesError {
@@ -166,6 +166,8 @@ impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
             encode_slots.push(VulkanEncodeSlot {
                 index,
                 emit_parameters: false,
+                // Fake placeholder value
+                submitted_at: Instant::now(),
                 input: inputs.pop().unwrap(),
                 output_buffer,
                 command_buffer: command_buffers.pop().unwrap(),
@@ -221,12 +223,12 @@ impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
 
             recording.end()?;
 
-            let command_buffers = [command_buffer.command_buffer()];
+            let command_buffers = [command_buffer.handle()];
             let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
 
             device
                 .ash()
-                .queue_submit(encode_queue, &[submit_info], fence.fence())?;
+                .queue_submit(encode_queue, &[submit_info], fence.handle())?;
 
             fence.wait(u64::MAX)?;
         };

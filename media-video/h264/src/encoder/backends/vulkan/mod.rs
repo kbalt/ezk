@@ -17,6 +17,7 @@ use std::{
     mem::{take, zeroed},
     pin::Pin,
     ptr::null,
+    time::Instant,
 };
 use vulkan::{
     Device, PhysicalDevice, VulkanError,
@@ -323,11 +324,11 @@ impl VkH264Encoder {
         Ok(())
     }
 
-    pub fn poll_result(&mut self) -> Result<Option<Vec<u8>>, VulkanError> {
+    pub fn poll_result(&mut self) -> Result<Option<(Instant, Vec<u8>)>, VulkanError> {
         self.encoder.poll_result()
     }
 
-    pub fn wait_result(&mut self) -> Result<Option<Vec<u8>>, VulkanError> {
+    pub fn wait_result(&mut self) -> Result<Option<(Instant, Vec<u8>)>, VulkanError> {
         self.encoder.wait_result()
     }
 

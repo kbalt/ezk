@@ -175,7 +175,8 @@ impl Device {
                 .context("Failed to open WGPU device")?;
 
             let graphics_queue_family_index = device.device.queue_family_index();
-            let encode_queue_family_index = separate_encode_queue_family_index.unwrap(); // TODO
+            let encode_queue_family_index = separate_encode_queue_family_index
+                .context("Device does not have a encode queue")?;
 
             let (wgpu_device, wgpu_queue) = adapter
                 .create_device_from_hal(
