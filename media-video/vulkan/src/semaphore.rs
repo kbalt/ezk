@@ -1,37 +1,75 @@
-use std::os::fd::{AsRawFd, OwnedFd};
-
 use crate::{Device, VulkanError};
 use ash::vk;
+use std::{
+    os::fd::{AsRawFd, OwnedFd},
+    sync::Arc,
+};
+
+#[derive(Debug, Clone)]
+pub struct Semaphore {
+    inner: Arc<Inner>,
+}
 
 #[derive(Debug)]
-pub struct Semaphore {
+struct Inner {
     device: Device,
-    semaphore: vk::Semaphore,
+    handle: vk::Semaphore,
 }
 
 impl Semaphore {
-    pub(crate) fn create(device: &Device) -> Result<Self, VulkanError> {
+    pub fn create(device: &Device) -> Result<Self, VulkanError> {
         unsafe {
-            let semaphore = device
+            let handle = device
                 .ash()
                 .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)?;
 
-            Ok(Self {
-                device: device.clone(),
-                semaphore,
+            Ok(Semaphore {
+                inner: Arc::new(Inner {
+                    device: device.clone(),
+                    handle,
+                }),
+            })
+        }
+    }
+
+    pub fn create_timeline(device: &Device) -> Result<Self, VulkanError> {
+        if !device.enabled_extensions().timeline_semaphore {
+            return Err(VulkanError::MissingExtension("timeline_semaphore"));
+        }
+
+        unsafe {
+            let mut type_create_info =
+                vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);
+            let create_info = vk::SemaphoreCreateInfo::default().push_next(&mut type_create_info);
+
+            let handle = device.ash().create_semaphore(&create_info, None)?;
+
+            Ok(Semaphore {
+                inner: Arc::new(Inner {
+                    device: device.clone(),
+                    handle,
+                }),
             })
         }
     }
 
     pub unsafe fn import_timeline_fd(device: &Device, fd: OwnedFd) -> Result<Self, VulkanError> {
+        if !device.enabled_extensions().timeline_semaphore {
+            return Err(VulkanError::MissingExtension("timeline_semaphore"));
+        }
+
+        if !device.enabled_extensions().external_semaphore_fd {
+            return Err(VulkanError::MissingExtension("external_semaphore_fd"));
+        }
+
         let mut type_create_info =
             vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);
         let create_info = vk::SemaphoreCreateInfo::default().push_next(&mut type_create_info);
 
-        let semaphore = device.ash().create_semaphore(&create_info, None)?;
+        let handle = device.ash().create_semaphore(&create_info, None)?;
 
         let import_semaphore_fd_info = vk::ImportSemaphoreFdInfoKHR::default()
-            .semaphore(semaphore)
+            .semaphore(handle)
             .handle_type(vk::ExternalSemaphoreHandleTypeFlags::OPAQUE_FD)
             .fd(fd.as_raw_fd());
 
@@ -41,21 +79,23 @@ impl Semaphore {
         // Ownership of the fd transferred to the vulkan driver, forget about it
         std::mem::forget(fd);
 
-        Ok(Self {
-            device: device.clone(),
-            semaphore,
+        Ok(Semaphore {
+            inner: Arc::new(Inner {
+                device: device.clone(),
+                handle,
+            }),
         })
     }
 
-    pub(crate) unsafe fn handle(&self) -> vk::Semaphore {
-        self.semaphore
+    pub unsafe fn handle(&self) -> vk::Semaphore {
+        self.inner.handle
     }
 }
 
-impl Drop for Semaphore {
+impl Drop for Inner {
     fn drop(&mut self) {
         unsafe {
-            self.device.ash().destroy_semaphore(self.semaphore, None);
+            self.device.ash().destroy_semaphore(self.handle, None);
         }
     }
 }

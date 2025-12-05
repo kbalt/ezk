@@ -113,6 +113,7 @@ async fn vk_encode_dma_inner() {
                 offset as u64,
                 stride as u64,
                 buffer.modifier,
+                vk::Format::R8G8B8A8_UNORM,
                 vk::ImageUsageFlags::SAMPLED,
             )
         }
@@ -230,14 +231,14 @@ async fn vk_encode_dma_inner() {
             .unwrap();
         println!("Took: {:?}", start.elapsed());
 
-        while let Some(buf) = encoder.poll_result().unwrap() {
+        while let Some((_, buf)) = encoder.poll_result().unwrap() {
             println!("buf: {}", buf.len());
 
             file.write_all(&buf).unwrap();
         }
     }
 
-    while let Some(buf) = encoder.wait_result().unwrap() {
+    while let Some((_, buf)) = encoder.wait_result().unwrap() {
         file.write_all(&buf).unwrap();
     }
 }
@@ -359,12 +360,12 @@ async fn vk_encode_memory_inner() {
         let start = Instant::now();
         encoder.encode_frame(InputData::Image(&image)).unwrap();
         println!("Took: {:?}", start.elapsed());
-        while let Some(buf) = encoder.poll_result().unwrap() {
+        while let Some((_, buf)) = encoder.poll_result().unwrap() {
             file.write_all(&buf).unwrap();
         }
     }
 
-    while let Some(buf) = encoder.wait_result().unwrap() {
+    while let Some((_, buf)) = encoder.wait_result().unwrap() {
         file.write_all(&buf).unwrap();
     }
 }
