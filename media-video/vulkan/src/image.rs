@@ -17,6 +17,7 @@ struct Inner {
     image: vk::Image,
     memory: vk::DeviceMemory,
     extent: vk::Extent3D,
+    usage: vk::ImageUsageFlags,
 
     state: Mutex<SmallVec<[State; 1]>>,
 }
@@ -29,7 +30,7 @@ struct State {
 }
 
 impl Image {
-    pub(crate) unsafe fn create(
+    pub unsafe fn create(
         device: &Device,
         create_info: &vk::ImageCreateInfo<'_>,
     ) -> Result<Self, VulkanError> {
@@ -52,6 +53,7 @@ impl Image {
                 image,
                 memory,
                 extent: create_info.extent,
+                usage: create_info.usage,
                 state: Mutex::new(smallvec::smallvec![
                     State {
                         current_layout: create_info.initial_layout,
@@ -73,6 +75,7 @@ impl Image {
         offset: vk::DeviceSize,
         stride: vk::DeviceSize,
         modifier: u64,
+        format: vk::Format,
         usage: vk::ImageUsageFlags,
     ) -> Result<Image, VulkanError> {
         Image::import_dma_fd(
@@ -83,7 +86,7 @@ impl Image {
             &[offset],
             &[stride],
             modifier,
-            vk::Format::R8G8B8A8_UNORM,
+            format,
             usage,
         )
     }
@@ -183,6 +186,7 @@ impl Image {
                 image,
                 memory,
                 extent,
+                usage,
                 state: Mutex::new(smallvec::smallvec![State {
                     current_layout: vk::ImageLayout::UNDEFINED,
                     last_access: vk::AccessFlags2::NONE,
@@ -201,7 +205,7 @@ impl Image {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn cmd_memory_barrier(
+    pub fn cmd_memory_barrier(
         &self,
         command_buffer: &RecordingCommandBuffer<'_>,
         info: ImageMemoryBarrier,
@@ -246,21 +250,27 @@ impl Image {
             self.inner
                 .device
                 .ash()
-                .cmd_pipeline_barrier2(command_buffer.command_buffer(), &dependency_info)
-        };
+                .cmd_pipeline_barrier2(command_buffer.command_buffer(), &dependency_info);
+        }
     }
 
-    pub unsafe fn to_wgpu_texture_hardcoded_rgba8(&self, device: &wgpu::Device) -> wgpu::Texture {
-        // TODO: most of this is wrong and hardcoded
-
-        let this = self.clone();
-
+    /// Create a [`wgpu::Texture`] handle from this Image
+    ///
+    /// # Safety
+    ///
+    /// - Image must be created from the same Device as passed into as parameter
+    /// - Image must be format `R8G8B8A8_UNORM`
+    /// - Image must have have one mip level
+    /// - Image must have a sample count of 1
+    /// - Image must be 2D
+    pub unsafe fn to_rgba8_wgpu_texture(&self, device: &wgpu::Device) -> wgpu::Texture {
         let size = wgpu::Extent3d {
             width: self.inner.extent.width,
             height: self.inner.extent.height,
             depth_or_array_layers: self.inner.extent.depth,
         };
 
+        let this = self.clone();
         let hal_texture = device
             .as_hal::<wgpu::hal::vulkan::Api>()
             .unwrap()
@@ -275,10 +285,36 @@ impl Image {
                     format: wgpu::TextureFormat::Rgba8Unorm,
                     usage: wgpu::TextureUses::UNKNOWN,
                     memory_flags: wgpu::hal::MemoryFlags::empty(),
-                    view_formats: vec![wgpu::TextureFormat::Rgba8Unorm],
+                    view_formats: vec![],
                 },
                 Some(Box::new(|| drop(this))),
             );
+
+        let mut usage = wgpu::TextureUsages::empty();
+
+        if self.inner.usage.contains(vk::ImageUsageFlags::TRANSFER_SRC) {
+            usage.insert(wgpu::TextureUsages::COPY_SRC);
+        }
+
+        if self.inner.usage.contains(vk::ImageUsageFlags::TRANSFER_DST) {
+            usage.insert(wgpu::TextureUsages::COPY_DST);
+        }
+
+        if self.inner.usage.contains(vk::ImageUsageFlags::SAMPLED) {
+            usage.insert(wgpu::TextureUsages::TEXTURE_BINDING);
+        }
+
+        if self.inner.usage.contains(vk::ImageUsageFlags::STORAGE) {
+            usage.insert(wgpu::TextureUsages::STORAGE_BINDING);
+        }
+
+        if self
+            .inner
+            .usage
+            .contains(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+        {
+            usage.insert(wgpu::TextureUsages::RENDER_ATTACHMENT);
+        }
 
         device.create_texture_from_hal::<wgpu::hal::vulkan::Api>(
             hal_texture,
@@ -289,10 +325,8 @@ impl Image {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
-                // TODO: this is wrong!
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
+                usage,
+                view_formats: &[],
             },
         )
     }
@@ -308,7 +342,7 @@ impl Drop for Inner {
 }
 
 #[derive(Debug)]
-pub(crate) struct ImageMemoryBarrier {
+pub struct ImageMemoryBarrier {
     dst: (vk::ImageLayout, vk::PipelineStageFlags2, vk::AccessFlags2),
     src: Option<(vk::ImageLayout, vk::PipelineStageFlags2, vk::AccessFlags2)>,
 
@@ -317,7 +351,7 @@ pub(crate) struct ImageMemoryBarrier {
 }
 
 impl ImageMemoryBarrier {
-    pub(crate) fn dst(
+    pub fn dst(
         new_layout: vk::ImageLayout,
         dst_stage_mask: vk::PipelineStageFlags2,
         dst_access_flags: vk::AccessFlags2,
@@ -330,7 +364,7 @@ impl ImageMemoryBarrier {
         }
     }
 
-    pub(crate) fn src(
+    pub fn src(
         mut self,
         old_layout: vk::ImageLayout,
         src_stage_mask: vk::PipelineStageFlags2,
