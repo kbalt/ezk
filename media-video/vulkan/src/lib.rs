@@ -28,25 +28,26 @@ mod video_feedback_query_pool;
 mod video_session;
 mod video_session_parameters;
 
+pub use buffer::Buffer;
+pub use command_buffer::{CommandBuffer, RecordingCommandBuffer};
+pub use descriptor_set::{DescriptorSet, DescriptorSetLayout};
 pub use device::Device;
 pub use error::VulkanError;
-pub use image::Image;
+pub use fence::Fence;
+pub use image::{Image, ImageMemoryBarrier};
 pub use image_view::ImageView;
 pub use instance::Instance;
 pub use physical_device::PhysicalDevice;
+pub use pipeline::{Pipeline, PipelineLayout};
+pub use sampler::Sampler;
 pub use semaphore::Semaphore;
+pub use shader_module::ShaderModule;
 
 // reexport ash for convenience
 pub use ash;
 
-pub(crate) use buffer::Buffer;
-pub(crate) use command_buffer::{CommandBuffer, RecordingCommandBuffer};
-pub(crate) use descriptor_set::{DescriptorSet, DescriptorSetLayout};
 pub(crate) use dpb::create_dpb;
-pub(crate) use fence::Fence;
-pub(crate) use pipeline::{Pipeline, PipelineLayout};
-pub(crate) use sampler::Sampler;
-pub(crate) use shader_module::ShaderModule;
+
 pub(crate) use video_feedback_query_pool::VideoFeedbackQueryPool;
 pub(crate) use video_session::VideoSession;
 pub(crate) use video_session_parameters::VideoSessionParameters;
