@@ -34,6 +34,7 @@ async fn va_encode_memory_inner() {
         show_cursor: true,
         source_types: SourceType::all(),
         persist_mode: PersistMode::DoNot,
+        restore_token: None,
         pipewire: PipewireOptions {
             max_framerate: 30,
             pixel_formats: vec![PixelFormat::RGBA(RgbaSwizzle::BGRA)],
