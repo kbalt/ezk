@@ -1,2 +1,4 @@
-#[cfg(target_os = "linux")]
+#[cfg(target_family = "unix")]
+pub mod pipewire;
+#[cfg(target_family = "unix")]
 pub mod wayland;
