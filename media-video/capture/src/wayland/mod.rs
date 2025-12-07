@@ -27,16 +27,20 @@ pub struct ScreenCaptureOptions {
     /// Screen capture permission persistence
     pub persist_mode: PersistMode,
 
+    /// Restore token to restore previous capture
+    pub restore_token: Option<String>,
+
     /// Pipewire specific options
     pub pipewire: PipewireOptions,
 }
 
 impl Default for ScreenCaptureOptions {
     fn default() -> Self {
-        Self {
+        ScreenCaptureOptions {
             show_cursor: true,
             source_types: SourceType::all(),
             persist_mode: PersistMode::DoNot,
+            restore_token: None,
             pipewire: PipewireOptions::default(),
         }
     }
@@ -187,6 +191,7 @@ pub struct StreamClosedError;
 /// To properly close a capture stream call [`StreamHandle::close`].
 pub struct StreamHandle {
     session: Session<'static, Screencast<'static>>,
+    restore_token: Option<String>,
     sender: pipewire::channel::Sender<stream::Command>,
 }
 
@@ -225,6 +230,11 @@ impl StreamHandle {
         self.sender
             .send(stream::Command::RemoveModifier(modifier))
             .map_err(|_| StreamClosedError)
+    }
+
+    /// Get the restore token
+    pub fn restore_token(&self) -> Option<&str> {
+        self.restore_token.as_deref()
     }
 }
 
@@ -279,12 +289,14 @@ async fn start_screen_capture_boxed(
             cursor_mode,
             options.source_types,
             false,
-            None,
+            options.restore_token.as_deref(),
             options.persist_mode,
         )
         .await?;
 
     let response = proxy.start(&session, None).await?.response()?;
+
+    let restore_token = response.restore_token();
 
     let stream = response
         .streams()
@@ -314,5 +326,9 @@ async fn start_screen_capture_boxed(
         .await
         .map_err(|_| StartCaptureError::CaptureThreadPanicked)??;
 
-    Ok(StreamHandle { session, sender })
+    Ok(StreamHandle {
+        session,
+        restore_token: restore_token.map(|s| s.to_owned()),
+        sender,
+    })
 }
