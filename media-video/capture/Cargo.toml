@@ -12,7 +12,7 @@ thiserror = "2"
 tokio = { version = "1", features = ["sync"] }
 smallvec = "1"
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(target_family = "unix")'.dependencies]
 ashpd = { version = "0.12", default-features = false, features = ["async-std"] }
 pipewire = { version = "0.9", features = ["v0_3_33", "v0_3_44"] }
 
