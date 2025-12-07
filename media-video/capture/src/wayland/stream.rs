@@ -709,8 +709,8 @@ fn format_params(pixel_formats: &[PixelFormat], max_framerate: u32) -> Object {
             },
             // Min
             Rectangle {
-                width: 1,
-                height: 1
+                width: 16,
+                height: 16
             },
             // Max
             Rectangle {
@@ -769,11 +769,11 @@ fn dma_buffer_params(num_buffers: i32, request_sync_obj: bool) -> Object {
         value: Value::Int(num_buffers),
     });
 
-    params.properties.push(Property {
-        key: spa::sys::SPA_PARAM_BUFFERS_blocks,
-        flags: PropertyFlags::empty(),
-        value: Value::Int(if request_sync_obj { 3 } else { 1 }),
-    });
+    // params.properties.push(Property {
+    //     key: spa::sys::SPA_PARAM_BUFFERS_blocks,
+    //     flags: PropertyFlags::empty(),
+    //     value: Value::Int(if request_sync_obj { 3 } else { 1 }),
+    // });
 
     if request_sync_obj {
         params.properties.push(Property {

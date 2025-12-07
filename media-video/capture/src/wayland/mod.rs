@@ -309,7 +309,7 @@ async fn start_screen_capture_boxed(
     let (result_tx, result_rx) = oneshot::channel();
 
     thread::Builder::new()
-        .name("pipewire-capture".into())
+        .name("pipewire-video-capture".into())
         .spawn(move || {
             stream::start(
                 Some(node_id),
