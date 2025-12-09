@@ -11,6 +11,7 @@ log = "0.4"
 thiserror = "2"
 tokio = { version = "1", features = ["sync"] }
 smallvec = "1"
+slotmap = "1"
 
 [target.'cfg(target_family = "unix")'.dependencies]
 ashpd = { version = "0.12", default-features = false, features = ["async-std"] }
