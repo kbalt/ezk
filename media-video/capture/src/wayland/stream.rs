@@ -219,9 +219,8 @@ impl UserStreamState {
             // check that the fd of all dma buf's are the same, as different ones are currently not supported
             if dma_data.iter().any(|data| data.fd != first_data.fd) {
                 log::warn!(
-                    "Got dma buffers with different fds, discarding as this is not supported"
+                    "Got dma buffers with different fds, not currently sure how to handle this scenario"
                 );
-                return;
             }
 
             self.handle_dma_data(metas, datas, dma_data)
