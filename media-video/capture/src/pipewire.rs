@@ -1,4 +1,5 @@
 use pipewire::{
+    Error, channel,
     context::ContextRc,
     core::CoreRc,
     keys::{APP_NAME, MEDIA_CLASS, NODE_DESCRIPTION, NODE_NAME, NODE_NICK},
@@ -8,20 +9,24 @@ use pipewire::{
     spa::{
         param::{
             ParamType,
-            audio::{AudioFormat, AudioInfoRaw},
+            audio::AudioInfoRaw,
             format::{MediaSubtype, MediaType},
         },
         pod::{Object, Pod, Value, serialize::PodSerializer},
         utils::{Direction, SpaTypes},
     },
-    stream::{self, Stream, StreamFlags, StreamRc},
+    stream::{Stream, StreamFlags, StreamListener, StreamRc},
     types::ObjectType,
 };
+use slotmap::{DefaultKey, SlotMap};
 use std::{cell::RefCell, io::Cursor, rc::Rc, thread};
 
-#[derive(Debug, thiserror::Error)]
-#[error("Pipewire thread is unexpectedly gone")]
-pub struct PipeWireThreadGone;
+pub use pipewire::spa::param::audio::AudioFormat;
+
+pub trait NodeListener: Send + 'static {
+    fn node_added(&mut self, info: NodeInfo);
+    fn node_removed(&mut self, id: u32);
+}
 
 #[derive(Debug)]
 pub struct NodeInfo {
@@ -43,27 +48,36 @@ pub enum MediaClass {
     AudioStreamOutput,
 }
 
-pub trait NodeListener: Send + 'static {
-    fn node_added(&mut self, info: NodeInfo);
-    fn node_removed(&mut self, id: u32);
-}
-
 pub trait AudioConsumer: Send + 'static {
     fn set_format(&mut self, sample_rate: u32, channels: u32, format: AudioFormat);
     fn on_frame(&mut self, data: &[u8]) -> bool;
 }
 
 pub struct PipeWireAudioCapture {
-    sender: pipewire::channel::Sender<Command>,
+    sender: channel::Sender<Command>,
 }
+
+impl Drop for PipeWireAudioCapture {
+    fn drop(&mut self) {
+        let _ = self.sender.send(Command::Destroy);
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("Pipewire thread is unexpectedly gone")]
+pub struct PipeWireThreadGone;
 
 impl PipeWireAudioCapture {
     pub fn spawn() -> PipeWireAudioCapture {
-        let (sender, receiver) = pipewire::channel::channel();
+        let (sender, receiver) = channel::channel();
 
-        thread::spawn(move || PipewireThread::run(receiver));
+        let handle = PipeWireAudioCapture {
+            sender: sender.clone(),
+        };
 
-        PipeWireAudioCapture { sender }
+        thread::spawn(move || PipeWireThread::run(sender, receiver));
+
+        handle
     }
 
     pub fn add_listener(&self, listener: impl NodeListener) -> Result<(), PipeWireThreadGone> {
@@ -92,12 +106,6 @@ impl PipeWireAudioCapture {
     }
 }
 
-impl Drop for PipeWireAudioCapture {
-    fn drop(&mut self) {
-        let _ = self.sender.send(Command::Destroy);
-    }
-}
-
 enum Command {
     AddListener(Box<dyn NodeListener>),
     Connect {
@@ -107,33 +115,39 @@ enum Command {
         channels: u32,
         format: AudioFormat,
     },
+    RemoveStream(DefaultKey),
+
     Destroy,
 }
 
-struct PipewireThread {
+struct PipeWireThread {
     main_loop: MainLoopRc,
-    context: ContextRc,
     core: CoreRc,
     registry: RegistryRc,
 
+    sender: channel::Sender<Command>,
+
     registry_listener: Vec<registry::Listener>,
-    stream_listener: Vec<stream::StreamListener<UserStreamState>>,
+    streams: SlotMap<DefaultKey, (StreamRc, StreamListener<StreamState>)>,
 }
 
-impl PipewireThread {
-    fn run(receiver: pipewire::channel::Receiver<Command>) {
-        let main_loop = MainLoopRc::new(None).unwrap();
-        let context = ContextRc::new(&main_loop, None).unwrap();
-        let core = context.connect_rc(None).unwrap();
-        let registry = core.get_registry_rc().unwrap();
+impl PipeWireThread {
+    fn run(
+        sender: channel::Sender<Command>,
+        receiver: channel::Receiver<Command>,
+    ) -> Result<(), Error> {
+        let main_loop = MainLoopRc::new(None)?;
+        let context = ContextRc::new(&main_loop, None)?;
+        let core = context.connect_rc(None)?;
+        let registry = core.get_registry_rc()?;
 
-        let this = RefCell::new(PipewireThread {
+        let this = RefCell::new(PipeWireThread {
             main_loop: main_loop.clone(),
-            context,
             core,
             registry,
             registry_listener: Vec::new(),
-            stream_listener: Vec::new(),
+            streams: SlotMap::new(),
+            sender,
         });
 
         let _attached = receiver.attach(main_loop.loop_(), move |command| match command {
@@ -147,8 +161,24 @@ impl PipewireThread {
                 channels,
                 format,
             } => {
-                this.borrow_mut()
-                    .connect(node_id, consumer, sample_rate, channels, format);
+                if let Err(e) =
+                    this.borrow_mut()
+                        .connect(node_id, consumer, sample_rate, channels, format)
+                {
+                    log::error!("Failed to connect to node_id: {node_id}, {e}");
+                }
+            }
+            Command::RemoveStream(key) => {
+                if let Some((stream, listener)) = this.borrow_mut().streams.remove(key) {
+                    if let Err(e) = stream.set_active(false) {
+                        log::warn!("Failed to set stream to inactive, {e}");
+                    }
+                    if let Err(e) = stream.disconnect() {
+                        log::warn!("Failed to disconnect stream, {e}");
+                    };
+
+                    listener.unregister();
+                }
             }
             Command::Destroy => {
                 this.borrow_mut().main_loop.quit();
@@ -156,6 +186,8 @@ impl PipewireThread {
         });
 
         main_loop.run();
+
+        Ok(())
     }
 
     fn add_listener(&mut self, listener: Box<dyn NodeListener>) {
@@ -204,7 +236,7 @@ impl PipewireThread {
         sample_rate: u32,
         channels: u32,
         format: AudioFormat,
-    ) {
+    ) -> Result<(), Error> {
         let stream = StreamRc::new(
             self.core.clone(),
             "capture",
@@ -213,28 +245,32 @@ impl PipewireThread {
                 *pipewire::keys::MEDIA_CATEGORY => "Capture",
                 *pipewire::keys::MEDIA_ROLE => "Communication",
             },
-        )
-        .unwrap();
+        )?;
 
-        let user_data = UserStreamState {
-            format: AudioInfoRaw::new(),
-            stream: stream.clone(),
-            consumer,
-        };
+        self.streams
+            .try_insert_with_key(|key| -> Result<_, Error> {
+                let user_data = StreamState {
+                    key,
+                    format: AudioInfoRaw::new(),
+                    consumer,
+                    sender: self.sender.clone(),
+                };
 
-        let listener = stream
-            .add_local_listener_with_user_data(user_data)
-            .state_changed(|_stream, _user_data, old, new| {
-                println!("State Changed: {old:?}, {new:?}");
-            })
-            .param_changed(|stream, user_data, id, param| {
-                user_data.handle_param_changed(stream, id, param);
-            })
-            .process(|stream, user_data| {
-                user_data.handle_process(stream);
-            })
-            .register()
-            .unwrap();
+                let listener = stream
+                    .add_local_listener_with_user_data(user_data)
+                    .state_changed(|_stream, _user_data, old, new| {
+                        println!("State Changed: {old:?}, {new:?}");
+                    })
+                    .param_changed(|stream, user_data, id, param| {
+                        user_data.handle_param_changed(stream, id, param);
+                    })
+                    .process(|stream, user_data| {
+                        user_data.handle_process(stream);
+                    })
+                    .register()?;
+
+                Ok((stream.clone(), listener))
+            })?;
 
         let mut audio_info = AudioInfoRaw::new();
         audio_info.set_format(format);
@@ -248,33 +284,35 @@ impl PipewireThread {
         };
         let values: Vec<u8> =
             PodSerializer::serialize(Cursor::new(Vec::new()), &Value::Object(obj))
-                .unwrap()
+                .expect("PodSerializer into Cursor<Vec<u8>> must not fail")
                 .0
                 .into_inner();
 
-        let mut params = [Pod::from_bytes(&values).unwrap()];
+        let mut params =
+            [Pod::from_bytes(&values).expect("Data is data produced by the PodSerializer")];
 
-        stream
-            .connect(
-                Direction::Input,
-                Some(node_id),
-                StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS,
-                &mut params,
-            )
-            .unwrap();
+        stream.connect(
+            Direction::Input,
+            Some(node_id),
+            StreamFlags::MAP_BUFFERS
+                | StreamFlags::RT_PROCESS
+                | StreamFlags::AUTOCONNECT
+                | StreamFlags::DONT_RECONNECT,
+            &mut params,
+        )?;
 
-        self.stream_listener.push(listener);
+        Ok(())
     }
 }
 
-struct UserStreamState {
+struct StreamState {
+    key: DefaultKey,
     format: AudioInfoRaw,
-    stream: StreamRc,
-
     consumer: Box<dyn AudioConsumer>,
+    sender: channel::Sender<Command>,
 }
 
-impl UserStreamState {
+impl StreamState {
     fn handle_param_changed(&mut self, _stream: &Stream, id: u32, param: Option<&Pod>) {
         let Some(param) = param else {
             return;
@@ -309,46 +347,19 @@ impl UserStreamState {
         while let Some(mut buffer) = stream.dequeue_buffer() {
             let data = &mut buffer.datas_mut()[0];
 
-            if let Some(data) = data.data() {
-                self.consumer.on_frame(data);
+            let offset = data.chunk().offset() as usize;
+            let size = data.chunk().size() as usize;
+
+            let Some(data) = data.data() else {
+                continue;
+            };
+
+            let run = self.consumer.on_frame(&data[offset..(offset + size)]);
+
+            if !run {
+                let _ = self.sender.send(Command::RemoveStream(self.key));
+                break;
             }
         }
     }
-}
-
-#[test]
-fn capture() {
-    use std::time::Duration;
-
-    let mut c = PipeWireAudioCapture::spawn();
-
-    struct L {}
-
-    impl NodeListener for L {
-        fn node_added(&mut self, info: NodeInfo) {
-            println!("Info: {info:#?}");
-        }
-
-        fn node_removed(&mut self, id: u32) {}
-    }
-
-    struct C {}
-
-    impl AudioConsumer for C {
-        fn set_format(&mut self, sample_rate: u32, channels: u32, format: AudioFormat) {
-            println!(
-                "Set format sample_rate: {sample_rate}, channels: {channels}, format: {format:?}"
-            );
-        }
-
-        fn on_frame(&mut self, data: &[u8]) -> bool {
-            println!("GOt data: {}", data.len());
-            true
-        }
-    }
-
-    c.add_listener(L {}).unwrap();
-    c.connect(135, C {}, 44100, 1, AudioFormat::S8).unwrap();
-
-    thread::sleep(Duration::from_hours(100));
 }
