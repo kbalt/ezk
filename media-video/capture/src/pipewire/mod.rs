@@ -1,27 +1,32 @@
+use crate::pipewire::streams::StreamState;
 use pipewire::{
     Error, channel,
     context::ContextRc,
     core::CoreRc,
-    keys::{APP_NAME, MEDIA_CLASS, NODE_DESCRIPTION, NODE_NAME, NODE_NICK},
+    keys::{APP_NAME, MEDIA_CLASS, NODE_DESCRIPTION, NODE_NAME, NODE_NICK, OBJECT_SERIAL},
     main_loop::MainLoopRc,
     properties::properties,
     registry::{self, RegistryRc},
     spa::{
-        param::{
-            ParamType,
-            audio::AudioInfoRaw,
-            format::{MediaSubtype, MediaType},
-        },
-        pod::{Object, Pod, Value, serialize::PodSerializer},
-        utils::{Direction, SpaTypes},
+        pod::{Pod, Value, serialize::PodSerializer},
+        utils::Direction,
     },
-    stream::{Stream, StreamFlags, StreamListener, StreamRc},
+    stream::{StreamFlags, StreamListener, StreamRc},
     types::ObjectType,
 };
-use slotmap::{DefaultKey, SlotMap};
-use std::{cell::RefCell, io::Cursor, rc::Rc, thread};
+use slotmap::{SlotMap, new_key_type};
+use std::{cell::RefCell, io::Cursor, rc::Rc, sync::Arc, thread};
+use tokio::sync::oneshot;
 
+mod caps;
+mod streams;
+
+pub use caps::AudioCaps;
 pub use pipewire::spa::param::audio::AudioFormat;
+
+new_key_type! {
+    pub struct StreamId;
+}
 
 pub trait NodeListener: Send + 'static {
     fn node_added(&mut self, info: NodeInfo);
@@ -31,6 +36,7 @@ pub trait NodeListener: Send + 'static {
 #[derive(Debug)]
 pub struct NodeInfo {
     pub id: u32,
+    pub object_serial: String,
     pub media_class: MediaClass,
     pub node_name: Option<String>,
     pub node_nick: Option<String>,
@@ -53,13 +59,16 @@ pub trait AudioConsumer: Send + 'static {
     fn on_frame(&mut self, data: &[u8]) -> bool;
 }
 
+#[derive(Clone)]
 pub struct PipeWireAudioCapture {
-    sender: channel::Sender<Command>,
+    sender: Arc<channel::Sender<Command>>,
 }
 
 impl Drop for PipeWireAudioCapture {
     fn drop(&mut self) {
-        let _ = self.sender.send(Command::Destroy);
+        if Arc::strong_count(&self.sender) == 1 {
+            let _ = self.sender.send(Command::Destroy);
+        }
     }
 }
 
@@ -67,12 +76,20 @@ impl Drop for PipeWireAudioCapture {
 #[error("Pipewire thread is unexpectedly gone")]
 pub struct PipeWireThreadGone;
 
+#[derive(Debug, thiserror::Error)]
+pub enum PipeWireConnectError {
+    #[error(transparent)]
+    Gone(#[from] PipeWireThreadGone),
+    #[error(transparent)]
+    PipeWire(#[from] Error),
+}
+
 impl PipeWireAudioCapture {
     pub fn spawn() -> PipeWireAudioCapture {
         let (sender, receiver) = channel::channel();
 
         let handle = PipeWireAudioCapture {
-            sender: sender.clone(),
+            sender: Arc::new(sender.clone()),
         };
 
         thread::spawn(move || PipeWireThread::run(sender, receiver));
@@ -86,37 +103,50 @@ impl PipeWireAudioCapture {
             .map_err(|_| PipeWireThreadGone)
     }
 
-    pub fn connect(
+    pub async fn connect(
         &self,
-        node_id: u32,
+        object_serial: String,
         consumer: impl AudioConsumer,
-        sample_rate: u32,
-        channels: u32,
-        format: AudioFormat,
-    ) -> Result<(), PipeWireThreadGone> {
+        audio_caps: AudioCaps,
+    ) -> Result<StreamId, PipeWireConnectError> {
+        let (tx, rx) = oneshot::channel();
+
         self.sender
             .send(Command::Connect {
-                node_id,
+                object_serial,
                 consumer: Box::new(consumer),
-                sample_rate,
-                channels,
-                format,
+                audio_caps,
+                ret: tx,
             })
+            .map_err(|_| PipeWireThreadGone)?;
+
+        rx.await
+            .map_err(|_| PipeWireThreadGone)?
+            .map_err(|e| e.into())
+    }
+
+    pub fn update_caps(
+        &self,
+        stream_id: StreamId,
+        audio_caps: AudioCaps,
+    ) -> Result<(), PipeWireThreadGone> {
+        self.sender
+            .send(Command::UpdateCaps(stream_id, audio_caps))
             .map_err(|_| PipeWireThreadGone)
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 enum Command {
     AddListener(Box<dyn NodeListener>),
     Connect {
-        node_id: u32,
+        object_serial: String,
         consumer: Box<dyn AudioConsumer>,
-        sample_rate: u32,
-        channels: u32,
-        format: AudioFormat,
+        audio_caps: AudioCaps,
+        ret: oneshot::Sender<Result<StreamId, Error>>,
     },
-    RemoveStream(DefaultKey),
-
+    UpdateCaps(StreamId, AudioCaps),
+    RemoveStream(StreamId),
     Destroy,
 }
 
@@ -128,7 +158,7 @@ struct PipeWireThread {
     sender: channel::Sender<Command>,
 
     registry_listener: Vec<registry::Listener>,
-    streams: SlotMap<DefaultKey, (StreamRc, StreamListener<StreamState>)>,
+    streams: SlotMap<StreamId, (StreamRc, StreamListener<StreamState>)>,
 }
 
 impl PipeWireThread {
@@ -146,7 +176,7 @@ impl PipeWireThread {
             core,
             registry,
             registry_listener: Vec::new(),
-            streams: SlotMap::new(),
+            streams: SlotMap::default(),
             sender,
         });
 
@@ -155,17 +185,40 @@ impl PipeWireThread {
                 this.borrow_mut().add_listener(listener);
             }
             Command::Connect {
-                node_id,
+                object_serial,
                 consumer,
-                sample_rate,
-                channels,
-                format,
+                audio_caps,
+                ret,
             } => {
-                if let Err(e) =
-                    this.borrow_mut()
-                        .connect(node_id, consumer, sample_rate, channels, format)
-                {
-                    log::error!("Failed to connect to node_id: {node_id}, {e}");
+                let result = this
+                    .borrow_mut()
+                    .connect(&object_serial, consumer, audio_caps);
+
+                let _ = ret.send(result);
+            }
+            Command::UpdateCaps(key, audio_caps) => {
+                if let Some((stream, _listener)) = this.borrow_mut().streams.get_mut(key) {
+                    let params = audio_caps.into_object();
+                    let params: Vec<u8> =
+                        PodSerializer::serialize(Cursor::new(Vec::new()), &Value::Object(params))
+                            .expect("PodSerializer into Cursor<Vec<u8>> must not fail")
+                            .0
+                            .into_inner();
+
+                    let mut params = [Pod::from_bytes(&params)
+                        .expect("Data is data produced by the PodSerializer")];
+
+                    if let Err(e) = stream.set_active(false) {
+                        log::error!("Failed to pause stream: {e}");
+                    }
+
+                    if let Err(e) = stream.update_params(&mut params) {
+                        log::error!("Failed to update audio caps: {e}");
+                    }
+
+                    if let Err(e) = stream.set_active(true) {
+                        log::error!("Failed to unpause stream: {e}");
+                    }
                 }
             }
             Command::RemoveStream(key) => {
@@ -196,12 +249,16 @@ impl PipeWireThread {
         let mut builder = self.registry.add_listener_local();
 
         let l = listener.clone();
-        builder = builder.global(move |o| {
-            if o.type_ != ObjectType::Node {
+        builder = builder.global(move |obj| {
+            if obj.type_ != ObjectType::Node {
                 return;
             }
 
-            let Some(props) = o.props else { return };
+            let Some(props) = obj.props else { return };
+
+            let Some(object_serial) = props.get(*OBJECT_SERIAL) else {
+                return;
+            };
 
             let media_class = match props.get(*MEDIA_CLASS) {
                 Some("Stream/Output/Audio") => MediaClass::AudioStreamOutput,
@@ -211,7 +268,8 @@ impl PipeWireThread {
             };
 
             let info = NodeInfo {
-                id: o.id,
+                id: obj.id,
+                object_serial: object_serial.into(),
                 media_class,
                 node_name: props.get(*NODE_NAME).map(Into::into),
                 node_nick: props.get(*NODE_NICK).map(Into::into),
@@ -231,12 +289,10 @@ impl PipeWireThread {
 
     fn connect(
         &mut self,
-        node_id: u32,
+        object_serial: &str,
         consumer: Box<dyn AudioConsumer>,
-        sample_rate: u32,
-        channels: u32,
-        format: AudioFormat,
-    ) -> Result<(), Error> {
+        audio_caps: AudioCaps,
+    ) -> Result<StreamId, Error> {
         let stream = StreamRc::new(
             self.core.clone(),
             "capture",
@@ -244,122 +300,35 @@ impl PipeWireThread {
                 *pipewire::keys::MEDIA_TYPE => "Audio",
                 *pipewire::keys::MEDIA_CATEGORY => "Capture",
                 *pipewire::keys::MEDIA_ROLE => "Communication",
+                *pipewire::keys::TARGET_OBJECT => object_serial,
             },
         )?;
 
-        self.streams
-            .try_insert_with_key(|key| -> Result<_, Error> {
-                let user_data = StreamState {
-                    key,
-                    format: AudioInfoRaw::new(),
-                    consumer,
-                    sender: self.sender.clone(),
-                };
-
-                let listener = stream
-                    .add_local_listener_with_user_data(user_data)
-                    .state_changed(|_stream, _user_data, old, new| {
-                        println!("State Changed: {old:?}, {new:?}");
-                    })
-                    .param_changed(|stream, user_data, id, param| {
-                        user_data.handle_param_changed(stream, id, param);
-                    })
-                    .process(|stream, user_data| {
-                        user_data.handle_process(stream);
-                    })
-                    .register()?;
+        let stream_id = self
+            .streams
+            .try_insert_with_key(|stream_id| -> Result<_, Error> {
+                let listener = StreamState::new(&stream, stream_id, consumer, self.sender.clone())?;
 
                 Ok((stream.clone(), listener))
             })?;
 
-        let mut audio_info = AudioInfoRaw::new();
-        audio_info.set_format(format);
-        audio_info.set_channels(channels);
-        audio_info.set_rate(sample_rate);
-
-        let obj = Object {
-            type_: SpaTypes::ObjectParamFormat.as_raw(),
-            id: ParamType::EnumFormat.as_raw(),
-            properties: audio_info.into(),
-        };
-        let values: Vec<u8> =
-            PodSerializer::serialize(Cursor::new(Vec::new()), &Value::Object(obj))
+        let params = audio_caps.into_object();
+        let params: Vec<u8> =
+            PodSerializer::serialize(Cursor::new(Vec::new()), &Value::Object(params))
                 .expect("PodSerializer into Cursor<Vec<u8>> must not fail")
                 .0
                 .into_inner();
 
         let mut params =
-            [Pod::from_bytes(&values).expect("Data is data produced by the PodSerializer")];
+            [Pod::from_bytes(&params).expect("Data is data produced by the PodSerializer")];
 
         stream.connect(
             Direction::Input,
-            Some(node_id),
-            StreamFlags::MAP_BUFFERS
-                | StreamFlags::RT_PROCESS
-                | StreamFlags::AUTOCONNECT
-                | StreamFlags::DONT_RECONNECT,
+            None,
+            StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS | StreamFlags::AUTOCONNECT,
             &mut params,
         )?;
 
-        Ok(())
-    }
-}
-
-struct StreamState {
-    key: DefaultKey,
-    format: AudioInfoRaw,
-    consumer: Box<dyn AudioConsumer>,
-    sender: channel::Sender<Command>,
-}
-
-impl StreamState {
-    fn handle_param_changed(&mut self, _stream: &Stream, id: u32, param: Option<&Pod>) {
-        let Some(param) = param else {
-            return;
-        };
-
-        if id != ParamType::Format.as_raw() {
-            return;
-        }
-
-        let (media_type, media_subtype) =
-            match pipewire::spa::param::format_utils::parse_format(param) {
-                Ok(v) => v,
-                Err(_) => return,
-            };
-
-        if media_type != MediaType::Audio || media_subtype != MediaSubtype::Raw {
-            return;
-        }
-
-        self.format
-            .parse(param)
-            .expect("Failed to parse param changed to AudioInfoRaw");
-
-        self.consumer.set_format(
-            self.format.rate(),
-            self.format.channels(),
-            self.format.format(),
-        );
-    }
-
-    fn handle_process(&mut self, stream: &Stream) {
-        while let Some(mut buffer) = stream.dequeue_buffer() {
-            let data = &mut buffer.datas_mut()[0];
-
-            let offset = data.chunk().offset() as usize;
-            let size = data.chunk().size() as usize;
-
-            let Some(data) = data.data() else {
-                continue;
-            };
-
-            let run = self.consumer.on_frame(&data[offset..(offset + size)]);
-
-            if !run {
-                let _ = self.sender.send(Command::RemoveStream(self.key));
-                break;
-            }
-        }
+        Ok(stream_id)
     }
 }
