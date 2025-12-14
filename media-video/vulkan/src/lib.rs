@@ -34,7 +34,7 @@ pub use descriptor_set::{DescriptorSet, DescriptorSetLayout};
 pub use device::Device;
 pub use error::VulkanError;
 pub use fence::Fence;
-pub use image::{Image, ImageMemoryBarrier};
+pub use image::{DrmPlane, Image, ImageMemoryBarrier};
 pub use image_view::ImageView;
 pub use instance::Instance;
 pub use physical_device::PhysicalDevice;
