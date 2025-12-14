@@ -57,25 +57,29 @@ impl UserStreamState {
         if let Some(dma_options) = &self.options.dma_usage
             && self.has_video_modifier
         {
-            let dma_buffer_params = serialize_object(dma_buffer_params(
-                dma_options.num_buffers as i32,
-                dma_options.request_sync_obj,
-            ));
-            let sync_obj_params = serialize_object(sync_obj_params());
             let crop_region_params = serialize_object(crop_region_param());
+            let dma_buffer_with_sync_params = serialize_object(dma_buffer_with_sync_params());
+            let dma_buffer_without_sync_params = serialize_object(dma_buffer_without_sync_params());
+            let sync_obj_params = serialize_object(sync_obj_params());
 
             let mut update_params: SmallVec<[&Pod; 2]> = smallvec::SmallVec::new();
 
             update_params
-                .push(Pod::from_bytes(&dma_buffer_params).expect("object is serialized as pod"));
+                .push(Pod::from_bytes(&crop_region_params).expect("object is serialized as pod"));
+
+            update_params.push(
+                Pod::from_bytes(&dma_buffer_with_sync_params).expect("object is serialized as pod"),
+            );
 
             if dma_options.request_sync_obj {
+                update_params.push(
+                    Pod::from_bytes(&dma_buffer_without_sync_params)
+                        .expect("object is serialized as pod"),
+                );
+
                 update_params
                     .push(Pod::from_bytes(&sync_obj_params).expect("object is serialized as pod"));
             }
-
-            update_params
-                .push(Pod::from_bytes(&crop_region_params).expect("object is serialized as pod"));
 
             if let Err(e) = stream.update_params(&mut update_params) {
                 log::error!("Failed to update stream params: {e}");
@@ -558,7 +562,6 @@ pub(super) fn start(
 
                 if prev_modifier_len != dma_usage.supported_modifier.len() {
                     println!("Remove mod: {modifier}  3");
-                    
                     if let Err(e) = data.stream.set_active(false) {
                         log::error!("Failed to pause stream to remove DRM modifier: {e}");
                     }
@@ -771,39 +774,31 @@ fn mem_buffer_params() -> Object {
     params
 }
 
-fn dma_buffer_params(num_buffers: i32, request_sync_obj: bool) -> Object {
+fn dma_buffer_with_sync_params() -> Object {
     let mut params = object!(SpaTypes::ObjectParamBuffers, ParamType::Buffers,);
-
-    params.properties.push(Property {
-        key: spa::sys::SPA_PARAM_BUFFERS_buffers,
-        flags: PropertyFlags::MANDATORY,
-        value: Value::Int(num_buffers),
-    });
-
-    // params.properties.push(Property {
-    //     key: spa::sys::SPA_PARAM_BUFFERS_blocks,
-    //     flags: PropertyFlags::empty(),
-    //     value: Value::Int(if request_sync_obj { 3 } else { 1 }),
-    // });
-
-    if request_sync_obj {
-        params.properties.push(Property {
-            key: spa::sys::SPA_PARAM_BUFFERS_metaType,
-            flags: PropertyFlags::MANDATORY,
-            value: Value::Int(1 << spa::sys::SPA_META_SyncTimeline),
-        });
-    }
 
     params.properties.push(Property {
         key: spa::sys::SPA_PARAM_BUFFERS_dataType,
         flags: PropertyFlags::empty(),
-        value: Value::Choice(ChoiceValue::Int(Choice(
-            ChoiceFlags::empty(),
-            ChoiceEnum::Flags {
-                default: 1 << spa::sys::SPA_DATA_DmaBuf,
-                flags: vec![1 << spa::sys::SPA_DATA_DmaBuf],
-            },
-        ))),
+        value: Value::Int(1 << spa::sys::SPA_DATA_DmaBuf),
+    });
+
+    params.properties.push(Property {
+        key: spa::sys::SPA_PARAM_BUFFERS_metaType,
+        flags: PropertyFlags::MANDATORY,
+        value: Value::Int(1 << spa::sys::SPA_META_SyncTimeline),
+    });
+
+    params
+}
+
+fn dma_buffer_without_sync_params() -> Object {
+    let mut params = object!(SpaTypes::ObjectParamBuffers, ParamType::Buffers,);
+
+    params.properties.push(Property {
+        key: spa::sys::SPA_PARAM_BUFFERS_dataType,
+        flags: PropertyFlags::empty(),
+        value: Value::Int(1 << spa::sys::SPA_DATA_DmaBuf),
     });
 
     params
