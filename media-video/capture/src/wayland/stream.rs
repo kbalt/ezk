@@ -548,14 +548,26 @@ pub(super) fn start(
             }
         }
         Command::RemoveModifier(modifier) => {
+            println!("Remove mod: {modifier}  1");
             let mut user_data = data.user_data.borrow_mut();
 
             if let Some(dma_usage) = &mut user_data.options.dma_usage {
+                println!("Remove mod: {modifier}  2");
                 let prev_modifier_len = dma_usage.supported_modifier.len();
                 dma_usage.supported_modifier.retain(|m| *m != modifier);
 
                 if prev_modifier_len != dma_usage.supported_modifier.len() {
+                    println!("Remove mod: {modifier}  3");
+                    
+                    if let Err(e) = data.stream.set_active(false) {
+                        log::error!("Failed to pause stream to remove DRM modifier: {e}");
+                    }
+
                     user_data.update_params(&data.stream);
+
+                    if let Err(e) = data.stream.set_active(true) {
+                        log::error!("Failed to unpause stream to remove DRM modifier: {e}");
+                    }
                 }
             }
         }
