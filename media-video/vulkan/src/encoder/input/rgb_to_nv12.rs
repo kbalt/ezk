@@ -278,15 +278,24 @@ impl RgbToNV12Converter {
         input_rgb: &ImageView,
         output_nv12: &Image,
     ) -> Result<(), VulkanError> {
-        input_rgb.image().cmd_memory_barrier(
-            command_buffer,
-            ImageMemoryBarrier::dst(
-                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                vk::PipelineStageFlags2::COMPUTE_SHADER,
-                vk::AccessFlags2::SHADER_SAMPLED_READ,
-            ),
-            0,
+        let barrier = ImageMemoryBarrier::dst(
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            vk::PipelineStageFlags2::COMPUTE_SHADER,
+            vk::AccessFlags2::SHADER_SAMPLED_READ,
         );
+
+        let barrier = if input_rgb.image().is_foreign() {
+            barrier.queue_family_indices(
+                vk::QUEUE_FAMILY_FOREIGN_EXT,
+                self.device.graphics_queue_family_index(),
+            )
+        } else {
+            barrier
+        };
+
+        input_rgb
+            .image()
+            .cmd_memory_barrier(command_buffer, barrier, 0);
 
         output_nv12.cmd_memory_barrier(
             command_buffer,
