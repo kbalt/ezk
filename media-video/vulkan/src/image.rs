@@ -18,6 +18,7 @@ struct Inner {
     memory: SmallVec<[vk::DeviceMemory; 1]>,
     extent: vk::Extent3D,
     usage: vk::ImageUsageFlags,
+    foreign: bool,
 
     state: Mutex<SmallVec<[State; 1]>>,
 }
@@ -61,6 +62,7 @@ impl Image {
                 memory: smallvec![memory],
                 extent: create_info.extent,
                 usage: create_info.usage,
+                foreign: false,
                 state: Mutex::new(smallvec::smallvec![
                     State {
                         current_layout: create_info.initial_layout,
@@ -107,8 +109,6 @@ impl Image {
             depth: 1,
         };
 
-        let queues = [device.graphics_queue_family_index()];
-
         let image_create_info = vk::ImageCreateInfo::default()
             .flags(vk::ImageCreateFlags::empty())
             .image_type(vk::ImageType::TYPE_2D)
@@ -119,8 +119,6 @@ impl Image {
             .samples(vk::SampleCountFlags::TYPE_1)
             .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
             .usage(usage)
-            // .sharing_mode(vk::SharingMode::CONCURRENT)
-            // .queue_family_indices(&queues)
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .push_next(&mut external_memory_image_info)
             .push_next(&mut drm_modifier_info);
@@ -141,18 +139,15 @@ impl Image {
 
         let mut memory_requirements = memory_requirements.memory_requirements;
 
-        {
-            let mut memory_fd_properties = vk::MemoryFdPropertiesKHR::default();
-            ash::khr::external_memory_fd::Device::new(device.instance().ash(), device.ash())
-                .get_memory_fd_properties(
-                    vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
-                    planes[0].fd.as_raw_fd(),
-                    &mut memory_fd_properties,
-                )
-                .unwrap();
+        let mut memory_fd_properties = vk::MemoryFdPropertiesKHR::default();
+        ash::khr::external_memory_fd::Device::new(device.instance().ash(), device.ash())
+            .get_memory_fd_properties(
+                vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
+                planes[0].fd.as_raw_fd(),
+                &mut memory_fd_properties,
+            )?;
 
-            memory_requirements.memory_type_bits &= memory_fd_properties.memory_type_bits;
-        }
+        memory_requirements.memory_type_bits &= memory_fd_properties.memory_type_bits;
 
         let memory_type_index = device.find_memory_type(
             memory_requirements.memory_type_bits,
@@ -196,6 +191,7 @@ impl Image {
                 memory: smallvec![memory],
                 extent,
                 usage,
+                foreign: true,
                 state: Mutex::new(smallvec::smallvec![State {
                     current_layout: vk::ImageLayout::UNDEFINED,
                     last_access: vk::AccessFlags2::NONE,
@@ -362,6 +358,7 @@ impl Image {
                 memory: allocated_memory,
                 extent,
                 usage,
+                foreign: true,
                 state: Mutex::new(smallvec::smallvec![State {
                     current_layout: vk::ImageLayout::UNDEFINED,
                     last_access: vk::AccessFlags2::NONE,
@@ -377,6 +374,10 @@ impl Image {
 
     pub unsafe fn handle(&self) -> vk::Image {
         self.inner.image
+    }
+
+    pub fn is_foreign(&self) -> bool {
+        self.inner.foreign
     }
 
     #[allow(clippy::too_many_arguments)]
