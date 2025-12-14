@@ -5,6 +5,7 @@ use ashpd::{
     },
     enumflags2::BitFlags,
 };
+use smallvec::SmallVec;
 use std::{os::fd::OwnedFd, thread};
 use tokio::sync::oneshot;
 
@@ -118,49 +119,50 @@ pub enum RgbaSwizzle {
 pub struct CapturedFrame {
     pub width: u32,
     pub height: u32,
-    pub format: CapturedFrameFormat,
+    pub format: PixelFormat,
     pub buffer: CapturedFrameBuffer,
 }
 
-/// Defines the data layout inside a [`CapturedFrameBuffer`]
-#[derive(Debug)]
-pub enum CapturedFrameFormat {
-    NV12 {
-        offsets: [u32; 2],
-        strides: [u32; 2],
-    },
-    I420 {
-        offsets: [u32; 3],
-        strides: [u32; 3],
-    },
-    RGBA {
-        offset: u32,
-        stride: u32,
-        swizzle: RgbaSwizzle,
-    },
-}
-
 /// Captured buffer type, contents are defined by [`CapturedFrameFormat`]
+#[derive(Debug)]
 pub enum CapturedFrameBuffer {
-    Vec(Vec<u8>),
-    DmaBuf(CapturedDmaBuffer),
+    Mem(CapturedMemBuffer),
+    Dma(CapturedDmaBuffer),
 }
 
-impl std::fmt::Debug for CapturedFrameBuffer {
+pub struct CapturedMemBuffer {
+    pub memory: Vec<u8>,
+    pub planes: SmallVec<[MemPlane; 3]>,
+}
+
+impl std::fmt::Debug for CapturedMemBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Vec(vec) => f.debug_tuple("Vec(len)").field(&vec.len()).finish(),
-            Self::DmaBuf(buffer) => f.debug_tuple("DmaBuf").field(buffer).finish(),
-        }
+        f.debug_struct("CapturedMemBuffer")
+            .field("memory(len)", &self.memory.len())
+            .field("planes", &self.planes)
+            .finish()
     }
 }
 
 #[derive(Debug)]
+pub struct MemPlane {
+    pub offset: usize,
+    pub stride: usize,
+}
+
+#[derive(Debug)]
 pub struct CapturedDmaBuffer {
-    pub fd: OwnedFd,
     pub modifier: u64,
+    pub planes: SmallVec<[DmaPlane; 4]>,
     pub region: Option<CapturedDmaRegion>,
     pub sync: Option<CapturedDmaBufferSync>,
+}
+
+#[derive(Debug)]
+pub struct DmaPlane {
+    pub fd: OwnedFd,
+    pub offset: usize,
+    pub stride: usize,
 }
 
 #[derive(Debug, Clone, Copy)]

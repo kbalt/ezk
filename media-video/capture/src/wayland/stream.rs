@@ -1,6 +1,7 @@
 use crate::wayland::{
     CapturedDmaBuffer, CapturedDmaBufferSync, CapturedDmaRegion, CapturedFrame,
-    CapturedFrameBuffer, CapturedFrameFormat, PipewireOptions, PixelFormat, RgbaSwizzle,
+    CapturedFrameBuffer, CapturedMemBuffer, DmaPlane, MemPlane, PipewireOptions, PixelFormat,
+    RgbaSwizzle,
 };
 use pipewire::{
     context::ContextRc,
@@ -21,7 +22,7 @@ use pipewire::{
     },
     stream::{Stream, StreamFlags, StreamListener, StreamRc, StreamState},
 };
-use smallvec::SmallVec;
+use smallvec::{SmallVec, smallvec};
 use std::{
     cell::RefCell,
     io::Cursor,
@@ -205,7 +206,7 @@ impl UserStreamState {
         let frame = if !mem_data.is_empty() {
             self.handle_mem_data(width, height, &mem_data)
         } else {
-            let dma_data: SmallVec<[_; 3]> = datas
+            let dma_data: SmallVec<[_; 4]> = datas
                 .iter()
                 .filter(|data| {
                     (data.flags & spa::sys::SPA_DATA_FLAG_READABLE != 0)
@@ -245,7 +246,7 @@ impl UserStreamState {
         &mut self,
         metas: &[spa::sys::spa_meta],
         datas: &[spa::sys::spa_data],
-        dma_data: SmallVec<[&spa::sys::spa_data; 3]>,
+        dma_data: SmallVec<[&spa::sys::spa_data; 4]>,
     ) -> CapturedFrame {
         fn clone_fd(fd: RawFd) -> OwnedFd {
             unsafe {
@@ -255,30 +256,22 @@ impl UserStreamState {
             }
         }
 
+        let planes = dma_data
+            .into_iter()
+            .map(|data| {
+                let chunk = unsafe { data.chunk.read_unaligned() };
+
+                DmaPlane {
+                    fd: clone_fd(data.fd as RawFd),
+                    offset: chunk.offset as usize,
+                    stride: chunk.stride as usize,
+                }
+            })
+            .collect();
+
         let format = match self.format.format() {
-            VideoFormat::NV12 => {
-                let y_chunk = unsafe { dma_data[0].chunk.read_unaligned() };
-                let uv_chunk = unsafe { dma_data[1].chunk.read_unaligned() };
-
-                CapturedFrameFormat::NV12 {
-                    offsets: [y_chunk.offset, uv_chunk.offset],
-                    strides: [y_chunk.stride as u32, uv_chunk.stride as u32],
-                }
-            }
-            VideoFormat::I420 => {
-                let y_chunk = unsafe { dma_data[0].chunk.read_unaligned() };
-                let u_chunk = unsafe { dma_data[1].chunk.read_unaligned() };
-                let v_chunk = unsafe { dma_data[2].chunk.read_unaligned() };
-
-                CapturedFrameFormat::I420 {
-                    offsets: [y_chunk.offset, u_chunk.offset, v_chunk.offset],
-                    strides: [
-                        y_chunk.stride as u32,
-                        u_chunk.stride as u32,
-                        v_chunk.stride as u32,
-                    ],
-                }
-            }
+            VideoFormat::NV12 => PixelFormat::NV12,
+            VideoFormat::I420 => PixelFormat::I420,
             VideoFormat::RGBA
             | VideoFormat::RGBx
             | VideoFormat::BGRA
@@ -295,13 +288,7 @@ impl UserStreamState {
                     _ => unreachable!(),
                 };
 
-                let rgba_chunk = unsafe { dma_data[0].chunk.read_unaligned() };
-
-                CapturedFrameFormat::RGBA {
-                    offset: rgba_chunk.offset,
-                    stride: rgba_chunk.stride as u32,
-                    swizzle,
-                }
+                PixelFormat::RGBA(swizzle)
             }
             _ => unreachable!(),
         };
@@ -359,9 +346,9 @@ impl UserStreamState {
             width: self.format.size().width,
             height: self.format.size().height,
             format,
-            buffer: CapturedFrameBuffer::DmaBuf(CapturedDmaBuffer {
-                fd: clone_fd(dma_data[0].fd as RawFd),
+            buffer: CapturedFrameBuffer::Dma(CapturedDmaBuffer {
                 modifier: self.format.modifier(),
+                planes,
                 region,
                 sync,
             }),
@@ -376,9 +363,9 @@ impl UserStreamState {
     ) -> CapturedFrame {
         match self.format.format() {
             VideoFormat::NV12 => {
-                let mut buffer = vec![0u8; (width * height * 12).div_ceil(8)];
+                let mut memory = vec![0u8; (width * height * 12).div_ceil(8)];
 
-                let (y_plane, uv_plane) = buffer.split_at_mut(width * height);
+                let (y_plane, uv_plane) = memory.split_at_mut(width * height);
 
                 copy_plane(data[0], y_plane, height, width);
                 copy_plane(data[1], uv_plane, height / 2, width);
@@ -389,17 +376,26 @@ impl UserStreamState {
                 CapturedFrame {
                     width,
                     height,
-                    format: CapturedFrameFormat::NV12 {
-                        offsets: [0, (width * height)],
-                        strides: [width, width],
-                    },
-                    buffer: CapturedFrameBuffer::Vec(buffer),
+                    format: PixelFormat::NV12,
+                    buffer: CapturedFrameBuffer::Mem(CapturedMemBuffer {
+                        memory,
+                        planes: smallvec![
+                            MemPlane {
+                                offset: 0,
+                                stride: width as usize,
+                            },
+                            MemPlane {
+                                offset: (width * height) as usize,
+                                stride: width as usize,
+                            }
+                        ],
+                    }),
                 }
             }
             VideoFormat::I420 => {
-                let mut buffer = vec![0u8; (width * height * 12).div_ceil(8)];
+                let mut memory = vec![0u8; (width * height * 12).div_ceil(8)];
 
-                let (y_plane, uv_plane) = buffer.split_at_mut(width * height);
+                let (y_plane, uv_plane) = memory.split_at_mut(width * height);
                 let (u_plane, v_plane) = uv_plane.split_at_mut((width * height) / 4);
 
                 copy_plane(data[0], y_plane, height, width);
@@ -415,11 +411,24 @@ impl UserStreamState {
                 CapturedFrame {
                     width,
                     height,
-                    format: CapturedFrameFormat::I420 {
-                        offsets: [0, u_offset, v_offset],
-                        strides: [width, width / 2, width / 2],
-                    },
-                    buffer: CapturedFrameBuffer::Vec(buffer),
+                    format: PixelFormat::I420,
+                    buffer: CapturedFrameBuffer::Mem(CapturedMemBuffer {
+                        memory,
+                        planes: smallvec![
+                            MemPlane {
+                                offset: 0,
+                                stride: width as usize
+                            },
+                            MemPlane {
+                                offset: u_offset as usize,
+                                stride: width as usize / 2,
+                            },
+                            MemPlane {
+                                offset: v_offset as usize,
+                                stride: width as usize / 2,
+                            }
+                        ],
+                    }),
                 }
             }
             VideoFormat::RGBA
@@ -438,10 +447,10 @@ impl UserStreamState {
                     _ => unreachable!(),
                 };
 
-                let mut buffer = vec![0u8; width * height * 4];
+                let mut memory = vec![0u8; width * height * 4];
 
                 // Single plane
-                copy_plane(data[0], &mut buffer, height, width * 4);
+                copy_plane(data[0], &mut memory, height, width * 4);
 
                 let width = width as u32;
                 let height = height as u32;
@@ -449,12 +458,14 @@ impl UserStreamState {
                 CapturedFrame {
                     width,
                     height,
-                    format: CapturedFrameFormat::RGBA {
-                        offset: 0,
-                        stride: width * 4,
-                        swizzle,
-                    },
-                    buffer: CapturedFrameBuffer::Vec(buffer),
+                    format: PixelFormat::RGBA(swizzle),
+                    buffer: CapturedFrameBuffer::Mem(CapturedMemBuffer {
+                        memory,
+                        planes: smallvec![MemPlane {
+                            offset: 0,
+                            stride: width as usize * 4,
+                        }],
+                    }),
                 }
             }
             _ => unreachable!("Received unexpected video format"),
