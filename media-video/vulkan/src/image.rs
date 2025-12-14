@@ -107,6 +107,8 @@ impl Image {
             depth: 1,
         };
 
+        let queues = [device.graphics_queue_family_index()];
+
         let image_create_info = vk::ImageCreateInfo::default()
             .flags(vk::ImageCreateFlags::empty())
             .image_type(vk::ImageType::TYPE_2D)
@@ -117,7 +119,8 @@ impl Image {
             .samples(vk::SampleCountFlags::TYPE_1)
             .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
             .usage(usage)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            // .sharing_mode(vk::SharingMode::CONCURRENT)
+            // .queue_family_indices(&queues)
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .push_next(&mut external_memory_image_info)
             .push_next(&mut drm_modifier_info);
@@ -136,11 +139,24 @@ impl Image {
                 .get_image_memory_requirements2(&memory_requirements_info, &mut memory_requirements)
         };
 
-        let memory_requirements = memory_requirements.memory_requirements;
+        let mut memory_requirements = memory_requirements.memory_requirements;
+
+        {
+            let mut memory_fd_properties = vk::MemoryFdPropertiesKHR::default();
+            ash::khr::external_memory_fd::Device::new(device.instance().ash(), device.ash())
+                .get_memory_fd_properties(
+                    vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
+                    planes[0].fd.as_raw_fd(),
+                    &mut memory_fd_properties,
+                )
+                .unwrap();
+
+            memory_requirements.memory_type_bits &= memory_fd_properties.memory_type_bits;
+        }
 
         let memory_type_index = device.find_memory_type(
             memory_requirements.memory_type_bits,
-            vk::MemoryPropertyFlags::empty(),
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
 
         let mut dedicated = vk::MemoryDedicatedAllocateInfo::default().image(image);
@@ -536,7 +552,7 @@ impl ImageMemoryBarrier {
         self
     }
 
-    pub(crate) fn queue_family_indices(
+    pub fn queue_family_indices(
         mut self,
         src_queue_family_index: u32,
         dst_queue_family_index: u32,
