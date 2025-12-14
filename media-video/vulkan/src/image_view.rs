@@ -1,10 +1,16 @@
 use crate::{Image, VulkanError};
 use ash::vk;
+use std::sync::Arc;
+
+#[derive(Debug, Clone)]
+pub struct ImageView {
+    inner: Arc<Inner>,
+}
 
 #[derive(Debug)]
-pub struct ImageView {
+struct Inner {
     image: Image,
-    image_view: vk::ImageView,
+    handle: vk::ImageView,
     subresource_range: vk::ImageSubresourceRange,
 }
 
@@ -15,34 +21,36 @@ impl ImageView {
     ) -> Result<Self, VulkanError> {
         let device = image.device();
 
-        let image_view = device.ash().create_image_view(create_info, None)?;
+        let handle = device.ash().create_image_view(create_info, None)?;
 
         Ok(Self {
-            image: image.clone(),
-            image_view,
-            subresource_range: create_info.subresource_range,
+            inner: Arc::new(Inner {
+                image: image.clone(),
+                handle,
+                subresource_range: create_info.subresource_range,
+            }),
         })
     }
 
     pub fn image(&self) -> &Image {
-        &self.image
+        &self.inner.image
     }
 
     pub unsafe fn handle(&self) -> vk::ImageView {
-        self.image_view
+        self.inner.handle
     }
 
     pub(crate) fn subresource_range(&self) -> &vk::ImageSubresourceRange {
-        &self.subresource_range
+        &self.inner.subresource_range
     }
 }
 
-impl Drop for ImageView {
+impl Drop for Inner {
     fn drop(&mut self) {
         unsafe {
             let device = self.image.device();
 
-            device.ash().destroy_image_view(self.image_view, None);
+            device.ash().destroy_image_view(self.handle, None);
         }
     }
 }

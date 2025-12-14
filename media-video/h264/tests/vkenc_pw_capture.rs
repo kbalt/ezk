@@ -1,6 +1,6 @@
 use capture::wayland::{
-    BitFlag, CapturedDmaBufferSync, CapturedFrameBuffer, CapturedFrameFormat, DmaUsageOptions,
-    PersistMode, PipewireOptions, PixelFormat, RgbaSwizzle, ScreenCaptureOptions, SourceType,
+    BitFlag, CapturedDmaBufferSync, CapturedFrameBuffer, DmaPlane, DmaUsageOptions, PersistMode,
+    PipewireOptions, PixelFormat, RgbaSwizzle, ScreenCaptureOptions, SourceType,
 };
 use ezk_h264::{
     Level, Profile,
@@ -16,7 +16,7 @@ use ezk_image::ImageRef;
 use std::{fs::OpenOptions, io::Write, time::Instant};
 use tokio::sync::mpsc;
 use vulkan::{
-    Semaphore,
+    DrmPlane, Semaphore,
     ash::vk,
     encoder::{
         VulkanEncoderConfig,
@@ -66,7 +66,7 @@ async fn vk_encode_dma_inner() {
     let device_ = device.clone();
     capture::wayland::start_screen_capture(options, move |frame| {
         let buffer = match frame.buffer {
-            CapturedFrameBuffer::DmaBuf(buffer) => buffer,
+            CapturedFrameBuffer::Dma(buffer) => buffer,
             _ => {
                 panic!("Test requires DMA buffers")
             }
@@ -96,23 +96,21 @@ async fn vk_encode_dma_inner() {
             },
         );
 
-        let (offset, stride, swizzle) = match frame.format {
-            CapturedFrameFormat::RGBA {
-                offset,
-                stride,
-                swizzle,
-            } => (offset, stride, swizzle),
+        let swizzle = match frame.format {
+            PixelFormat::RGBA(swizzle) => swizzle,
             _ => unreachable!(),
         };
 
         let image = unsafe {
-            vulkan::Image::import_dma_fd_rgba(
+            vulkan::Image::import_dma_fd(
                 &device_,
-                buffer.fd,
                 frame.width,
                 frame.height,
-                offset as u64,
-                stride as u64,
+                buffer
+                    .planes
+                    .into_iter()
+                    .map(|DmaPlane { fd, offset, stride }| DrmPlane { fd, offset, stride })
+                    .collect(),
                 buffer.modifier,
                 vk::Format::R8G8B8A8_UNORM,
                 vk::ImageUsageFlags::SAMPLED,
@@ -273,7 +271,7 @@ async fn vk_encode_memory_inner() {
 
     capture::wayland::start_screen_capture(options, move |frame| {
         let buffer = match frame.buffer {
-            CapturedFrameBuffer::Vec(buffer) => buffer,
+            CapturedFrameBuffer::Mem(buffer) => buffer,
             _ => {
                 panic!("Test requires DMA buffers")
             }
@@ -283,7 +281,7 @@ async fn vk_encode_memory_inner() {
 
         let image = ezk_image::Image::from_buffer(
             ezk_image::PixelFormat::BGRA,
-            buffer,
+            buffer.memory,
             None,
             frame.width as usize,
             frame.height as usize,

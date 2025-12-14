@@ -44,7 +44,7 @@ async fn va_encode_memory_inner() {
 
     capture::wayland::start_screen_capture(options, move |frame| {
         let buffer = match frame.buffer {
-            CapturedFrameBuffer::Vec(buffer) => buffer,
+            CapturedFrameBuffer::Mem(buffer) => buffer,
             _ => {
                 panic!("Test requires DMA buffers")
             }
@@ -52,7 +52,7 @@ async fn va_encode_memory_inner() {
 
         let image = ezk_image::Image::from_buffer(
             ezk_image::PixelFormat::BGRA,
-            buffer,
+            buffer.memory,
             None,
             frame.width as usize,
             frame.height as usize,
