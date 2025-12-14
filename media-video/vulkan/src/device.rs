@@ -54,6 +54,7 @@ pub struct DeviceVideoExtensions {
     pub image_drm_format_modifier: bool,
     pub timeline_semaphore: bool,
     pub external_semaphore_fd: bool,
+    pub queue_family_foreign: bool,
 }
 
 impl Device {
@@ -116,6 +117,11 @@ impl Device {
                 external_semaphore_fd: add2(
                     &props,
                     ash::khr::external_semaphore_fd::NAME,
+                    &mut extensions,
+                ),
+                queue_family_foreign: add2(
+                    &props,
+                    ash::ext::queue_family_foreign::NAME,
                     &mut extensions,
                 ),
             };
@@ -304,6 +310,11 @@ impl Device {
             external_semaphore_fd: add(
                 &props,
                 ash::khr::external_semaphore_fd::NAME,
+                &mut extensions,
+            ),
+            queue_family_foreign: add(
+                &props,
+                ash::ext::queue_family_foreign::NAME,
                 &mut extensions,
             ),
         };
