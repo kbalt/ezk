@@ -208,24 +208,12 @@ impl UserStreamState {
         } else {
             let dma_data: SmallVec<[_; 4]> = datas
                 .iter()
-                .filter(|data| {
-                    (data.flags & spa::sys::SPA_DATA_FLAG_READABLE != 0)
-                        && data.type_ == spa::sys::SPA_DATA_DmaBuf
-                })
+                .filter(|data| data.type_ == spa::sys::SPA_DATA_DmaBuf)
                 .collect();
 
             if dma_data.is_empty() {
                 log::warn!("Got neither MemPtr nor DmaBuf data");
                 return;
-            }
-
-            let first_data = dma_data[0];
-
-            // check that the fd of all dma buf's are the same, as different ones are currently not supported
-            if dma_data.iter().any(|data| data.fd != first_data.fd) {
-                log::warn!(
-                    "Got dma buffers with different fds, not currently sure how to handle this scenario"
-                );
             }
 
             self.handle_dma_data(metas, datas, dma_data)
