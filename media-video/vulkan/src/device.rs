@@ -416,7 +416,7 @@ impl Device {
                     .object_handle(handle)
                     .object_name(
                         CStr::from_bytes_until_nul(name.as_bytes())
-                            .expect("debug_name must be a nul terminated string"),
+                            .expect("debug_name must be a null terminated string"),
                     );
 
                 if let Err(e) =
