@@ -45,6 +45,8 @@ fn create_dpb_layers(
 
     let image = unsafe { Image::create(device, &input_image_info)? };
 
+    device.set_debug_name(unsafe { image.handle() }, &format!("DPB-Image\0"));
+
     let mut slots = Vec::with_capacity(num_slots as usize);
 
     for array_layer in 0..num_slots {
@@ -66,6 +68,11 @@ fn create_dpb_layers(
 
         let image_view = unsafe { ImageView::create(&image, &create_info)? };
 
+        device.set_debug_name(
+            unsafe { image_view.handle() },
+            &format!("DPB-ImageView {array_layer}\0"),
+        );
+
         slots.push(image_view)
     }
 
@@ -81,7 +88,7 @@ fn create_dpb_separate_images(
 ) -> Result<Vec<ImageView>, VulkanError> {
     let mut slots = Vec::with_capacity(num_slots as usize);
 
-    for _ in 0..num_slots {
+    for i in 0..num_slots {
         let profiles = [video_profile_info];
 
         let mut video_profile_list_info =
@@ -105,6 +112,8 @@ fn create_dpb_separate_images(
 
         let image = unsafe { Image::create(device, &input_image_info)? };
 
+        device.set_debug_name(unsafe { image.handle() }, &format!("DPB-Image {i}\0"));
+
         let mut view_usage_create_info = vk::ImageViewUsageCreateInfo::default().usage(usage);
 
         let create_info = vk::ImageViewCreateInfo::default()
@@ -122,6 +131,11 @@ fn create_dpb_separate_images(
             .push_next(&mut view_usage_create_info);
 
         let image_view = unsafe { ImageView::create(&image, &create_info)? };
+
+        device.set_debug_name(
+            unsafe { image_view.handle() },
+            &format!("DPB-ImageView {i}\0"),
+        );
 
         slots.push(image_view)
     }
