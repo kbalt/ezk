@@ -3,7 +3,7 @@ use crate::{PhysicalDevice, VulkanError};
 use anyhow::Context;
 use ash::{
     khr::{video_encode_queue, video_queue},
-    vk,
+    vk::{self, Handle},
 };
 use std::{ffi::CStr, fmt, sync::Arc};
 
@@ -407,6 +407,26 @@ impl Device {
             memory_type_bits,
             properties,
         })
+    }
+
+    pub fn set_debug_name<T: Handle>(&self, handle: T, name: &str) {
+        if cfg!(debug_assertions) {
+            unsafe {
+                let name_info = vk::DebugUtilsObjectNameInfoEXT::default()
+                    .object_handle(handle)
+                    .object_name(
+                        CStr::from_bytes_until_nul(name.as_bytes())
+                            .expect("debug_name must be a nul terminated string"),
+                    );
+
+                if let Err(e) =
+                    ash::ext::debug_utils::Device::new(self.instance().ash(), self.ash())
+                        .set_debug_utils_object_name(&name_info)
+                {
+                    log::warn!("Failed to set debug object name, {e}");
+                }
+            }
+        }
     }
 
     pub fn instance(&self) -> &Instance {
