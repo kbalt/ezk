@@ -65,22 +65,14 @@ impl UserStreamState {
 
             let mut update_params: SmallVec<[&Pod; 2]> = smallvec::SmallVec::new();
 
-            update_params
-                .push(Pod::from_bytes(&crop_region_params).expect("object is serialized as pod"));
-
-            update_params.push(
-                Pod::from_bytes(&dma_buffer_with_sync_params).expect("object is serialized as pod"),
-            );
+            update_params.push(pod(&crop_region_params));
 
             if dma_options.request_sync_obj {
-                update_params.push(
-                    Pod::from_bytes(&dma_buffer_without_sync_params)
-                        .expect("object is serialized as pod"),
-                );
-
-                update_params
-                    .push(Pod::from_bytes(&sync_obj_params).expect("object is serialized as pod"));
+                update_params.push(pod(&dma_buffer_with_sync_params));
+                update_params.push(pod(&sync_obj_params));
             }
+
+            update_params.push(pod(&dma_buffer_without_sync_params));
 
             if let Err(e) = stream.update_params(&mut update_params) {
                 log::error!("Failed to update stream params: {e}");
@@ -88,8 +80,7 @@ impl UserStreamState {
         } else {
             let mem_buffer_params = serialize_object(mem_buffer_params());
 
-            let mut update_params =
-                [Pod::from_bytes(&mem_buffer_params).expect("object is serialized as pod")];
+            let mut update_params = [pod(&mem_buffer_params)];
 
             if let Err(e) = stream.update_params(&mut update_params) {
                 log::error!("Failed to update stream params: {e}");
@@ -652,10 +643,8 @@ fn build_stream(
         options.max_framerate,
     )));
 
-    let mut connect_params: SmallVec<[&Pod; 2]> = connect_params
-        .iter()
-        .map(|pod| Pod::from_bytes(pod).expect("object is serialized as pod"))
-        .collect();
+    let mut connect_params: SmallVec<[&Pod; 2]> =
+        connect_params.iter().map(|param| pod(param)).collect();
 
     stream.connect(
         Direction::Input,
@@ -865,4 +854,8 @@ fn serialize_object(object: Object) -> Vec<u8> {
         .expect("objects must be serializable")
         .0
         .into_inner()
+}
+
+fn pod(pod: &[u8]) -> &Pod {
+    Pod::from_bytes(pod).expect("Object was serialized as pod")
 }
