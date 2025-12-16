@@ -85,16 +85,17 @@ pub enum PipeWireConnectError {
 }
 
 impl PipeWireAudioCapture {
-    pub fn spawn() -> PipeWireAudioCapture {
+    pub async fn spawn() -> Option<PipeWireAudioCapture> {
+        let (result_tx, result_rx) = oneshot::channel();
         let (sender, receiver) = channel::channel();
 
         let handle = PipeWireAudioCapture {
             sender: Arc::new(sender.clone()),
         };
 
-        thread::spawn(move || PipeWireThread::run(sender, receiver));
+        thread::spawn(move || PipeWireThread::run(sender, receiver, result_tx));
 
-        handle
+        result_rx.await.ok().map(|_| handle)
     }
 
     pub fn add_listener(&self, listener: impl NodeListener) -> Result<(), PipeWireThreadGone> {
@@ -162,14 +163,31 @@ struct PipeWireThread {
 }
 
 impl PipeWireThread {
-    fn run(
-        sender: channel::Sender<Command>,
-        receiver: channel::Receiver<Command>,
-    ) -> Result<(), Error> {
+    fn create() -> Result<(MainLoopRc, CoreRc, RegistryRc), Error> {
         let main_loop = MainLoopRc::new(None)?;
         let context = ContextRc::new(&main_loop, None)?;
         let core = context.connect_rc(None)?;
         let registry = core.get_registry_rc()?;
+
+        Ok((main_loop, core, registry))
+    }
+
+    fn run(
+        sender: channel::Sender<Command>,
+        receiver: channel::Receiver<Command>,
+        result_tx: oneshot::Sender<Result<(), Error>>,
+    ) {
+        let (main_loop, core, registry) = match Self::create() {
+            Ok(v) => {
+                let _ = result_tx.send(Ok(()));
+                v
+            }
+            Err(e) => {
+                log::warn!("Failed to create pipewire thread {e}");
+                let _ = result_tx.send(Err(e));
+                return;
+            }
+        };
 
         let this = RefCell::new(PipeWireThread {
             main_loop: main_loop.clone(),
@@ -240,7 +258,7 @@ impl PipeWireThread {
 
         main_loop.run();
 
-        Ok(())
+        log::info!("PipeWireThread Main Loop stopped running, exiting thread");
     }
 
     fn add_listener(&mut self, listener: Box<dyn NodeListener>) {
