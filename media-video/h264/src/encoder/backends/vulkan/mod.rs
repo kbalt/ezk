@@ -228,8 +228,8 @@ impl VkH264Encoder {
 
         let encoder_config = VulkanEncoderImplConfig {
             user: config.encoder,
-            // Set number of encode slots to (num_b_frames + 1) and at least 16
-            num_encode_slots: cmp::max(16, u32::from(config.frame_pattern.ip_period) + 1),
+            // Set number of encode slots to (num_b_frames + 1) and at least 4
+            num_encode_slots: cmp::max(4, u32::from(config.frame_pattern.ip_period) + 1),
             max_active_references,
             num_dpb_slots: max_dpb_slots,
         };
@@ -268,6 +268,16 @@ impl VkH264Encoder {
     pub fn request_idr(&mut self) {
         // TODO: this totally blows up b-frames are currently queued
         self.state.begin_new_gop();
+    }
+
+    /// Update the encoders rate control config
+    pub fn update_rate_control(&mut self, rate_control: VulkanH264RateControlConfig) {
+        unsafe {
+            self.config.rate_control = rate_control;
+
+            self.encoder
+                .update_rc(rate_control_from_config(&self.config));
+        }
     }
 
     /// Change the output resolution of the encoder
