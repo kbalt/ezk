@@ -36,7 +36,12 @@ async fn vk_encode_dma_inner() {
     let instance = vulkan::Instance::create(entry, &[]).unwrap();
     let mut physical_devices: Vec<vulkan::PhysicalDevice> = instance.physical_devices().unwrap();
     let physical_device = &mut physical_devices[0];
-    let drm_modifer = physical_device.supported_drm_modifier(vk::Format::R8G8B8A8_UNORM);
+
+    let drm_modifer: Vec<u64> = physical_device
+        .supported_drm_modifier(vk::Format::R8G8B8A8_UNORM)
+        .into_iter()
+        .map(|m| m.modifier)
+        .collect();
 
     let width = 2560;
     let height = 1440;

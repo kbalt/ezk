@@ -106,17 +106,19 @@ impl PipeWireAudioCapture {
 
     pub async fn connect(
         &self,
-        object_serial: String,
+        target_object: Option<String>,
         consumer: impl AudioConsumer,
         audio_caps: AudioCaps,
+        dont_reconnect: bool,
     ) -> Result<StreamId, PipeWireConnectError> {
         let (tx, rx) = oneshot::channel();
 
         self.sender
             .send(Command::Connect {
-                object_serial,
+                target_object,
                 consumer: Box::new(consumer),
                 audio_caps,
+                dont_reconnect,
                 ret: tx,
             })
             .map_err(|_| PipeWireThreadGone)?;
@@ -141,9 +143,10 @@ impl PipeWireAudioCapture {
 enum Command {
     AddListener(Box<dyn NodeListener>),
     Connect {
-        object_serial: String,
+        target_object: Option<String>,
         consumer: Box<dyn AudioConsumer>,
         audio_caps: AudioCaps,
+        dont_reconnect: bool,
         ret: oneshot::Sender<Result<StreamId, Error>>,
     },
     UpdateCaps(StreamId, AudioCaps),
@@ -203,14 +206,15 @@ impl PipeWireThread {
                 this.borrow_mut().add_listener(listener);
             }
             Command::Connect {
-                object_serial,
+                target_object,
                 consumer,
                 audio_caps,
+                dont_reconnect,
                 ret,
             } => {
-                let result = this
-                    .borrow_mut()
-                    .connect(&object_serial, consumer, audio_caps);
+                let result =
+                    this.borrow_mut()
+                        .connect(target_object, consumer, audio_caps, dont_reconnect);
 
                 let _ = ret.send(result);
             }
@@ -307,20 +311,22 @@ impl PipeWireThread {
 
     fn connect(
         &mut self,
-        object_serial: &str,
+        target_object: Option<String>,
         consumer: Box<dyn AudioConsumer>,
         audio_caps: AudioCaps,
+        dont_reconnect: bool,
     ) -> Result<StreamId, Error> {
-        let stream = StreamRc::new(
-            self.core.clone(),
-            "capture",
-            properties! {
-                *pipewire::keys::MEDIA_TYPE => "Audio",
-                *pipewire::keys::MEDIA_CATEGORY => "Capture",
-                *pipewire::keys::MEDIA_ROLE => "Communication",
-                *pipewire::keys::TARGET_OBJECT => object_serial,
-            },
-        )?;
+        let mut stream_properties = properties! {
+            *pipewire::keys::MEDIA_TYPE => "Audio",
+            *pipewire::keys::MEDIA_CATEGORY => "Capture",
+            *pipewire::keys::MEDIA_ROLE => "Communication",
+        };
+
+        if let Some(object_serial) = target_object {
+            stream_properties.insert(*pipewire::keys::TARGET_OBJECT, object_serial);
+        }
+
+        let stream = StreamRc::new(self.core.clone(), "capture", stream_properties)?;
 
         let stream_id = self
             .streams
@@ -340,12 +346,14 @@ impl PipeWireThread {
         let mut params =
             [Pod::from_bytes(&params).expect("Data is data produced by the PodSerializer")];
 
-        stream.connect(
-            Direction::Input,
-            None,
-            StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS | StreamFlags::AUTOCONNECT,
-            &mut params,
-        )?;
+        let mut flags =
+            StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS | StreamFlags::AUTOCONNECT;
+
+        if dont_reconnect {
+            flags.insert(StreamFlags::DONT_RECONNECT);
+        }
+
+        stream.connect(Direction::Input, None, flags, &mut params)?;
 
         Ok(stream_id)
     }
