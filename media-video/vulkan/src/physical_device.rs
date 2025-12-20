@@ -4,6 +4,13 @@ use crate::Instance;
 use anyhow::Context as _;
 use ash::vk::{self, ExtendsVideoCapabilitiesKHR, PhysicalDeviceProperties};
 
+#[derive(Debug, Clone, Copy)]
+pub struct DrmModifier {
+    pub modifier: u64,
+    pub plane_count: u32,
+    pub tiling_features: vk::FormatFeatureFlags2,
+}
+
 #[derive(Clone)]
 pub struct PhysicalDevice {
     instance: Instance,
@@ -126,7 +133,7 @@ impl PhysicalDevice {
         Ok((caps, encode_caps, codec_caps))
     }
 
-    pub fn supported_drm_modifier(&self, format: vk::Format) -> Vec<u64> {
+    pub fn supported_drm_modifier(&self, format: vk::Format) -> Vec<DrmModifier> {
         unsafe {
             let mut modifier_list = vk::DrmFormatModifierPropertiesList2EXT::default();
             let mut format_properties =
@@ -160,7 +167,11 @@ impl PhysicalDevice {
 
             properties
                 .into_iter()
-                .map(|x| x.drm_format_modifier)
+                .map(|props| DrmModifier {
+                    modifier: props.drm_format_modifier,
+                    plane_count: props.drm_format_modifier_plane_count,
+                    tiling_features: props.drm_format_modifier_tiling_features,
+                })
                 .collect()
         }
     }
