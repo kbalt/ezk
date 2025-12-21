@@ -8,7 +8,8 @@ repository.workspace = true
 
 [dependencies]
 log = "0.4"
-ash = "0.38.0"
+ash-stable = { package = "ash", version = "0.38.0" }
+ash = { package = "ash", git = "https://github.com/ash-rs/ash.git", rev = "20cdb2597fcaca2aa45eb184de22221bdad8d28c" }
 naga = { version = "27", features = ["wgsl-in", "spv-out"] }
 thiserror = "2"
 smallvec = "1"

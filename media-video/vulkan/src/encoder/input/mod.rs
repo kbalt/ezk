@@ -2,7 +2,7 @@ use crate::{
     Buffer, Device, Image, ImageView, RecordingCommandBuffer, Semaphore, VulkanError,
     encoder::input::rgb_to_nv12::RgbToNV12Converter, image::ImageMemoryBarrier,
 };
-use ash::vk;
+use ash::vk::{self, TaggedStructure};
 use ezk_image::ImageRef;
 use smallvec::SmallVec;
 
@@ -102,7 +102,7 @@ pub(super) enum Input {
 impl Input {
     pub(super) fn create(
         device: &Device,
-        video_profile_info: vk::VideoProfileInfoKHR<'_>,
+        video_profile_info: &vk::VideoProfileInfoKHR<'_>,
         input_as_vulkan_image: bool,
         pixel_format: InputPixelFormat,
         input_extent: vk::Extent2D,
@@ -132,7 +132,7 @@ impl Input {
 
     fn new_from_host(
         device: &Device,
-        video_profile_info: vk::VideoProfileInfoKHR<'_>,
+        video_profile_info: &vk::VideoProfileInfoKHR<'_>,
         pixel_format: InputPixelFormat,
         input_extent: vk::Extent2D,
         encode_extent: vk::Extent2D,
@@ -199,7 +199,7 @@ impl Input {
 
     fn new_from_vulkan_image(
         device: &Device,
-        video_profile_info: vk::VideoProfileInfoKHR<'_>,
+        video_profile_info: &vk::VideoProfileInfoKHR<'_>,
         pixel_format: InputPixelFormat,
         #[expect(unused_variables)] input_extent: vk::Extent2D,
         encode_extent: vk::Extent2D,
@@ -441,11 +441,11 @@ fn create_staging_buffer(device: &Device, size: u64) -> Result<Buffer, VulkanErr
 
 fn create_nv12_image(
     device: &Device,
-    video_profile_info: vk::VideoProfileInfoKHR<'_>,
+    video_profile_info: &vk::VideoProfileInfoKHR<'_>,
     extent: vk::Extent2D,
 ) -> Result<ImageView, VulkanError> {
-    let profiles = [video_profile_info];
-    let mut video_profile_list_info = vk::VideoProfileListInfoKHR::default().profiles(&profiles);
+    let mut video_profile_list_info =
+        vk::VideoProfileListInfoKHR::default().profiles(std::slice::from_ref(video_profile_info));
     let create_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_2D)
         .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
@@ -461,7 +461,7 @@ fn create_nv12_image(
         .initial_layout(vk::ImageLayout::UNDEFINED)
         .samples(vk::SampleCountFlags::TYPE_1)
         .usage(vk::ImageUsageFlags::VIDEO_ENCODE_SRC_KHR | vk::ImageUsageFlags::TRANSFER_DST)
-        .push_next(&mut video_profile_list_info);
+        .push(&mut video_profile_list_info);
 
     let image = unsafe { Image::create(device, &create_info)? };
 

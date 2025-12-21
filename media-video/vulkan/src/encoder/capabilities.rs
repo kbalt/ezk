@@ -8,7 +8,7 @@ use crate::{
     },
     image::ImageMemoryBarrier,
 };
-use ash::vk;
+use ash::vk::{self, TaggedStructure as _};
 use std::{collections::VecDeque, mem::zeroed, pin::Pin, time::Instant};
 
 #[derive(Debug, thiserror::Error)]
@@ -25,18 +25,17 @@ pub enum VulkanEncoderCapabilitiesError {
 pub struct VulkanEncoderCapabilities<C: VulkanEncCodec> {
     pub physical_device: PhysicalDevice,
 
-    pub video_codec_profile_info: C::ProfileInfo<'static>,
-    pub video_profile_info: vk::VideoProfileInfoKHR<'static>,
-
+    // pub video_codec_profile_info: C::ProfileInfo<'static>,
+    // pub video_profile_info: vk::VideoProfileInfoKHR<'static>,
     pub video_capabilities: vk::VideoCapabilitiesKHR<'static>,
     pub video_encode_capabilities: vk::VideoEncodeCapabilitiesKHR<'static>,
     pub video_encode_codec_capabilities: C::Capabilities<'static>,
 }
 
 impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
-    pub fn new(
+    pub fn new<'a>(
         physical_device: &PhysicalDevice,
-        mut codec_profile_info: C::ProfileInfo<'static>,
+        codec_profile_info: C::ProfileInfo<'_>,
     ) -> Result<VulkanEncoderCapabilities<C>, VulkanEncoderCapabilitiesError> {
         let video_profile_info = vk::VideoProfileInfoKHR::default()
             .video_codec_operation(C::ENCODE_OPERATION)
@@ -44,17 +43,18 @@ impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
             .luma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::TYPE_8)
             .chroma_subsampling(vk::VideoChromaSubsamplingFlagsKHR::TYPE_420);
 
+        let mut tmp = video_profile_info;
+        tmp.p_next = (&raw const codec_profile_info).cast();
+
         let (video_capabilities, video_encode_capabilities, video_encode_codec_capabilities) =
             physical_device
-                .video_capabilities::<C::Capabilities<'static>>(
-                    video_profile_info.push_next(&mut codec_profile_info),
-                )
+                .video_capabilities::<C>(tmp)
                 .map_err(|e| VulkanEncoderCapabilitiesError::VideoCapabilities(e.into()))?;
 
         Ok(VulkanEncoderCapabilities {
             physical_device: physical_device.clone(),
-            video_codec_profile_info: codec_profile_info,
-            video_profile_info,
+            // video_codec_profile_info: codec_profile_info,
+            // video_profile_info,
             video_capabilities,
             video_encode_capabilities,
             video_encode_codec_capabilities,
@@ -65,25 +65,29 @@ impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
         &self,
         device: &Device,
         config: VulkanEncoderImplConfig,
-        parameters: &mut C::ParametersCreateInfo<'_>,
+        codec_profile_info: C::ProfileInfo<'_>,
+        parameters: C::ParametersCreateInfo<'_>,
         rate_control: Option<Pin<Box<RateControlInfos<C>>>>,
     ) -> Result<VulkanEncoder<C>, VulkanError> {
-        let graphics_queue_family_index = device.graphics_queue_family_index();
-        let encode_queue_family_index = device.encode_queue_family_index();
-
-        let graphics_queue = device.graphics_queue();
-        let encode_queue = device.encode_queue();
-
         let mut video_encode_usage_info = vk::VideoEncodeUsageInfoKHR::default()
             .video_usage_hints(config.user.usage_hints)
             .video_content_hints(config.user.content_hints)
             .tuning_mode(config.user.tuning_mode);
 
-        let mut video_codec_profile_info = self.video_codec_profile_info;
-        let video_profile_info = self
-            .video_profile_info
-            .push_next(&mut video_codec_profile_info)
-            .push_next(&mut video_encode_usage_info);
+        let mut video_profile_info = vk::VideoProfileInfoKHR::default()
+            .video_codec_operation(C::ENCODE_OPERATION)
+            .chroma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::TYPE_8)
+            .luma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::TYPE_8)
+            .chroma_subsampling(vk::VideoChromaSubsamplingFlagsKHR::TYPE_420);
+
+        video_encode_usage_info.p_next = (&raw const codec_profile_info).cast();
+        video_profile_info.p_next = (&raw const video_encode_usage_info).cast();
+
+        let graphics_queue_family_index = device.graphics_queue_family_index();
+        let encode_queue_family_index = device.encode_queue_family_index();
+
+        let graphics_queue = device.graphics_queue();
+        let encode_queue = device.encode_queue();
 
         // Create video session
         let create_info = vk::VideoSessionCreateInfoKHR::default()
@@ -99,7 +103,8 @@ impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
         let video_session = unsafe { VideoSession::create(device, &create_info)? };
 
         // Create video session parameters
-        let video_session_parameters = VideoSessionParameters::create(&video_session, parameters)?;
+        let video_session_parameters =
+            VideoSessionParameters::create::<C>(&video_session, &parameters)?;
 
         // Create command buffers
         let mut command_buffers =
@@ -118,7 +123,7 @@ impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
 
         let mut inputs = Input::create(
             device,
-            video_profile_info,
+            &video_profile_info,
             config.user.input_as_vulkan_image,
             config.user.input_pixel_format,
             config.user.max_input_resolution,
@@ -133,9 +138,8 @@ impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
 
         for index in 0..config.num_encode_slots {
             let output_buffer = {
-                let profiles = [video_profile_info];
-                let mut video_profile_list_info =
-                    vk::VideoProfileListInfoKHR::default().profiles(&profiles);
+                let mut video_profile_list_info = vk::VideoProfileListInfoKHR::default()
+                    .profiles(std::slice::from_ref(&video_profile_info));
 
                 let create_info = vk::BufferCreateInfo::default()
                     .size(output_buffer_size)
@@ -143,7 +147,7 @@ impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
                         vk::BufferUsageFlags::VIDEO_ENCODE_DST_KHR
                             | vk::BufferUsageFlags::TRANSFER_SRC,
                     )
-                    .push_next(&mut video_profile_list_info);
+                    .push(&mut video_profile_list_info);
 
                 unsafe { Buffer::create(device, &create_info)? }
             };
@@ -178,7 +182,7 @@ impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
 
         let dpb_views = create_dpb(
             device,
-            video_profile_info,
+            &video_profile_info,
             config.num_dpb_slots,
             config.user.max_encode_resolution,
             vk::ImageUsageFlags::VIDEO_ENCODE_DPB_KHR,
@@ -234,7 +238,7 @@ impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
         };
 
         let video_feedback_query_pool =
-            VideoFeedbackQueryPool::create(device, config.num_encode_slots, video_profile_info)?;
+            VideoFeedbackQueryPool::create(device, config.num_encode_slots, &video_profile_info)?;
 
         let separate_queue_data = if graphics_queue_family_index == encode_queue_family_index {
             None

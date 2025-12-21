@@ -1,5 +1,5 @@
 use crate::{Device, VulkanError};
-use ash::vk::{self};
+use ash::vk;
 
 #[derive(Debug)]
 pub(crate) struct VideoFeedbackQueryPool {
@@ -11,7 +11,7 @@ impl VideoFeedbackQueryPool {
     pub(crate) fn create(
         device: &Device,
         query_count: u32,
-        video_profile_info: vk::VideoProfileInfoKHR,
+        video_profile_info: &vk::VideoProfileInfoKHR<'_>,
     ) -> Result<Self, VulkanError> {
         unsafe {
             let mut query_pool_video_encode_feedback_create_info =
@@ -20,12 +20,14 @@ impl VideoFeedbackQueryPool {
                         | vk::VideoEncodeFeedbackFlagsKHR::BITSTREAM_BUFFER_OFFSET,
                 );
 
-            let mut video_profile_info = video_profile_info;
-            let query_create_info = vk::QueryPoolCreateInfo::default()
+            let mut query_create_info = vk::QueryPoolCreateInfo::default()
                 .query_type(vk::QueryType::VIDEO_ENCODE_FEEDBACK_KHR)
-                .query_count(query_count)
-                .push_next(&mut video_profile_info)
-                .push_next(&mut query_pool_video_encode_feedback_create_info);
+                .query_count(query_count);
+
+            query_pool_video_encode_feedback_create_info.p_next =
+                (video_profile_info as *const vk::VideoProfileInfoKHR<'_>).cast();
+            query_create_info.p_next =
+                (&raw const query_pool_video_encode_feedback_create_info).cast();
 
             let query_pool = device.ash().create_query_pool(&query_create_info, None)?;
 

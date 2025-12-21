@@ -1,7 +1,6 @@
+use crate::{VideoSession, VulkanError, encoder::codec::VulkanEncCodec};
+use ash::vk::{self, TaggedStructure};
 use std::ptr::{null, null_mut};
-
-use crate::{VideoSession, VulkanError};
-use ash::vk::{self, ExtendsVideoSessionParametersUpdateInfoKHR};
 
 #[derive(Debug)]
 pub(crate) struct VideoSessionParameters {
@@ -11,18 +10,15 @@ pub(crate) struct VideoSessionParameters {
 }
 
 impl VideoSessionParameters {
-    pub(crate) fn create<P>(
+    pub(crate) fn create<C: VulkanEncCodec>(
         video_session: &VideoSession,
-        parameters: &mut P,
-    ) -> Result<Self, VulkanError>
-    where
-        P: vk::ExtendsVideoSessionParametersCreateInfoKHR,
-    {
+        parameters: &C::ParametersCreateInfo<'_>,
+    ) -> Result<Self, VulkanError> {
         let device = video_session.device();
 
-        let create_info = vk::VideoSessionParametersCreateInfoKHR::default()
-            .video_session(unsafe { video_session.video_session() })
-            .push_next(parameters);
+        let mut create_info = vk::VideoSessionParametersCreateInfoKHR::default()
+            .video_session(unsafe { video_session.video_session() });
+        create_info.p_next = (parameters as *const C::ParametersCreateInfo<'_>).cast();
 
         let mut video_session_parameters = vk::VideoSessionParametersKHR::null();
 
@@ -48,9 +44,9 @@ impl VideoSessionParameters {
         })
     }
 
-    pub(crate) fn update<P>(&mut self, parameters: &mut P) -> Result<(), vk::Result>
+    pub(crate) fn update<'a, P>(&mut self, parameters: &'a mut P) -> Result<(), vk::Result>
     where
-        P: ExtendsVideoSessionParametersUpdateInfoKHR,
+        P: vk::Extends<vk::VideoSessionParametersUpdateInfoKHR<'a>> + vk::TaggedStructure<'a>,
     {
         self.update_count += 1;
 
@@ -58,7 +54,7 @@ impl VideoSessionParameters {
 
         let update_info = vk::VideoSessionParametersUpdateInfoKHR::default()
             .update_sequence_count(self.update_count)
-            .push_next(parameters);
+            .push(parameters);
 
         let update_video_session_parameters = device
             .ash_video_queue_device()
@@ -75,19 +71,55 @@ impl VideoSessionParameters {
         }
     }
 
-    pub(crate) unsafe fn get_encoded_video_session_parameters<T>(
+    pub(crate) unsafe fn get_encoded_video_session_parameters<'a, T>(
         &self,
-        ext: &mut T,
+        ext: &'a mut T,
     ) -> Result<Vec<u8>, VulkanError>
     where
-        T: vk::TaggedStructure,
-        T: vk::ExtendsVideoEncodeSessionParametersGetInfoKHR,
+        T: vk::TaggedStructure<'a>,
+        T: vk::Extends<vk::VideoEncodeSessionParametersGetInfoKHR<'a>>,
     {
         let device = self.video_session.device();
 
         let session_parameters_info = vk::VideoEncodeSessionParametersGetInfoKHR::default()
             .video_session_parameters(self.video_session_parameters)
-            .push_next(ext);
+            .push(ext);
+
+        let get_encoded_video_session_parameters = device
+            .ash_video_encode_queue_device()
+            .fp()
+            .get_encoded_video_session_parameters_khr;
+
+        let mut len = 0;
+        (get_encoded_video_session_parameters)(
+            device.ash().handle(),
+            &session_parameters_info,
+            null_mut(),
+            &raw mut len,
+            null_mut(),
+        )
+        .result()?;
+
+        let mut buf = vec![0u8; len];
+        (get_encoded_video_session_parameters)(
+            device.ash().handle(),
+            &session_parameters_info,
+            null_mut(),
+            &raw mut len,
+            buf.as_mut_ptr().cast(),
+        )
+        .result()?;
+
+        Ok(buf)
+    }
+
+    pub(crate) unsafe fn get_encoded_video_session_parameters2(
+        &self,
+    ) -> Result<Vec<u8>, VulkanError> {
+        let device = self.video_session.device();
+
+        let session_parameters_info = vk::VideoEncodeSessionParametersGetInfoKHR::default()
+            .video_session_parameters(self.video_session_parameters);
 
         let get_encoded_video_session_parameters = device
             .ash_video_encode_queue_device()
