@@ -1,4 +1,9 @@
-use ash::{ext::debug_utils, khr::video_queue, vk};
+use ash::{
+    ext::debug_utils,
+    khr::video_queue,
+    vk::{self, Handle as _, TaggedStructure},
+};
+use ash_stable::vk::Handle;
 use std::{ffi::CStr, fmt, sync::Arc};
 
 use crate::{PhysicalDevice, VulkanError};
@@ -12,6 +17,7 @@ pub struct Instance {
 
 struct Inner {
     _entry: ash::Entry,
+    _stable_entry: Option<ash_stable::Entry>,
     instance: ash::Instance,
     video_queue_instance: video_queue::Instance,
 
@@ -36,15 +42,20 @@ impl Instance {
     pub unsafe fn from_wgpu(wgpu: wgpu::Instance) -> Instance {
         let vk_instance = wgpu.as_hal::<wgpu::hal::vulkan::Api>().unwrap();
 
-        let entry = vk_instance.shared_instance().entry().clone();
-        let instance = vk_instance.shared_instance().raw_instance().clone();
+        let stable_entry = vk_instance.shared_instance().entry().clone();
+        let stable_instance = vk_instance.shared_instance().raw_instance().clone();
 
-        let video_queue_instance = video_queue::Instance::new(&entry, &instance);
+        let entry = ash::Entry::load().unwrap();
+        let instance = ash::vk::Instance::from_raw(stable_instance.handle().as_raw());
+        let instance = ash::Instance::load(entry.static_fn(), instance);
+
+        let video_queue_instance = video_queue::Instance::load(&entry, &instance);
 
         Instance {
             inner: Arc::new(Inner {
                 _entry: entry,
-                instance,
+                _stable_entry: Some(stable_entry),
+                instance: instance,
                 video_queue_instance,
                 wgpu: Some(wgpu),
                 debug_messenger: None,
@@ -91,14 +102,14 @@ impl Instance {
             .enabled_extension_names(&instance_extensions);
 
             if cfg!(debug_assertions) {
-                create_info = create_info.push_next(&mut validation_features);
+                create_info = create_info.push(&mut validation_features);
             }
 
             let instance = entry.create_instance(&create_info, None)?;
 
             let debug_messenger = if cfg!(debug_assertions) {
                 Some(
-                    debug_utils::Instance::new(&entry, &instance).create_debug_utils_messenger(
+                    debug_utils::Instance::load(&entry, &instance).create_debug_utils_messenger(
                         &vk::DebugUtilsMessengerCreateInfoEXT::default()
                             .message_severity(
                                 vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE
@@ -119,17 +130,18 @@ impl Instance {
                 None
             };
 
-            let video_queue_instance = video_queue::Instance::new(&entry, &instance);
+            let video_queue_instance = video_queue::Instance::load(&entry, &instance);
 
             Ok(Self {
                 inner: Arc::new(Inner {
                     _entry: entry,
+                    _stable_entry: None,
                     instance,
-                    video_queue_instance,
                     // enabled_extensions: instance_extensions
                     //     .into_iter()
                     //     .map(|c| CStr::from_ptr(c))
                     //     .collect(),
+                    video_queue_instance,
                     wgpu: None,
                     debug_messenger,
                 }),
@@ -187,7 +199,7 @@ impl Drop for Inner {
         unsafe {
             if self.wgpu.is_none() {
                 if let Some(debug_messenger) = self.debug_messenger.take() {
-                    debug_utils::Instance::new(&self._entry, &self.instance)
+                    debug_utils::Instance::load(&self._entry, &self.instance)
                         .destroy_debug_utils_messenger(debug_messenger, None);
                 }
 

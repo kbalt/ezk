@@ -1,5 +1,5 @@
 use crate::{Device, RecordingCommandBuffer, VulkanError};
-use ash::vk;
+use ash::vk::{self, Handle, TaggedStructure};
 use smallvec::{SmallVec, smallvec};
 use std::{
     os::fd::{AsRawFd, OwnedFd},
@@ -120,8 +120,8 @@ impl Image {
             .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
             .usage(usage)
             .initial_layout(vk::ImageLayout::UNDEFINED)
-            .push_next(&mut external_memory_image_info)
-            .push_next(&mut drm_modifier_info);
+            .push(&mut external_memory_image_info)
+            .push(&mut drm_modifier_info);
 
         // Create the image
         let image = unsafe { device.ash().create_image(&image_create_info, None)? };
@@ -140,7 +140,7 @@ impl Image {
         let mut memory_requirements = memory_requirements.memory_requirements;
 
         let mut memory_fd_properties = vk::MemoryFdPropertiesKHR::default();
-        ash::khr::external_memory_fd::Device::new(device.instance().ash(), device.ash())
+        ash::khr::external_memory_fd::Device::load(device.instance().ash(), device.ash())
             .get_memory_fd_properties(
                 vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
                 planes[0].fd.as_raw_fd(),
@@ -163,8 +163,8 @@ impl Image {
         let allocate_info = vk::MemoryAllocateInfo::default()
             .allocation_size(memory_requirements.size)
             .memory_type_index(memory_type_index)
-            .push_next(&mut import_fd_info)
-            .push_next(&mut dedicated);
+            .push(&mut import_fd_info)
+            .push(&mut dedicated);
 
         // Create vulkan memory using the dma buf fd
         let memory = unsafe { device.ash().allocate_memory(&allocate_info, None)? };
@@ -247,8 +247,8 @@ impl Image {
             .usage(usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .initial_layout(vk::ImageLayout::UNDEFINED)
-            .push_next(&mut external_memory_image_info)
-            .push_next(&mut drm_modifier_info);
+            .push(&mut external_memory_image_info)
+            .push(&mut drm_modifier_info);
 
         // Create the image
         let image = unsafe { device.ash().create_image(&image_create_info, None)? };
@@ -275,7 +275,7 @@ impl Image {
 
             let memory_requirements_info = vk::ImageMemoryRequirementsInfo2::default()
                 .image(image)
-                .push_next(&mut plane_memory_requirements);
+                .push(&mut plane_memory_requirements);
 
             let mut memory_requirements = vk::MemoryRequirements2::default();
 
@@ -303,8 +303,8 @@ impl Image {
             let allocate_info = vk::MemoryAllocateInfo::default()
                 .allocation_size(memory_requirements.size)
                 .memory_type_index(memory_type_index)
-                .push_next(&mut import_fd_info)
-                .push_next(&mut dedicated);
+                .push(&mut import_fd_info)
+                .push(&mut dedicated);
 
             // Create vulkan memory using the dma buf fd
             let memory = unsafe { device.ash().allocate_memory(&allocate_info, None)? };
@@ -327,7 +327,7 @@ impl Image {
                 vk::BindImageMemoryInfo::default()
                     .image(image)
                     .memory(*memory)
-                    .push_next(plane)
+                    .push(plane)
             })
             .collect();
 
@@ -451,7 +451,7 @@ impl Image {
             .as_hal::<wgpu::hal::vulkan::Api>()
             .unwrap()
             .texture_from_raw(
-                self.inner.image,
+                ash_stable::vk::Handle::from_raw(self.inner.image.as_raw()),
                 &wgpu::hal::TextureDescriptor {
                     label: None,
                     size,
