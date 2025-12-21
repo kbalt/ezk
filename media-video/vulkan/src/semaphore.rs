@@ -1,5 +1,5 @@
 use crate::{Device, VulkanError};
-use ash::vk;
+use ash::vk::{self, TaggedStructure};
 use std::{
     os::fd::{AsRawFd, OwnedFd},
     sync::Arc,
@@ -40,7 +40,7 @@ impl Semaphore {
         unsafe {
             let mut type_create_info =
                 vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);
-            let create_info = vk::SemaphoreCreateInfo::default().push_next(&mut type_create_info);
+            let create_info = vk::SemaphoreCreateInfo::default().push(&mut type_create_info);
 
             let handle = device.ash().create_semaphore(&create_info, None)?;
 
@@ -64,7 +64,7 @@ impl Semaphore {
 
         let mut type_create_info =
             vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);
-        let create_info = vk::SemaphoreCreateInfo::default().push_next(&mut type_create_info);
+        let create_info = vk::SemaphoreCreateInfo::default().push(&mut type_create_info);
 
         let handle = device.ash().create_semaphore(&create_info, None)?;
 
@@ -73,7 +73,7 @@ impl Semaphore {
             .handle_type(vk::ExternalSemaphoreHandleTypeFlags::OPAQUE_FD)
             .fd(fd.as_raw_fd());
 
-        ash::khr::external_semaphore_fd::Device::new(device.instance().ash(), device.ash())
+        ash::khr::external_semaphore_fd::Device::load(device.instance().ash(), device.ash())
             .import_semaphore_fd(&import_semaphore_fd_info)?;
 
         // Ownership of the fd transferred to the vulkan driver, forget about it

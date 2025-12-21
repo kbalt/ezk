@@ -5,26 +5,42 @@ use std::{ffi::CStr, fmt};
 pub trait VulkanEncCodec {
     const ENCODE_OPERATION: vk::VideoCodecOperationFlagsKHR;
     const EXTENSION: &'static CStr;
-    type ProfileInfo<'a>: vk::ExtendsVideoProfileInfoKHR + fmt::Debug + Copy;
-    type Capabilities<'a>: vk::ExtendsVideoCapabilitiesKHR + Default + fmt::Debug + Copy;
-    type ParametersCreateInfo<'a>: vk::ExtendsVideoSessionParametersCreateInfoKHR
+
+    type ProfileInfo<'a>: vk::Extends<vk::VideoProfileInfoKHR<'a>>
+        + vk::TaggedStructure<'a>
         + fmt::Debug
         + Copy;
-    type ParametersAddInfo<'a>: vk::ExtendsVideoSessionParametersUpdateInfoKHR + fmt::Debug + Copy;
+    type Capabilities<'a>: vk::Extends<vk::VideoCapabilitiesKHR<'a>>
+        + vk::TaggedStructure<'a>
+        + Default
+        + fmt::Debug
+        + Copy;
+    type ParametersCreateInfo<'a>: vk::Extends<vk::VideoSessionParametersCreateInfoKHR<'a>>
+        + vk::TaggedStructure<'a>
+        + fmt::Debug
+        + Copy;
 
     type StdReferenceInfo: fmt::Debug + Copy;
-    type DpbSlotInfo<'a>: vk::ExtendsVideoReferenceSlotInfoKHR + fmt::Debug + Copy;
+    type DpbSlotInfo<'a>: vk::Extends<vk::VideoReferenceSlotInfoKHR<'a>>
+        + vk::TaggedStructure<'a>
+        + fmt::Debug
+        + Copy;
 
     fn slot_info_from_std(std_reference_info: &Self::StdReferenceInfo) -> Self::DpbSlotInfo<'_>;
 
-    type PictureInfo<'a>: vk::ExtendsVideoEncodeInfoKHR + fmt::Debug + Copy;
+    type PictureInfo<'a>: vk::Extends<vk::VideoEncodeInfoKHR<'a>>
+        + vk::TaggedStructure<'a>
+        + fmt::Debug
+        + Copy;
 
-    type RateControlInfo<'a>: vk::ExtendsVideoBeginCodingInfoKHR
-        + vk::ExtendsVideoCodingControlInfoKHR
+    type RateControlInfo<'a>: vk::Extends<vk::VideoBeginCodingInfoKHR<'a>>
+        + vk::Extends<vk::VideoCodingControlInfoKHR<'a>>
+        + vk::TaggedStructure<'a>
         + fmt::Debug
         + Copy;
     type RateControlLayerInfo<'a>: fmt::Debug
-        + vk::ExtendsVideoEncodeRateControlLayerInfoKHR
+        + vk::Extends<vk::VideoEncodeRateControlLayerInfoKHR<'a>>
+        + vk::TaggedStructure<'a>
         + fmt::Debug
         + Copy;
 
@@ -32,6 +48,13 @@ pub trait VulkanEncCodec {
     fn get_encoded_video_session_parameters(
         video_session_parameters: &VideoSessionParameters,
     ) -> Result<Vec<u8>, VulkanError>;
+}
+
+pub trait VulkanEncCodecUpdate: VulkanEncCodec {
+    type ParametersAddInfo<'a>: vk::Extends<vk::VideoSessionParametersUpdateInfoKHR<'a>>
+        + vk::TaggedStructure<'a>
+        + fmt::Debug
+        + Copy;
 }
 
 #[derive(Debug)]
@@ -44,7 +67,6 @@ impl VulkanEncCodec for H264 {
     type ProfileInfo<'a> = vk::VideoEncodeH264ProfileInfoKHR<'a>;
     type Capabilities<'a> = vk::VideoEncodeH264CapabilitiesKHR<'a>;
     type ParametersCreateInfo<'a> = vk::VideoEncodeH264SessionParametersCreateInfoKHR<'a>;
-    type ParametersAddInfo<'a> = vk::VideoEncodeH264SessionParametersAddInfoKHR<'a>;
 
     type StdReferenceInfo = vk::native::StdVideoEncodeH264ReferenceInfo;
     type DpbSlotInfo<'a> = vk::VideoEncodeH264DpbSlotInfoKHR<'a>;
@@ -70,6 +92,10 @@ impl VulkanEncCodec for H264 {
     }
 }
 
+impl VulkanEncCodecUpdate for H264 {
+    type ParametersAddInfo<'a> = vk::VideoEncodeH264SessionParametersAddInfoKHR<'a>;
+}
+
 #[derive(Debug)]
 pub struct H265;
 
@@ -80,7 +106,6 @@ impl VulkanEncCodec for H265 {
     type ProfileInfo<'a> = vk::VideoEncodeH265ProfileInfoKHR<'a>;
     type Capabilities<'a> = vk::VideoEncodeH265CapabilitiesKHR<'a>;
     type ParametersCreateInfo<'a> = vk::VideoEncodeH265SessionParametersCreateInfoKHR<'a>;
-    type ParametersAddInfo<'a> = vk::VideoEncodeH265SessionParametersAddInfoKHR<'a>;
     type DpbSlotInfo<'a> = vk::VideoEncodeH265DpbSlotInfoKHR<'a>;
 
     type StdReferenceInfo = vk::native::StdVideoEncodeH265ReferenceInfo;
@@ -104,5 +129,40 @@ impl VulkanEncCodec for H265 {
             .write_std_vps(true);
 
         unsafe { video_session_parameters.get_encoded_video_session_parameters(&mut info) }
+    }
+}
+
+impl VulkanEncCodecUpdate for H265 {
+    type ParametersAddInfo<'a> = vk::VideoEncodeH265SessionParametersAddInfoKHR<'a>;
+}
+
+#[derive(Debug)]
+pub struct AV1;
+
+impl VulkanEncCodec for AV1 {
+    const ENCODE_OPERATION: vk::VideoCodecOperationFlagsKHR =
+        vk::VideoCodecOperationFlagsKHR::ENCODE_AV1;
+    const EXTENSION: &'static CStr = ash::khr::video_encode_av1::NAME;
+    type ProfileInfo<'a> = vk::VideoEncodeAV1ProfileInfoKHR<'a>;
+    type Capabilities<'a> = vk::VideoEncodeAV1CapabilitiesKHR<'a>;
+    type ParametersCreateInfo<'a> = vk::VideoEncodeAV1SessionParametersCreateInfoKHR<'a>;
+    type DpbSlotInfo<'a> = vk::VideoEncodeAV1DpbSlotInfoKHR<'a>;
+
+    type StdReferenceInfo = vk::native::StdVideoEncodeAV1ReferenceInfo;
+
+    fn slot_info_from_std(std_reference_info: &Self::StdReferenceInfo) -> Self::DpbSlotInfo<'_> {
+        vk::VideoEncodeAV1DpbSlotInfoKHR::default().std_reference_info(&std_reference_info)
+    }
+
+    type PictureInfo<'a> = vk::VideoEncodeAV1PictureInfoKHR<'a>;
+
+    type RateControlInfo<'a> = vk::VideoEncodeAV1RateControlInfoKHR<'a>;
+    type RateControlLayerInfo<'a> = vk::VideoEncodeAV1RateControlLayerInfoKHR<'a>;
+
+    #[allow(private_interfaces)]
+    fn get_encoded_video_session_parameters(
+        video_session_parameters: &VideoSessionParameters,
+    ) -> Result<Vec<u8>, VulkanError> {
+        unsafe { video_session_parameters.get_encoded_video_session_parameters2() }
     }
 }
