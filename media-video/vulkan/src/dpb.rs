@@ -1,9 +1,9 @@
 use crate::{Device, Image, ImageView, VulkanError};
-use ash::vk::{self};
+use ash::vk::{self, TaggedStructure};
 
 pub(crate) fn create_dpb(
     device: &Device,
-    video_profile_info: vk::VideoProfileInfoKHR<'_>,
+    video_profile_info: &vk::VideoProfileInfoKHR<'_>,
     num_slots: u32,
     extent: vk::Extent2D,
     usage: vk::ImageUsageFlags,
@@ -18,14 +18,13 @@ pub(crate) fn create_dpb(
 
 fn create_dpb_layers(
     device: &Device,
-    video_profile_info: vk::VideoProfileInfoKHR<'_>,
+    video_profile_info: &vk::VideoProfileInfoKHR<'_>,
     num_slots: u32,
     extent: vk::Extent2D,
     usage: vk::ImageUsageFlags,
 ) -> Result<Vec<ImageView>, VulkanError> {
-    let profiles = [video_profile_info];
-
-    let mut video_profile_list_info = vk::VideoProfileListInfoKHR::default().profiles(&profiles);
+    let mut video_profile_list_info =
+        vk::VideoProfileListInfoKHR::default().profiles(std::slice::from_ref(video_profile_info));
     let input_image_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_2D)
         .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
@@ -41,7 +40,7 @@ fn create_dpb_layers(
         .initial_layout(vk::ImageLayout::UNDEFINED)
         .samples(vk::SampleCountFlags::TYPE_1)
         .usage(usage)
-        .push_next(&mut video_profile_list_info);
+        .push(&mut video_profile_list_info);
 
     let image = unsafe { Image::create(device, &input_image_info)? };
 
@@ -64,7 +63,7 @@ fn create_dpb_layers(
                 base_array_layer: array_layer,
                 layer_count: 1,
             })
-            .push_next(&mut view_usage_create_info);
+            .push(&mut view_usage_create_info);
 
         let image_view = unsafe { ImageView::create(&image, &create_info)? };
 
@@ -81,7 +80,7 @@ fn create_dpb_layers(
 
 fn create_dpb_separate_images(
     device: &Device,
-    video_profile_info: vk::VideoProfileInfoKHR<'_>,
+    video_profile_info: &vk::VideoProfileInfoKHR<'_>,
     num_slots: u32,
     extent: vk::Extent2D,
     usage: vk::ImageUsageFlags,
@@ -89,10 +88,8 @@ fn create_dpb_separate_images(
     let mut slots = Vec::with_capacity(num_slots as usize);
 
     for i in 0..num_slots {
-        let profiles = [video_profile_info];
-
-        let mut video_profile_list_info =
-            vk::VideoProfileListInfoKHR::default().profiles(&profiles);
+        let mut video_profile_list_info = vk::VideoProfileListInfoKHR::default()
+            .profiles(std::slice::from_ref(video_profile_info));
         let input_image_info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
             .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
@@ -108,7 +105,7 @@ fn create_dpb_separate_images(
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .samples(vk::SampleCountFlags::TYPE_1)
             .usage(usage)
-            .push_next(&mut video_profile_list_info);
+            .push(&mut video_profile_list_info);
 
         let image = unsafe { Image::create(device, &input_image_info)? };
 
@@ -128,7 +125,7 @@ fn create_dpb_separate_images(
                 base_array_layer: 0,
                 layer_count: 1,
             })
-            .push_next(&mut view_usage_create_info);
+            .push(&mut view_usage_create_info);
 
         let image_view = unsafe { ImageView::create(&image, &create_info)? };
 

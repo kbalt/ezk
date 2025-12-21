@@ -3,9 +3,10 @@ use crate::{PhysicalDevice, VulkanError};
 use anyhow::Context;
 use ash::{
     khr::{video_encode_queue, video_queue},
-    vk::{self, Handle},
+    vk::{self, Handle, TaggedStructure},
 };
-use std::{ffi::CStr, fmt, sync::Arc};
+use ash_stable::vk::Handle as _;
+use std::{ffi::CStr, fmt, mem::transmute, sync::Arc};
 
 #[derive(Clone)]
 pub struct Device {
@@ -138,7 +139,8 @@ impl Device {
 
             // Always enabling these features since they are always required
             let mut synchronization2_features =
-                vk::PhysicalDeviceSynchronization2Features::default().synchronization2(true);
+                ash_stable::vk::PhysicalDeviceSynchronization2Features::default()
+                    .synchronization2(true);
 
             let device = vk_adapter
                 .open_with_callback(
@@ -163,7 +165,7 @@ impl Device {
                                 i as u32 != graphics_queue_family_index
                                     && properties
                                         .queue_flags
-                                        .contains(vk::QueueFlags::VIDEO_ENCODE_KHR)
+                                        .contains(ash_stable::vk::QueueFlags::VIDEO_ENCODE_KHR)
                             });
 
                         // If there's a (separate) encode queue, request that
@@ -171,7 +173,7 @@ impl Device {
                             separate_encode_queue_family_index = Some(index as u32);
 
                             args.queue_create_infos.push(
-                                vk::DeviceQueueCreateInfo::default()
+                                ash_stable::vk::DeviceQueueCreateInfo::default()
                                     .queue_family_index(index as u32)
                                     .queue_priorities(&[1.0]),
                             );
@@ -202,39 +204,39 @@ impl Device {
                 .as_hal::<wgpu::hal::vulkan::Api>()
                 .expect("Just created a vulkan device");
 
-            let graphics_queue = vk_device
-                .raw_device()
-                .get_device_queue(graphics_queue_family_index, 0);
+            let vk_physical_device = vk_device.raw_physical_device();
 
-            let encode_queue = vk_device
-                .raw_device()
-                .get_device_queue(encode_queue_family_index, 0);
+            let instance = Instance::from_wgpu(instance.clone());
 
-            let video_queue_device = ash::khr::video_queue::Device::new(
-                vk_adapter.shared_instance().raw_instance(),
-                vk_device.raw_device(),
+            let vk_device = ash::Device::load(
+                instance.ash().fp_v1_0(),
+                vk::Device::from_raw(vk_device.raw_device().handle().as_raw()),
             );
+            let graphics_queue = vk_device.get_device_queue(graphics_queue_family_index, 0);
+            let encode_queue = vk_device.get_device_queue(encode_queue_family_index, 0);
 
-            let video_encode_queue_device = video_encode_queue::Device::new(
-                vk_adapter.shared_instance().raw_instance(),
-                vk_device.raw_device(),
-            );
+            let video_queue_device =
+                ash::khr::video_queue::Device::load(instance.ash(), &vk_device);
+
+            let video_encode_queue_device =
+                video_encode_queue::Device::load(instance.ash(), &vk_device);
 
             let physical_device_memory_properties = vk_adapter
                 .shared_instance()
                 .raw_instance()
                 .get_physical_device_memory_properties(vk_adapter.raw_physical_device());
 
-            let instance = Instance::from_wgpu(instance.clone());
-            let physical_device =
-                PhysicalDevice::new(instance.clone(), vk_adapter.raw_physical_device());
+            let physical_device = PhysicalDevice::new(
+                instance.clone(),
+                vk::PhysicalDevice::from_raw(vk_physical_device.as_raw()),
+            );
 
             let device = Device {
                 inner: Arc::new(Inner {
                     instance,
                     physical_device,
-                    physical_device_memory_properties,
-                    device: vk_device.raw_device().clone(),
+                    physical_device_memory_properties: transmute(physical_device_memory_properties),
+                    device: vk_device,
                     device_extensions,
                     video_queue_device,
                     video_encode_queue_device,
@@ -342,8 +344,8 @@ impl Device {
         let create_device_info = vk::DeviceCreateInfo::default()
             .enabled_extension_names(&extensions)
             .queue_create_infos(&queue_create_infos)
-            .push_next(&mut synchronization2_features)
-            .push_next(&mut timeline_sempahore_feature);
+            .push(&mut synchronization2_features)
+            .push(&mut timeline_sempahore_feature);
 
         let device = unsafe {
             instance
@@ -351,8 +353,8 @@ impl Device {
                 .create_device(physical_device.handle(), &create_device_info, None)?
         };
 
-        let video_queue_device = ash::khr::video_queue::Device::new(instance.ash(), &device);
-        let video_encode_queue_device = video_encode_queue::Device::new(instance.ash(), &device);
+        let video_queue_device = ash::khr::video_queue::Device::load(instance.ash(), &device);
+        let video_encode_queue_device = video_encode_queue::Device::load(instance.ash(), &device);
 
         let physical_device_memory_properties = unsafe {
             instance
@@ -420,7 +422,7 @@ impl Device {
                     );
 
                 if let Err(e) =
-                    ash::ext::debug_utils::Device::new(self.instance().ash(), self.ash())
+                    ash::ext::debug_utils::Device::load(self.instance().ash(), self.ash())
                         .set_debug_utils_object_name(&name_info)
                 {
                     log::warn!("Failed to set debug object name, {e}");
@@ -499,7 +501,7 @@ fn add(
 }
 
 fn add2(
-    properties: &[vk::ExtensionProperties],
+    properties: &[ash_stable::vk::ExtensionProperties],
     extension: &'static CStr,
     extensions: &mut Vec<&'static CStr>,
 ) -> bool {

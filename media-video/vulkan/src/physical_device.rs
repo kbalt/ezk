@@ -1,8 +1,9 @@
 use std::{ffi::CStr, fmt, ptr};
 
-use crate::Instance;
+use crate::{Instance, encoder::codec::VulkanEncCodec};
 use anyhow::Context as _;
-use ash::vk::{self, ExtendsVideoCapabilitiesKHR, PhysicalDeviceProperties};
+use ash::vk::{self, Handle, PhysicalDeviceProperties, TaggedStructure};
+use ash_stable::vk::Handle as _;
 
 #[derive(Debug, Clone, Copy)]
 pub struct DrmModifier {
@@ -57,7 +58,7 @@ impl PhysicalDevice {
             vk::VideoProfileListInfoKHR::default().profiles(video_profile_infos);
         let physical_device_video_format_info = vk::PhysicalDeviceVideoFormatInfoKHR::default()
             .image_usage(vk::ImageUsageFlags::VIDEO_ENCODE_SRC_KHR)
-            .push_next(&mut video_profile_list_info);
+            .push(&mut video_profile_list_info);
 
         let get_physical_device_video_format_properties = self
             .instance
@@ -91,21 +92,18 @@ impl PhysicalDevice {
         Ok(video_format_properties)
     }
 
-    pub fn video_capabilities<CodecCaps>(
+    pub fn video_capabilities<'a, C: VulkanEncCodec>(
         &self,
-        video_profile_info: vk::VideoProfileInfoKHR<'_>,
+        video_profile_info: vk::VideoProfileInfoKHR<'a>,
     ) -> Result<
         (
             vk::VideoCapabilitiesKHR<'static>,
             vk::VideoEncodeCapabilitiesKHR<'static>,
-            CodecCaps,
+            C::Capabilities<'static>,
         ),
         vk::Result,
-    >
-    where
-        CodecCaps: Default + ExtendsVideoCapabilitiesKHR,
-    {
-        let mut codec_caps = CodecCaps::default();
+    > {
+        let mut codec_caps = C::Capabilities::default();
         let mut encode_caps = vk::VideoEncodeCapabilitiesKHR {
             p_next: (&raw mut codec_caps).cast(),
             ..Default::default()
@@ -136,8 +134,7 @@ impl PhysicalDevice {
     pub fn supported_drm_modifier(&self, format: vk::Format) -> Vec<DrmModifier> {
         unsafe {
             let mut modifier_list = vk::DrmFormatModifierPropertiesList2EXT::default();
-            let mut format_properties =
-                vk::FormatProperties2::default().push_next(&mut modifier_list);
+            let mut format_properties = vk::FormatProperties2::default().push(&mut modifier_list);
 
             self.instance()
                 .ash()
@@ -154,8 +151,7 @@ impl PhysicalDevice {
 
             let mut modifier_list = vk::DrmFormatModifierPropertiesList2EXT::default()
                 .drm_format_modifier_properties(&mut properties);
-            let mut format_properties =
-                vk::FormatProperties2::default().push_next(&mut modifier_list);
+            let mut format_properties = vk::FormatProperties2::default().push(&mut modifier_list);
 
             self.instance()
                 .ash()
@@ -186,7 +182,7 @@ impl PhysicalDevice {
                     .unwrap()
                     .raw_physical_device();
 
-                self.handle() == raw
+                self.handle().as_raw() == raw.as_raw()
             })
             .context("Failed to find adapter when enumerating vulkan adapters")
     }
