@@ -2,12 +2,12 @@ use crate::{
     Buffer, CommandBuffer, Fence, ImageView, RecordingCommandBuffer, Semaphore,
     VideoFeedbackQueryPool, VideoSession, VideoSessionParameters, VulkanError,
     encoder::{
-        codec::VulkanEncCodec,
+        codec::{VulkanEncCodec, VulkanEncCodecUpdate},
         input::{Input, InputData, InputPixelFormat},
     },
     image::ImageMemoryBarrier,
 };
-use ash::vk;
+use ash::vk::{self, TaggedStructure};
 use ezk_image::{ColorInfo, ColorSpace, ImageRef, PixelFormat, YuvColorInfo};
 use smallvec::SmallVec;
 use std::{collections::VecDeque, pin::Pin, time::Instant};
@@ -166,17 +166,20 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
     /// # Panics
     ///
     /// If the given extent is larger than [`Self::max_extent`]
-    pub fn update_current_extent(
+    pub fn update_current_extent<'a>(
         &mut self,
         extent: vk::Extent2D,
-        mut parameters: C::ParametersAddInfo<'_>,
-    ) -> Result<(), VulkanError> {
+        parameters: &'a mut C::ParametersAddInfo<'a>,
+    ) -> Result<(), VulkanError>
+    where
+        C: VulkanEncCodecUpdate,
+    {
         assert!(extent.width <= self.max_encode_extent.width);
         assert!(extent.height <= self.max_encode_extent.height);
 
         self.current_encode_extent = extent;
 
-        self.video_session_parameters.update(&mut parameters)?;
+        self.video_session_parameters.update(parameters)?;
 
         Ok(())
     }
@@ -491,14 +494,14 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
         Ok(())
     }
 
-    unsafe fn record_encode_queue(
-        &mut self,
+    unsafe fn record_encode_queue<'a>(
+        &'a mut self,
         encode_slot: &VulkanEncodeSlot,
         recording: &RecordingCommandBuffer<'_>,
         reference_indices: SmallVec<[usize; 8]>,
         setup_reference_index: usize,
         setup_std_reference_info: C::StdReferenceInfo,
-        mut picture_info: C::PictureInfo<'_>,
+        picture_info: C::PictureInfo<'_>,
     ) {
         let device = self.video_session.device();
 
@@ -543,7 +546,7 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
         let setup_reference_slot_info = vk::VideoReferenceSlotInfoKHR::default()
             .picture_resource(&setup_reference_picture_resource_info)
             .slot_index(setup_reference_index as i32)
-            .push_next(&mut setup_reference_dpb_slot_info);
+            .push(&mut setup_reference_dpb_slot_info);
 
         // Barrier the active reference dpb slots
         for dpb_slot in &reference_indices {
@@ -563,7 +566,7 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
             );
         }
 
-        let mut reference_slots_resources: SmallVec<[_; 8]> = reference_indices
+        let mut reference_slots_resources: Vec<_> = reference_indices
             .iter()
             .map(|index| {
                 let slot = &self.dpb_slots[*index];
@@ -578,13 +581,18 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
             })
             .collect();
 
-        let mut reference_slots: SmallVec<[_; 8]> = reference_slots_resources
+        let mut reference_slots: Vec<_> = reference_slots_resources
             .iter_mut()
             .map(|(slot_index, picture_resource, dpb_slot_info)| {
-                vk::VideoReferenceSlotInfoKHR::default()
+                let mut info = vk::VideoReferenceSlotInfoKHR::default()
                     .picture_resource(picture_resource)
-                    .slot_index(*slot_index as i32)
-                    .push_next(dpb_slot_info)
+                    .slot_index(*slot_index as i32);
+
+                info.p_next = (dpb_slot_info as *mut C::DpbSlotInfo<'_>)
+                    .cast_const()
+                    .cast();
+
+                info
             })
             .collect();
 
@@ -599,21 +607,23 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
                 .collect::<SmallVec<[_; 8]>>()
         );
 
-        let mut begin_info = vk::VideoBeginCodingInfoKHR::default()
-            .video_session(self.video_session.video_session())
-            .video_session_parameters(self.video_session_parameters.video_session_parameters())
-            .reference_slots(&reference_slots);
+        {
+            let mut begin_info = vk::VideoBeginCodingInfoKHR::default()
+                .video_session(self.video_session.video_session())
+                .video_session_parameters(self.video_session_parameters.video_session_parameters())
+                .reference_slots(&reference_slots);
 
-        if let Some(rc) = &self.current_rc {
-            begin_info.p_next = (&raw const rc.info).cast();
+            if let Some(rc) = &self.current_rc {
+                begin_info.p_next = (&raw const rc.info).cast();
+            }
+
+            // Issue the begin video coding command
+            let cmd_begin_video_coding = device
+                .ash_video_queue_device()
+                .fp()
+                .cmd_begin_video_coding_khr;
+            (cmd_begin_video_coding)(recording.command_buffer(), &raw const begin_info);
         }
-
-        // Issue the begin video coding command
-        let cmd_begin_video_coding = device
-            .ash_video_queue_device()
-            .fp()
-            .cmd_begin_video_coding_khr;
-        (cmd_begin_video_coding)(recording.command_buffer(), &raw const begin_info);
 
         if self.video_session_is_uninitialized || self.next_rc.is_some() {
             // Update the rate control configs after begin_video_coding, so the rate control passed reflects the current
@@ -634,23 +644,26 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
         // Do not include the setup reference in the vk::VideoEncodeInfoKHR::reference_slots
         let _setup_slot = reference_slots.pop();
 
-        let encode_info = vk::VideoEncodeInfoKHR::default()
-            .src_picture_resource(src_picture_resource_info)
-            .dst_buffer(encode_slot.output_buffer.buffer())
-            .dst_buffer_range(self.output_buffer_size)
-            .reference_slots(&reference_slots)
-            .flags(vk::VideoEncodeFlagsKHR::empty())
-            .setup_reference_slot(&setup_reference_slot_info)
-            .push_next(&mut picture_info);
+        {
+            let mut encode_info = vk::VideoEncodeInfoKHR::default()
+                .src_picture_resource(src_picture_resource_info)
+                .dst_buffer(encode_slot.output_buffer.buffer())
+                .dst_buffer_range(self.output_buffer_size)
+                .reference_slots(&reference_slots)
+                .flags(vk::VideoEncodeFlagsKHR::empty())
+                .setup_reference_slot(&setup_reference_slot_info);
 
-        self.video_feedback_query_pool
-            .cmd_begin_query(recording.command_buffer(), encode_slot.index);
+            encode_info.p_next = (&raw const picture_info).cast();
 
-        let cmd_encode_video = device
-            .ash_video_encode_queue_device()
-            .fp()
-            .cmd_encode_video_khr;
-        (cmd_encode_video)(recording.command_buffer(), &raw const encode_info);
+            self.video_feedback_query_pool
+                .cmd_begin_query(recording.command_buffer(), encode_slot.index);
+
+            let cmd_encode_video = device
+                .ash_video_encode_queue_device()
+                .fp()
+                .cmd_encode_video_khr;
+            (cmd_encode_video)(recording.command_buffer(), &raw const encode_info);
+        }
 
         self.video_feedback_query_pool
             .cmd_end_query(recording.command_buffer(), encode_slot.index);

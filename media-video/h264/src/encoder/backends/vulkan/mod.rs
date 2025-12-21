@@ -109,12 +109,6 @@ impl VkH264Encoder {
         capabilities: &VulkanEncoderCapabilities<H264>,
         config: VulkanH264EncoderConfig,
     ) -> Result<VkH264Encoder, VulkanError> {
-        assert_eq!(
-            capabilities.video_codec_profile_info.std_profile_idc,
-            config.profile.profile_idc().into(),
-            "Passed capabilities created from a different profile than the one in the encoder config"
-        );
-
         let state = H264EncoderState::new(config.frame_pattern);
 
         let caps = capabilities.video_capabilities;
@@ -220,7 +214,7 @@ impl VkH264Encoder {
                 .std_sp_ss(&std_sp_ss)
                 .std_pp_ss(&std_pp_ss);
 
-        let mut video_encode_h264_session_parameters_create_info =
+        let video_encode_h264_session_parameters_create_info =
             vk::VideoEncodeH264SessionParametersCreateInfoKHR::default()
                 .max_std_sps_count(u32::MAX)
                 .max_std_pps_count(u32::MAX)
@@ -234,10 +228,14 @@ impl VkH264Encoder {
             num_dpb_slots: max_dpb_slots,
         };
 
+        let h264_profile_info = vk::VideoEncodeH264ProfileInfoKHR::default()
+            .std_profile_idc(config.profile.profile_idc().into());
+
         let encoder = capabilities.create_encoder(
             device,
             encoder_config,
-            &mut video_encode_h264_session_parameters_create_info,
+            h264_profile_info,
+            video_encode_h264_session_parameters_create_info,
             Some(rate_control_from_config(&config)),
         )?;
 
@@ -325,11 +323,12 @@ impl VkH264Encoder {
         self.seq_params.frame_crop_top_offset = (width_mbaligned - width) / 2;
         self.seq_params.frame_crop_bottom_offset = (height_mbaligned - height) / 2;
 
-        let parameters = vk::VideoEncodeH264SessionParametersAddInfoKHR::default()
+        let mut parameters = vk::VideoEncodeH264SessionParametersAddInfoKHR::default()
             .std_sp_ss(std::slice::from_ref(&self.seq_params))
             .std_pp_ss(std::slice::from_ref(&self.pic_params));
 
-        self.encoder.update_current_extent(new_extent, parameters)?;
+        self.encoder
+            .update_current_extent(new_extent, &mut parameters)?;
 
         Ok(())
     }
