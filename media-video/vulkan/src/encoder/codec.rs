@@ -2,7 +2,7 @@ use crate::{VideoSessionParameters, VulkanError};
 use ash::vk;
 use std::{ffi::CStr, fmt};
 
-pub trait VulkanEncCodec {
+pub trait VulkanEncCodec: Copy {
     const ENCODE_OPERATION: vk::VideoCodecOperationFlagsKHR;
     const EXTENSION: &'static CStr;
 
@@ -15,6 +15,12 @@ pub trait VulkanEncCodec {
         + Default
         + fmt::Debug
         + Copy;
+
+    type SessionCreateInfo<'a>: vk::Extends<vk::VideoSessionCreateInfoKHR<'a>>
+        + vk::TaggedStructure<'a>
+        + fmt::Debug
+        + Copy;
+
     type ParametersCreateInfo<'a>: vk::Extends<vk::VideoSessionParametersCreateInfoKHR<'a>>
         + vk::TaggedStructure<'a>
         + fmt::Debug
@@ -57,7 +63,7 @@ pub trait VulkanEncCodecUpdate: VulkanEncCodec {
         + Copy;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct H264;
 
 impl VulkanEncCodec for H264 {
@@ -66,6 +72,7 @@ impl VulkanEncCodec for H264 {
     const EXTENSION: &'static CStr = ash::khr::video_encode_h264::NAME;
     type ProfileInfo<'a> = vk::VideoEncodeH264ProfileInfoKHR<'a>;
     type Capabilities<'a> = vk::VideoEncodeH264CapabilitiesKHR<'a>;
+    type SessionCreateInfo<'a> = vk::VideoEncodeH264SessionCreateInfoKHR<'a>;
     type ParametersCreateInfo<'a> = vk::VideoEncodeH264SessionParametersCreateInfoKHR<'a>;
 
     type StdReferenceInfo = vk::native::StdVideoEncodeH264ReferenceInfo;
@@ -88,7 +95,7 @@ impl VulkanEncCodec for H264 {
             .write_std_sps(true)
             .write_std_pps(true);
 
-        unsafe { video_session_parameters.get_encoded_video_session_parameters(&mut info) }
+        unsafe { video_session_parameters.get_encoded_video_session_parameters(Some(&mut info)) }
     }
 }
 
@@ -96,7 +103,7 @@ impl VulkanEncCodecUpdate for H264 {
     type ParametersAddInfo<'a> = vk::VideoEncodeH264SessionParametersAddInfoKHR<'a>;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct H265;
 
 impl VulkanEncCodec for H265 {
@@ -105,6 +112,7 @@ impl VulkanEncCodec for H265 {
     const EXTENSION: &'static CStr = ash::khr::video_encode_h265::NAME;
     type ProfileInfo<'a> = vk::VideoEncodeH265ProfileInfoKHR<'a>;
     type Capabilities<'a> = vk::VideoEncodeH265CapabilitiesKHR<'a>;
+    type SessionCreateInfo<'a> = vk::VideoEncodeH265SessionCreateInfoKHR<'a>;
     type ParametersCreateInfo<'a> = vk::VideoEncodeH265SessionParametersCreateInfoKHR<'a>;
     type DpbSlotInfo<'a> = vk::VideoEncodeH265DpbSlotInfoKHR<'a>;
 
@@ -128,7 +136,7 @@ impl VulkanEncCodec for H265 {
             .write_std_pps(true)
             .write_std_vps(true);
 
-        unsafe { video_session_parameters.get_encoded_video_session_parameters(&mut info) }
+        unsafe { video_session_parameters.get_encoded_video_session_parameters(Some(&mut info)) }
     }
 }
 
@@ -136,7 +144,7 @@ impl VulkanEncCodecUpdate for H265 {
     type ParametersAddInfo<'a> = vk::VideoEncodeH265SessionParametersAddInfoKHR<'a>;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct AV1;
 
 impl VulkanEncCodec for AV1 {
@@ -145,6 +153,7 @@ impl VulkanEncCodec for AV1 {
     const EXTENSION: &'static CStr = ash::khr::video_encode_av1::NAME;
     type ProfileInfo<'a> = vk::VideoEncodeAV1ProfileInfoKHR<'a>;
     type Capabilities<'a> = vk::VideoEncodeAV1CapabilitiesKHR<'a>;
+    type SessionCreateInfo<'a> = vk::VideoEncodeAV1SessionCreateInfoKHR<'a>;
     type ParametersCreateInfo<'a> = vk::VideoEncodeAV1SessionParametersCreateInfoKHR<'a>;
     type DpbSlotInfo<'a> = vk::VideoEncodeAV1DpbSlotInfoKHR<'a>;
 

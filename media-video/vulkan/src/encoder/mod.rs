@@ -136,6 +136,12 @@ pub struct VulkanEncodeSlot {
     completion_fence: Fence,
 }
 
+impl VulkanEncodeSlot {
+    pub fn submitted_at(&self) -> Instant {
+        self.submitted_at
+    }
+}
+
 #[derive(Debug)]
 struct VulkanEncodeSlotSeparateQueueData {
     semaphore: Semaphore,
