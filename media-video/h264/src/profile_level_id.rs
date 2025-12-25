@@ -1,14 +1,5 @@
-use crate::{Level, Profile};
+use crate::{Level, Profile, profile_iop_consts::CONSTRAINT_SET3_FLAG};
 use std::{fmt, num::ParseIntError, str::FromStr};
-
-pub mod profile_iop_consts {
-    pub const CONSTRAINT_SET0_FLAG: u8 = 1 << 7;
-    pub const CONSTRAINT_SET1_FLAG: u8 = 1 << 6;
-    pub const CONSTRAINT_SET2_FLAG: u8 = 1 << 5;
-    pub const CONSTRAINT_SET3_FLAG: u8 = 1 << 4;
-    pub const CONSTRAINT_SET4_FLAG: u8 = 1 << 3;
-    pub const CONSTRAINT_SET5_FLAG: u8 = 1 << 2;
-}
 
 /// H.264 specific parameter which specifies the H.264 encoding profile and level
 ///
@@ -87,7 +78,7 @@ impl ProfileLevelId {
         let level = match level_idc {
             10 => Level::Level_1_0,
             11 => {
-                if profile_iop & profile_iop_consts::CONSTRAINT_SET3_FLAG != 0 {
+                if profile_iop & CONSTRAINT_SET3_FLAG != 0 {
                     Level::Level_1_B
                 } else {
                     Level::Level_1_1
@@ -149,7 +140,7 @@ impl fmt::Display for ProfileLevelId {
         let mut profile_iop = self.profile.profile_iop();
 
         if matches!(self.level, Level::Level_1_B) {
-            profile_iop |= profile_iop_consts::CONSTRAINT_SET3_FLAG;
+            profile_iop |= CONSTRAINT_SET3_FLAG;
         }
 
         write!(

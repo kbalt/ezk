@@ -913,11 +913,14 @@ impl IceAgent {
             }
         };
 
-        let pair = self
+        let Some(pair) = self
             .pairs
             .iter_mut()
             .find(|p| p.local == local_id && p.remote == remote_id)
-            .expect("local_id & remote_id are valid");
+        else {
+            log::warn!("Got STUN request for candidates without pair {local_id:?} {remote_id:?}");
+            return;
+        };
 
         pair.received_use_candidate = use_candidate;
         log::trace!(
