@@ -21,15 +21,11 @@ pub enum VulkanEncoderCapabilitiesError {
     VideoCapabilities(VulkanError),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct VulkanEncoderCapabilities<C: VulkanEncCodec> {
-    pub physical_device: PhysicalDevice,
-
-    // pub video_codec_profile_info: C::ProfileInfo<'static>,
-    // pub video_profile_info: vk::VideoProfileInfoKHR<'static>,
-    pub video_capabilities: vk::VideoCapabilitiesKHR<'static>,
-    pub video_encode_capabilities: vk::VideoEncodeCapabilitiesKHR<'static>,
-    pub video_encode_codec_capabilities: C::Capabilities<'static>,
+    pub video: vk::VideoCapabilitiesKHR<'static>,
+    pub encode: vk::VideoEncodeCapabilitiesKHR<'static>,
+    pub codec: C::Capabilities<'static>,
 }
 
 impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
@@ -46,18 +42,14 @@ impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
         let mut tmp = video_profile_info;
         tmp.p_next = (&raw const codec_profile_info).cast();
 
-        let (video_capabilities, video_encode_capabilities, video_encode_codec_capabilities) =
-            physical_device
-                .video_capabilities::<C>(tmp)
-                .map_err(|e| VulkanEncoderCapabilitiesError::VideoCapabilities(e.into()))?;
+        let (video, encode, codec) = physical_device
+            .video_capabilities::<C>(tmp)
+            .map_err(|e| VulkanEncoderCapabilitiesError::VideoCapabilities(e.into()))?;
 
         Ok(VulkanEncoderCapabilities {
-            physical_device: physical_device.clone(),
-            // video_codec_profile_info: codec_profile_info,
-            // video_profile_info,
-            video_capabilities,
-            video_encode_capabilities,
-            video_encode_codec_capabilities,
+            video,
+            encode,
+            codec,
         })
     }
 
@@ -66,6 +58,7 @@ impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
         device: &Device,
         config: VulkanEncoderImplConfig,
         codec_profile_info: C::ProfileInfo<'_>,
+        session: C::SessionCreateInfo<'_>,
         parameters: C::ParametersCreateInfo<'_>,
         rate_control: Option<Pin<Box<RateControlInfos<C>>>>,
     ) -> Result<VulkanEncoder<C>, VulkanError> {
@@ -90,7 +83,7 @@ impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
         let encode_queue = device.encode_queue();
 
         // Create video session
-        let create_info = vk::VideoSessionCreateInfoKHR::default()
+        let mut create_info = vk::VideoSessionCreateInfoKHR::default()
             .max_coded_extent(config.user.max_encode_resolution)
             .queue_family_index(encode_queue_family_index)
             .max_active_reference_pictures(config.max_active_references)
@@ -98,7 +91,9 @@ impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
             .picture_format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
             .reference_picture_format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
             .video_profile(&video_profile_info)
-            .std_header_version(&self.video_capabilities.std_header_version);
+            .std_header_version(&self.video.std_header_version);
+
+        create_info.p_next = (&raw const session).cast();
 
         let video_session = unsafe { VideoSession::create(device, &create_info)? };
 
@@ -133,7 +128,7 @@ impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
 
         let output_buffer_size: u64 = (config.user.max_encode_resolution.width as u64
             * config.user.max_encode_resolution.height as u64)
-            .next_multiple_of(self.video_capabilities.min_bitstream_buffer_size_alignment);
+            .next_multiple_of(self.video.min_bitstream_buffer_size_alignment);
         let mut encode_slots = vec![];
 
         for index in 0..config.num_encode_slots {
@@ -186,7 +181,7 @@ impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
             config.num_dpb_slots,
             config.user.max_encode_resolution,
             vk::ImageUsageFlags::VIDEO_ENCODE_DPB_KHR,
-            self.video_capabilities
+            self.video
                 .flags
                 .contains(vk::VideoCapabilityFlagsKHR::SEPARATE_REFERENCE_IMAGES),
         )?;

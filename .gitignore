@@ -6,3 +6,4 @@ Cargo.lock
 *.h264
 *.png
 *.html
+*.ivf
