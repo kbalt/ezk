@@ -135,12 +135,6 @@ impl RtpExtensions {
             writer.write(audio_level_id, &[audio_level.0]);
         }
 
-        if let Some((audio_level_id, audio_level)) = ids.audio_level.zip(self.audio_level.as_ref())
-        {
-            writer = writer.with(audio_level_id, &[audio_level.0, 0]);
-            written = true;
-        }
-
         if let Some((twcc_id, twcc)) = ids.twcc_sequence_number.zip(self.twcc_sequence_number) {
             writer.write(twcc_id, &twcc.to_be_bytes());
         }
@@ -168,7 +162,7 @@ impl RtpAudioLevelExt {
     }
 
     pub fn has_voice_activiy(self) -> bool {
-        (self.0 | 0x80) != 0
+        (self.0 & 0x80) != 0
     }
 
     /// Level between -127 and 0 as dBov
