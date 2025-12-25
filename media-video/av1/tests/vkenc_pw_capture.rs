@@ -2,18 +2,17 @@ use capture::wayland::{
     BitFlag, CapturedDmaBufferSync, CapturedFrameBuffer, DmaPlane, DmaUsageOptions, PersistMode,
     PipewireOptions, PixelFormat, RgbaSwizzle, ScreenCaptureOptions, SourceType,
 };
-use ezk_h264::{
-    Level, Profile,
+use ezk_av1::{
+    AV1DePayloader, AV1Framerate, AV1Level, AV1Payloader, AV1Profile,
     encoder::{
+        AV1FramePattern,
         backends::vulkan::{
-            VkH264Encoder, VulkanH264EncoderConfig, VulkanH264RateControlConfig,
-            VulkanH264RateControlMode,
+            VkAV1Encoder, VulkanAV1EncoderConfig, VulkanAV1RateControlConfig,
+            VulkanAV1RateControlMode,
         },
-        config::{FramePattern, Framerate, SliceMode},
     },
 };
-use ezk_image::ImageRef;
-use std::{fs::OpenOptions, io::Write, time::Instant};
+use std::{fs::OpenOptions, io::Write, time::Instant, u32};
 use tokio::sync::mpsc;
 use vulkan::{
     DrmPlane, Semaphore,
@@ -46,7 +45,7 @@ async fn vk_encode_dma_inner() {
     let width = 2560;
     let height = 1440;
 
-    let capabilities = VkH264Encoder::capabilities(physical_device, Profile::Baseline).unwrap();
+    let capabilities = VkAV1Encoder::capabilities(physical_device, AV1Profile::Main).unwrap();
 
     let device = vulkan::Device::create(physical_device, &[]).unwrap();
 
@@ -61,7 +60,7 @@ async fn vk_encode_dma_inner() {
             max_framerate: 30,
             pixel_formats: vec![PixelFormat::RGBA(RgbaSwizzle::BGRA)],
             dma_usage: Some(DmaUsageOptions {
-                request_sync_obj: true,
+                request_sync_obj: false,
                 num_buffers: 16,
                 supported_modifier: drm_modifer,
             }),
@@ -178,15 +177,15 @@ async fn vk_encode_dma_inner() {
     .await
     .unwrap();
 
-    let mut encoder = VkH264Encoder::new(
+    let mut encoder = VkAV1Encoder::new(
         &device,
         &capabilities,
-        VulkanH264EncoderConfig {
+        VulkanAV1EncoderConfig {
             encoder: VulkanEncoderConfig {
                 max_encode_resolution: vk::Extent2D { width, height },
                 initial_encode_resolution: vk::Extent2D {
-                    width: width,
-                    height: height,
+                    width: width / 10,
+                    height: height / 10,
                 },
                 max_input_resolution: vk::Extent2D { width, height },
                 input_as_vulkan_image: true,
@@ -197,23 +196,20 @@ async fn vk_encode_dma_inner() {
                 content_hints: vk::VideoEncodeContentFlagsKHR::DEFAULT,
                 tuning_mode: vk::VideoEncodeTuningModeKHR::DEFAULT,
             },
-            profile: Profile::Main,
-            level: Level::Level_6_0,
-            frame_pattern: FramePattern {
-                intra_idr_period: u16::MAX,
-                intra_period: u16::MAX,
-                ip_period: 1,
+            profile: AV1Profile::Main,
+            level: AV1Level::Level_6_0,
+            frame_pattern: AV1FramePattern {
+                keyframe_interval: u16::MAX,
             },
-            rate_control: VulkanH264RateControlConfig {
-                mode: VulkanH264RateControlMode::VariableBitrate {
-                    average_bitrate: 500_000,
-                    max_bitrate: 1_000_000,
+            rate_control: VulkanAV1RateControlConfig {
+                mode: VulkanAV1RateControlMode::VariableBitrate {
+                    average_bitrate: 5_000_000,
+                    max_bitrate: 6_000_000,
                 },
-                framerate: Some(Framerate::from_fps(240)),
-                min_qp: None,
-                max_qp: None,
+                framerate: Some(AV1Framerate::from_fps(240)),
+                min_q_index: None, //Some(0),
+                max_q_index: None, //Some(255),
             },
-            slice_mode: SliceMode::Picture,
         },
     )
     .unwrap();
@@ -222,10 +218,16 @@ async fn vk_encode_dma_inner() {
         .truncate(true)
         .create(true)
         .write(true)
-        .open("../../test.h264")
+        .open("../../test-av1.ivf")
         .unwrap();
 
-    for _ in 0..1000 {
+    ivf::write_ivf_header(&mut file, width as usize, height as usize, 1000, 1);
+
+    let epoch = Instant::now();
+
+    let mut depayloader = AV1DePayloader::new();
+
+    for _ in 0..500 {
         let input = rx.recv().await.unwrap();
 
         let start = Instant::now();
@@ -235,142 +237,32 @@ async fn vk_encode_dma_inner() {
             .unwrap();
         println!("Took: {:?}", start.elapsed());
 
-        while let Some((_, buf)) = encoder.poll_result().unwrap() {
+        while let Some((ts, buf)) = encoder.poll_result().unwrap() {
             println!("buf: {}", buf.len());
 
-            file.write_all(&buf).unwrap();
-        }
-    }
+            ivf::write_ivf_frame(&mut file, (ts - epoch).as_millis() as _, &buf);
 
-    while let Some((_, buf)) = encoder.wait_result().unwrap() {
-        file.write_all(&buf).unwrap();
-    }
-}
+            let packets = AV1Payloader::new().payload(buf.into(), 1000);
 
-#[tokio::test]
-async fn vk_encode_memory() {
-    vk_encode_memory_inner().await;
-}
-
-async fn vk_encode_memory_inner() {
-    env_logger::init();
-
-    let entry = unsafe { vulkan::ash::Entry::load().unwrap() };
-    let instance = vulkan::Instance::create(entry, &[]).unwrap();
-    let mut physical_devices: Vec<vulkan::PhysicalDevice> = instance.physical_devices().unwrap();
-    let physical_device = &mut physical_devices[0];
-
-    let (tx, mut rx) = mpsc::channel(8);
-
-    let options = ScreenCaptureOptions {
-        show_cursor: true,
-        source_types: SourceType::all(),
-        persist_mode: PersistMode::DoNot,
-        restore_token: None,
-        pipewire: PipewireOptions {
-            max_framerate: 30,
-            pixel_formats: vec![PixelFormat::RGBA(RgbaSwizzle::BGRA)],
-            dma_usage: None,
-        },
-    };
-
-    capture::wayland::start_screen_capture(options, move |frame| {
-        let buffer = match frame.buffer {
-            CapturedFrameBuffer::Mem(buffer) => buffer,
-            _ => {
-                panic!("Test requires DMA buffers")
+            for packet in packets {
+                for depayloaded in depayloader.depayload(&packet).unwrap() {
+                    println!("Depayloaded OBU: {}", depayloaded.len());
+                }
             }
-        };
-
-        println!("{:?}", frame.format);
-
-        let image = ezk_image::Image::from_buffer(
-            ezk_image::PixelFormat::BGRA,
-            buffer.memory,
-            None,
-            frame.width as usize,
-            frame.height as usize,
-            ezk_image::ColorInfo::RGB(ezk_image::RgbColorInfo {
-                transfer: ezk_image::ColorTransfer::Linear,
-                primaries: ezk_image::ColorPrimaries::BT709,
-            }),
-        )
-        .unwrap();
-
-        tx.blocking_send(image).is_ok()
-    })
-    .await
-    .unwrap();
-
-    let first_image = rx.recv().await.unwrap();
-
-    let width = first_image.width() as u32;
-    let height = first_image.height() as u32;
-
-    println!("{width}x{height}");
-
-    let capabilities = VkH264Encoder::capabilities(physical_device, Profile::Baseline).unwrap();
-    let device = vulkan::Device::create(physical_device, &[]).unwrap();
-
-    let mut encoder = VkH264Encoder::new(
-        &device,
-        &capabilities,
-        VulkanH264EncoderConfig {
-            encoder: VulkanEncoderConfig {
-                max_encode_resolution: vk::Extent2D { width, height },
-                initial_encode_resolution: vk::Extent2D {
-                    width,
-                    height: height / 2,
-                },
-                max_input_resolution: vk::Extent2D {
-                    width: width * 2,
-                    height,
-                },
-                input_as_vulkan_image: false,
-                input_pixel_format: InputPixelFormat::RGBA {
-                    primaries: vulkan::encoder::input::Primaries::BT709,
-                },
-                usage_hints: vk::VideoEncodeUsageFlagsKHR::DEFAULT,
-                content_hints: vk::VideoEncodeContentFlagsKHR::DEFAULT,
-                tuning_mode: vk::VideoEncodeTuningModeKHR::DEFAULT,
-            },
-            profile: Profile::Baseline,
-            level: Level::Level_6_2,
-            frame_pattern: FramePattern {
-                intra_idr_period: 60,
-                intra_period: 30,
-                ip_period: 1,
-            },
-            rate_control: VulkanH264RateControlConfig {
-                mode: VulkanH264RateControlMode::ConstantBitrate { bitrate: 6_000_000 },
-                framerate: None,
-                min_qp: None,
-                max_qp: None,
-            },
-            slice_mode: SliceMode::Picture,
-        },
-    )
-    .unwrap();
-
-    let mut file = OpenOptions::new()
-        .truncate(true)
-        .create(true)
-        .write(true)
-        .open("../../test.h264")
-        .unwrap();
-
-    for _ in 0..100 {
-        let image = rx.recv().await.unwrap();
-
-        let start = Instant::now();
-        encoder.encode_frame(InputData::Image(&image)).unwrap();
-        println!("Took: {:?}", start.elapsed());
-        while let Some((_, buf)) = encoder.poll_result().unwrap() {
-            file.write_all(&buf).unwrap();
         }
     }
 
-    while let Some((_, buf)) = encoder.wait_result().unwrap() {
-        file.write_all(&buf).unwrap();
+    while let Some((ts, buf)) = encoder.wait_result().unwrap() {
+        println!("buf: {}", buf.len());
+
+        ivf::write_ivf_frame(&mut file, (ts - epoch).as_millis() as _, &buf);
+        let packets = AV1Payloader::new().payload(buf.into(), 1000);
+        for packet in packets {
+            for depayloaded in depayloader.depayload(&packet).unwrap() {
+                println!("Depayloaded OBU: {}", depayloaded.len());
+            }
+        }
     }
+
+    file.flush().unwrap();
 }

@@ -73,7 +73,7 @@ impl VideoSessionParameters {
 
     pub(crate) unsafe fn get_encoded_video_session_parameters<'a, T>(
         &self,
-        ext: &'a mut T,
+        ext: Option<&'a mut T>,
     ) -> Result<Vec<u8>, VulkanError>
     where
         T: vk::TaggedStructure<'a>,
@@ -81,9 +81,12 @@ impl VideoSessionParameters {
     {
         let device = self.video_session.device();
 
-        let session_parameters_info = vk::VideoEncodeSessionParametersGetInfoKHR::default()
-            .video_session_parameters(self.video_session_parameters)
-            .push(ext);
+        let mut session_parameters_info = vk::VideoEncodeSessionParametersGetInfoKHR::default()
+            .video_session_parameters(self.video_session_parameters);
+
+        if let Some(ext) = ext {
+            session_parameters_info = session_parameters_info.push(ext);
+        };
 
         let get_encoded_video_session_parameters = device
             .ash_video_encode_queue_device()
