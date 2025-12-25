@@ -47,9 +47,11 @@ pub struct DeviceVideoExtensions {
     pub video_encode_queue: bool,
     pub video_encode_h264: bool,
     pub video_encode_h265: bool,
+    pub video_encode_av1: bool,
     pub video_decode_queue: bool,
     pub video_decode_h264: bool,
     pub video_decode_h265: bool,
+    pub video_decode_av1: bool,
     pub external_memory_fd: bool,
     pub external_memory_dma_buf: bool,
     pub image_drm_format_modifier: bool,
@@ -88,6 +90,7 @@ impl Device {
                 ),
                 video_encode_h264: add2(&props, ash::khr::video_encode_h264::NAME, &mut extensions),
                 video_encode_h265: add2(&props, ash::khr::video_encode_h265::NAME, &mut extensions),
+                video_encode_av1: add2(&props, ash::khr::video_encode_av1::NAME, &mut extensions),
                 video_decode_queue: add2(
                     &props,
                     ash::khr::video_decode_queue::NAME,
@@ -95,6 +98,7 @@ impl Device {
                 ),
                 video_decode_h264: add2(&props, ash::khr::video_decode_h264::NAME, &mut extensions),
                 video_decode_h265: add2(&props, ash::khr::video_decode_h265::NAME, &mut extensions),
+                video_decode_av1: add2(&props, ash::khr::video_decode_av1::NAME, &mut extensions),
                 external_memory_fd: add2(
                     &props,
                     ash::khr::external_memory_fd::NAME,
@@ -137,10 +141,16 @@ impl Device {
 
             let mut separate_encode_queue_family_index = None;
 
+            let mut encode_av1_feature = vk::PhysicalDeviceVideoEncodeAV1FeaturesKHR::default()
+                .video_encode_av1(device_extensions.video_encode_av1);
+
             // Always enabling these features since they are always required
             let mut synchronization2_features =
                 ash_stable::vk::PhysicalDeviceSynchronization2Features::default()
                     .synchronization2(true);
+
+            // FIXME: Cannot use push_next here since these are from two different ash versions
+            synchronization2_features.p_next = (&raw mut encode_av1_feature).cast();
 
             let device = vk_adapter
                 .open_with_callback(
@@ -294,9 +304,11 @@ impl Device {
             video_encode_queue: add(&props, ash::khr::video_encode_queue::NAME, &mut extensions),
             video_encode_h264: add(&props, ash::khr::video_encode_h264::NAME, &mut extensions),
             video_encode_h265: add(&props, ash::khr::video_encode_h265::NAME, &mut extensions),
+            video_encode_av1: add(&props, ash::khr::video_encode_av1::NAME, &mut extensions),
             video_decode_queue: add(&props, ash::khr::video_decode_queue::NAME, &mut extensions),
             video_decode_h264: add(&props, ash::khr::video_decode_h264::NAME, &mut extensions),
             video_decode_h265: add(&props, ash::khr::video_decode_h265::NAME, &mut extensions),
+            video_decode_av1: add(&props, ash::khr::video_decode_av1::NAME, &mut extensions),
             external_memory_fd: add(&props, ash::khr::external_memory_fd::NAME, &mut extensions),
             external_memory_dma_buf: add(
                 &props,
@@ -331,6 +343,9 @@ impl Device {
         let mut timeline_sempahore_feature =
             vk::PhysicalDeviceTimelineSemaphoreFeatures::default().timeline_semaphore(true);
 
+        let mut encode_av1_feature = vk::PhysicalDeviceVideoEncodeAV1FeaturesKHR::default()
+            .video_encode_av1(device_extensions.video_encode_av1);
+
         // Currently always creating two queues
         let queue_create_infos = [
             vk::DeviceQueueCreateInfo::default()
@@ -345,7 +360,8 @@ impl Device {
             .enabled_extension_names(&extensions)
             .queue_create_infos(&queue_create_infos)
             .push(&mut synchronization2_features)
-            .push(&mut timeline_sempahore_feature);
+            .push(&mut timeline_sempahore_feature)
+            .push(&mut encode_av1_feature);
 
         let device = unsafe {
             instance
