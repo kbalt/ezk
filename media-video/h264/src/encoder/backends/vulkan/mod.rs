@@ -82,8 +82,6 @@ pub struct VkH264Encoder {
     active_dpb_slots: VecDeque<DpbSlot>,
 }
 
-unsafe impl Send for VkH264Encoder {}
-
 #[derive(Debug, Clone, Copy)]
 struct DpbSlot {
     index: usize,
@@ -111,8 +109,8 @@ impl VkH264Encoder {
     ) -> Result<VkH264Encoder, VulkanError> {
         let state = H264EncoderState::new(config.frame_pattern);
 
-        let caps = capabilities.video_capabilities;
-        let h264_caps = capabilities.video_encode_codec_capabilities;
+        let caps = capabilities.video;
+        let h264_caps = capabilities.codec;
         let max_references = cmp::max(
             h264_caps.max_p_picture_l0_reference_count,
             h264_caps.max_b_picture_l0_reference_count + h264_caps.max_l1_reference_count,
@@ -235,6 +233,9 @@ impl VkH264Encoder {
             device,
             encoder_config,
             h264_profile_info,
+            vk::VideoEncodeH264SessionCreateInfoKHR::default()
+                .use_max_level_idc(true)
+                .max_level_idc(map_level(config.level)),
             video_encode_h264_session_parameters_create_info,
             Some(rate_control_from_config(&config)),
         )?;
