@@ -23,7 +23,7 @@ fn offer_mid_exists() {
         offer.media_descriptions[0]
             .extmap
             .iter()
-            .any(|x| x.uri.contains("mid"))
+            .any(|x| x.extension_name.contains("mid"))
     );
 }
 

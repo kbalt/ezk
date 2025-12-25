@@ -117,7 +117,8 @@ impl OfferedTransport {
     }
 
     pub(crate) fn populate_desc(&self, desc: &mut MediaDescription) {
-        desc.extmap.extend(RtpExtensionIds::offer().to_extmap());
+        desc.extmap
+            .extend(RtpExtensionIds::offer(desc.media.media_type).to_extmap());
 
         match &self.kind {
             OfferedTransportKind::Unencrypted => {}
@@ -409,7 +410,7 @@ pub(super) fn populate_desc(transport: &RtpTransport, media_desc: &mut MediaDesc
     }
 }
 
-pub(super) fn to_openssl_digest(algo: &FingerprintAlgorithm) -> Option<MessageDigest> {
+fn to_openssl_digest(algo: &FingerprintAlgorithm) -> Option<MessageDigest> {
     match algo {
         FingerprintAlgorithm::SHA1 => Some(MessageDigest::sha1()),
         FingerprintAlgorithm::SHA224 => Some(MessageDigest::sha224()),

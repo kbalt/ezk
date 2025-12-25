@@ -1,50 +1,59 @@
 use bytes::BufMut;
 
-pub struct RtpExtensionsWriter<B> {
-    writer: B,
+pub struct RtpExtensionsWriter {
+    buffer: Vec<u8>,
     len: usize,
     two_byte: bool,
 }
 
-impl<B: BufMut> RtpExtensionsWriter<B> {
-    pub fn new(writer: B, two_byte: bool) -> Self {
+impl RtpExtensionsWriter {
+    pub fn new(two_byte: bool) -> Self {
         Self {
-            writer,
+            buffer: Vec::new(),
             len: 0,
             two_byte,
         }
     }
 
-    pub fn with(mut self, id: u8, data: &[u8]) -> Self {
+    pub fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
+    }
+
+    pub fn write(&mut self, id: u8, data: &[u8]) {
         if self.two_byte {
+            assert!(id >= 1);
             assert!(data.len() <= 255);
 
-            self.writer.put_slice(&[id, data.len() as u8]);
+            self.buffer.put_slice(&[id, data.len() as u8]);
 
             self.len += data.len() + 2;
         } else {
-            assert!(data.len() <= 15);
+            assert!(id >= 1);
+            assert!(id <= 14);
+
+            assert!(data.len() >= 1);
+            assert!(data.len() <= 16);
+
             assert!(!data.is_empty());
 
-            let mut b = data.len() as u8;
+            let mut b = (data.len() - 1) as u8;
             b |= id << 4;
 
-            self.writer.put_u8(b);
+            self.buffer.put_u8(b);
 
             self.len += data.len() + 1;
         }
 
-        self.writer.put_slice(data);
-        self
+        self.buffer.put_slice(data);
     }
 
-    pub fn finish(mut self) -> u16 {
+    pub fn finish(mut self) -> (u16, Vec<u8>) {
         let id = if self.two_byte { 0x0100 } else { 0xBEDE };
 
         let padding = padding_32_bit_boundry(self.len);
-        self.writer.put_bytes(0, padding);
+        self.buffer.put_bytes(0, padding);
 
-        id
+        (id, self.buffer)
     }
 }
 

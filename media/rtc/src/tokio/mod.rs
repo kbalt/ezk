@@ -22,7 +22,7 @@ use tokio::{
 
 mod socket;
 
-const RECV_BUFFER_SIZE: usize = 2500;
+const RECV_BUFFER_SIZE: usize = 65535;
 
 /// IO implementation to be used alongside [`SdpSession`]
 pub struct TokioIoState {
@@ -41,8 +41,8 @@ impl TokioIoState {
             ips,
             sockets: HashMap::with_hasher(BuildTransportHasher),
             sleep: Some(Box::pin(sleep_until(Instant::now().into()))),
-            bufs: Box::new([[0u8; RECV_BUFFER_SIZE]; BATCH_SIZE]),
-            meta: Box::new([RecvMeta::default(); BATCH_SIZE]),
+            bufs: unsafe { Box::new_zeroed().assume_init() },
+            meta: unsafe { Box::new_zeroed().assume_init() },
         }
     }
 
@@ -159,17 +159,22 @@ impl TokioIoState {
 
                 for i in 0..num_msg {
                     let len = self.meta[i].len;
+                    let stride = self.meta[i].stride;
 
-                    let pkt = ReceivedPkt {
-                        data: self.bufs[i][..len].to_vec(),
-                        source: self.meta[i].addr,
-                        destination: self.meta[i].dst_ip.map_or(socket.local_addr(), |ip| {
-                            (ip, socket.local_addr().port()).into()
-                        }),
-                        component: *component,
-                    };
+                    let packet = &self.bufs[i][..len];
 
-                    session.receive(now, *transport_id, pkt);
+                    for packet in packet.chunks(stride) {
+                        let pkt = ReceivedPkt {
+                            data: packet.to_vec(),
+                            source: self.meta[i].addr,
+                            destination: self.meta[i].dst_ip.map_or(socket.local_addr(), |ip| {
+                                (ip, socket.local_addr().port()).into()
+                            }),
+                            component: *component,
+                        };
+
+                        session.receive(now, *transport_id, pkt);
+                    }
 
                     received = true;
                 }

@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     time::{Duration, Instant},
 };
 
@@ -28,7 +28,8 @@ pub(super) struct TwccTxState {
     next_sequence_number: u16,
 
     /// List of all sent RTP packets with their planned send timestamp and payload size
-    sent_packets: VecDeque<SentPacket>,
+    // sent_packets: VecDeque<SentPacket>,
+    sent_packets: BTreeMap<u16, SentPacket>,
 }
 
 struct SentPacket {
@@ -50,7 +51,7 @@ impl TwccTxState {
             base_time: Instant::now(),
             last_feedback_count: None,
             next_sequence_number: 0,
-            sent_packets: VecDeque::new(),
+            sent_packets: BTreeMap::new(),
         }
     }
 
@@ -58,12 +59,15 @@ impl TwccTxState {
     pub(super) fn send_packet(&mut self, now: Instant, packet: &mut RtpPacket) {
         packet.extensions.twcc_sequence_number = Some(self.next_sequence_number);
 
-        self.sent_packets.push_back(SentPacket {
-            sequence_number: self.next_sequence_number,
-            sent_at: now,
-            size: packet.payload.len(),
-            status: None,
-        });
+        self.sent_packets.insert(
+            self.next_sequence_number,
+            SentPacket {
+                sequence_number: self.next_sequence_number,
+                sent_at: now,
+                size: packet.payload.len(),
+                status: None,
+            },
+        );
 
         self.next_sequence_number = self.next_sequence_number.wrapping_add(1);
     }
@@ -84,11 +88,7 @@ impl TwccTxState {
 
         let mut reference_time = feedback.reference_time() as i64 * 64000;
         for (sequence_number, status) in feedback.packets() {
-            let Some(sent_packet) = self
-                .sent_packets
-                .iter_mut()
-                .find(|sent_packet| sent_packet.sequence_number == sequence_number)
-            else {
+            let Some(sent_packet) = self.sent_packets.get_mut(&sequence_number) else {
                 continue;
             };
 
@@ -108,7 +108,7 @@ impl TwccTxState {
         }
 
         self.sent_packets
-            .retain(|sent_packet| sent_packet.sent_at > now - SENT_PACKETS_MAX_SIZE);
+            .retain(|_, sent_packet| sent_packet.sent_at > now - SENT_PACKETS_MAX_SIZE);
 
         self.evaluate();
     }
@@ -121,13 +121,27 @@ impl TwccTxState {
 
         let mut lost = 0;
 
-        for i in 1..self.sent_packets.len() {
-            let lhs = &self.sent_packets[i];
-            let rhs = &self.sent_packets[i - 1];
+        let (min_seq, _) = self
+            .sent_packets
+            .iter()
+            .min_by_key(|(_, x)| x.sent_at)
+            .unwrap();
 
-            if rhs.sequence_number != lhs.sequence_number.wrapping_sub(1) {
-                continue;
-            }
+        let (max_seq, _) = self
+            .sent_packets
+            .iter()
+            .max_by_key(|(_, x)| x.sent_at)
+            .unwrap();
+
+        let mut seq = *min_seq;
+
+        while seq != *max_seq {
+            let next_seq = seq.wrapping_add(1);
+
+            let lhs = self.sent_packets.get(&seq).unwrap();
+            let rhs = self.sent_packets.get(&next_seq).unwrap();
+
+            seq = next_seq;
 
             let lhs_sent_at = lhs
                 .sent_at
@@ -168,14 +182,18 @@ impl TwccTxState {
             let d = lhs_d - rhs_d;
 
             {
+                //TODO: doesn't really need a loop. The delta can be cached in SentPacket and the lowest delta can be stored globally with an index/seq and updated when needed?
                 let d_min = self
                     .sent_packets
                     .iter()
-                    .take(i)
-                    .filter_map(|x| match x.status? {
+                    .filter(|(_, sent_packet)| sent_packet.sent_at < lhs.sent_at)
+                    .filter_map(|(_, sent_packet)| match sent_packet.status? {
                         SentPacketStatus::Lost => None,
                         SentPacketStatus::ReceivedAt(duration) => Some(
-                            x.sent_at.duration_since(self.base_time).as_micros() as i64
+                            sent_packet
+                                .sent_at
+                                .duration_since(self.base_time)
+                                .as_micros() as i64
                                 - duration.as_micros() as i64,
                         ),
                     })
@@ -196,7 +214,7 @@ impl TwccTxState {
 
         let Some(min) = self
             .sent_packets
-            .iter()
+            .values()
             .find(|x| x.status.is_some())
             .map(|x| x.sent_at)
         else {
@@ -205,7 +223,7 @@ impl TwccTxState {
 
         let Some(max) = self
             .sent_packets
-            .iter()
+            .values()
             .rev()
             .find(|x| x.status.is_some())
             .map(|x| x.sent_at)
@@ -217,7 +235,7 @@ impl TwccTxState {
 
         let recv_size: usize = self
             .sent_packets
-            .iter()
+            .values()
             .filter_map(|x| match x.status? {
                 SentPacketStatus::Lost => None,
                 SentPacketStatus::ReceivedAt(..) => Some(x.size),
@@ -226,7 +244,7 @@ impl TwccTxState {
 
         let send_size: usize = self
             .sent_packets
-            .iter()
+            .values()
             .filter_map(|x| {
                 x.status?;
                 Some(x.size)

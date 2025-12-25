@@ -9,6 +9,12 @@ pub struct RtpOutboundStats {
     /// Amount of RTP packets sent
     pub packets_sent: u64,
 
+    /// Amount of RTX payload bytes sent
+    pub rtx_bytes_sent: u64,
+
+    /// Amount of RTX packets sent
+    pub rtx_packets_sent: u64,
+
     /// Stats that are dependent on the remote sending a receiver report block
     pub remote: Option<RtpOutboundRemoteStats>,
 }

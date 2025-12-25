@@ -4,18 +4,21 @@ use bytesstr::BytesStr;
 use internal::IResult;
 use nom::{
     branch::alt,
-    bytes::complete::{tag, take_while},
+    bytes::complete::{tag, take_while1},
     character::complete::digit1,
     combinator::{map, map_res, opt},
+    multi::many0,
     sequence::{preceded, tuple},
 };
 use std::{fmt, str::FromStr};
 
 #[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 pub struct ExtMap {
     pub id: u8,
-    pub uri: BytesStr,
     pub direction: Direction,
+    pub extension_name: BytesStr,
+    pub extension_attributes: Vec<BytesStr>,
 }
 
 impl ExtMap {
@@ -33,14 +36,22 @@ impl ExtMap {
                 ))),
                 // uri
                 preceded(
-                    take_while(char::is_whitespace),
-                    take_while(|c: char| !c.is_whitespace()),
+                    take_while1(char::is_whitespace),
+                    take_while1(|c: char| !c.is_whitespace()),
                 ),
+                // attributes
+                many0(preceded(
+                    take_while1(char::is_whitespace),
+                    map(take_while1(|c: char| !c.is_whitespace()), |attr| {
+                        BytesStr::from_parse(src, attr)
+                    }),
+                )),
             )),
-            |(id, direction, uri)| Self {
+            |(id, direction, extension_name, extension_attributes)| Self {
                 id,
-                uri: BytesStr::from_parse(src, uri.trim()),
                 direction: direction.unwrap_or(Direction::SendRecv),
+                extension_name: BytesStr::from_parse(src, extension_name.trim()),
+                extension_attributes,
             },
         )(i)
     }
@@ -51,10 +62,16 @@ impl fmt::Display for ExtMap {
         write!(f, "{}", self.id)?;
 
         if self.direction == Direction::SendRecv {
-            write!(f, " {}", self.uri)
+            write!(f, " {}", self.extension_name)?;
         } else {
-            write!(f, "/{} {}", self.direction, self.uri)
+            write!(f, "/{} {}", self.direction, self.extension_name)?;
         }
+
+        for attribute in &self.extension_attributes {
+            write!(f, " {attribute}")?;
+        }
+
+        Ok(())
     }
 }
 
@@ -71,7 +88,7 @@ mod test {
         assert!(rem.is_empty());
 
         assert_eq!(extmap.id, 1);
-        assert_eq!(extmap.uri, "myuri");
+        assert_eq!(extmap.extension_name, "myuri");
         assert_eq!(extmap.direction, Direction::SendRecv);
     }
 
@@ -79,8 +96,9 @@ mod test {
     fn extmap_print() {
         let extmap = ExtMap {
             id: 3,
-            uri: "myuri".into(),
             direction: Direction::SendRecv,
+            extension_name: "myuri".into(),
+            extension_attributes: vec![],
         };
 
         assert_eq!(extmap.to_string(), "3 myuri");
@@ -90,10 +108,26 @@ mod test {
     fn extmap_print_with_direction() {
         let extmap = ExtMap {
             id: 3,
-            uri: "myuri".into(),
             direction: Direction::SendOnly,
+            extension_name: "myuri".into(),
+            extension_attributes: vec![],
         };
 
         assert_eq!(extmap.to_string(), "3/sendonly myuri");
+    }
+
+    #[test]
+    fn extmap_print_with_attribute() {
+        let extmap = ExtMap {
+            id: 3,
+            direction: Direction::SendOnly,
+            extension_name: "myuri".into(),
+            extension_attributes: vec!["test-attribute".into()],
+        };
+
+        let string = BytesStr::from(extmap.to_string());
+        assert_eq!(string, "3/sendonly myuri test-attribute");
+
+        assert_eq!(ExtMap::parse(string.as_ref(), &string).unwrap().1, extmap);
     }
 }

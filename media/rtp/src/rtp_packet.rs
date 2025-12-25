@@ -16,6 +16,7 @@ pub struct RtpPacket {
 #[derive(Debug, Default, Clone)]
 pub struct RtpExtensions {
     pub mid: Option<Bytes>,
+    pub audio_level: Option<RtpAudioLevelExt>,
     pub twcc_sequence_number: Option<u16>,
 }
 
@@ -23,6 +24,7 @@ pub struct RtpExtensions {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RtpExtensionIds {
     pub mid: Option<u8>,
+    pub audio_level: Option<u8>,
     pub twcc_sequence_number: Option<u8>,
 }
 
@@ -66,6 +68,7 @@ impl RtpPacket {
         } else {
             RtpExtensions {
                 mid: None,
+                audio_level: None,
                 twcc_sequence_number: None,
             }
         };
@@ -91,12 +94,19 @@ impl RtpExtensions {
     ) -> Self {
         let mut this = Self {
             mid: None,
+            audio_level: None,
             twcc_sequence_number: None,
         };
 
         for (id, data) in parse_extensions(profile, extension_data) {
             if Some(id) == ids.mid {
                 this.mid = Some(bytes.slice_ref(data));
+            }
+
+            if Some(id) == ids.audio_level
+                && let &[b0, ..] = data
+            {
+                this.audio_level = Some(RtpAudioLevelExt(b0));
             }
 
             if Some(id) == ids.twcc_sequence_number
@@ -114,27 +124,50 @@ impl RtpExtensions {
         ids: RtpExtensionIds,
         packet_builder: RtpPacketBuilder<&'b [u8], Vec<u8>>,
     ) -> RtpPacketBuilder<&'b [u8], Vec<u8>> {
-        let mut buf = vec![];
-
-        let mut written = false;
-        let mut writer = RtpExtensionsWriter::new(&mut buf, true);
+        let mut writer = RtpExtensionsWriter::new(true);
 
         if let Some((mid_id, mid)) = ids.mid.zip(self.mid.as_ref()) {
-            writer = writer.with(mid_id, mid);
-            written = true;
+            writer.write(mid_id, mid);
+        }
+
+        if let Some((audio_level_id, audio_level)) = ids.audio_level.zip(self.audio_level.as_ref())
+        {
+            writer.write(audio_level_id, &[audio_level.0]);
         }
 
         if let Some((twcc_id, twcc)) = ids.twcc_sequence_number.zip(self.twcc_sequence_number) {
-            writer = writer.with(twcc_id, &twcc.to_be_bytes());
-            written = true;
+            writer.write(twcc_id, &twcc.to_be_bytes());
         }
 
-        if written {
-            let profile = writer.finish();
-            packet_builder.extension(profile, buf)
-        } else {
+        if writer.is_empty() {
             packet_builder
+        } else {
+            let (profile, data) = writer.finish();
+            packet_builder.extension(profile, data)
         }
+    }
+}
+
+/// RTP Audio Level Indication extension value
+#[derive(Debug, Clone, Copy)]
+pub struct RtpAudioLevelExt(u8);
+
+impl RtpAudioLevelExt {
+    /// - `level` in the range of -127 to 0 dBov
+    /// - `has_voice_activiy` indicates whether the audio packet contains voice activity
+    pub fn new(has_voice_activiy: bool, level: i8) -> Self {
+        let level = level.clamp(-127, 0);
+
+        RtpAudioLevelExt(((has_voice_activiy as u8) << 7) | (level.cast_unsigned() & 0x7F))
+    }
+
+    pub fn has_voice_activiy(self) -> bool {
+        (self.0 | 0x80) != 0
+    }
+
+    /// Level between -127 and 0 as dBov
+    pub fn level(self) -> i8 {
+        (0x80 | (self.0 & 0x7F)).cast_signed()
     }
 }
 

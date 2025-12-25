@@ -3,7 +3,7 @@ use crate::opt_min;
 use bytes::Bytes;
 use queue::OutboundQueue;
 use rtp::{
-    RtpExtensions, RtpPacket, Ssrc,
+    RtpAudioLevelExt, RtpExtensions, RtpPacket, Ssrc,
     rtcp_types::{ReportBlock, SenderReport},
 };
 use std::time::{Duration, Instant};
@@ -35,6 +35,8 @@ impl RtpOutboundStream {
             stats: RtpOutboundStats {
                 bytes_sent: 0,
                 packets_sent: 0,
+                rtx_packets_sent: 0,
+                rtx_bytes_sent: 0,
                 remote: None,
             },
             report_interval,
@@ -126,7 +128,10 @@ impl RtpOutboundStream {
     pub(crate) fn poll(&mut self, now: Instant) -> Option<RtpOutboundStreamEvent> {
         match self.queue.poll(now)? {
             RtpOutboundStreamEvent::SendRtpPacket { rtp_packet, is_rtx } => {
-                if !is_rtx {
+                if is_rtx {
+                    self.stats.rtx_packets_sent += 1;
+                    self.stats.rtx_bytes_sent += rtp_packet.payload.len() as u64;
+                } else {
                     self.stats.packets_sent += 1;
                     self.stats.bytes_sent += rtp_packet.payload.len() as u64;
                 }
@@ -173,9 +178,17 @@ impl SendRtpPacket {
         }
     }
 
-    /// Set all extension values for this RTP packet
-    pub fn with_extensions(self, extensions: RtpExtensions) -> Self {
-        Self { extensions, ..self }
+    /// For audio payloads this sets the Audio Level Indication extensions
+    pub fn with_audio_level(mut self, level: RtpAudioLevelExt) -> Self {
+        self.extensions.audio_level = Some(level);
+
+        self
+    }
+
+    /// Set the mid rtp extension attribute value
+    pub fn with_mid(mut self, mid: Bytes) -> Self {
+        self.extensions.mid = Some(mid);
+        self
     }
 
     /// Set a timestamp at which the packet should be sent

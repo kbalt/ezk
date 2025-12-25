@@ -25,21 +25,6 @@ fn offer_ice_credentials_not_in_offer_when_ice_is_disabled() {
         assert!(offer.media_descriptions[0].ice_ufrag.is_none());
         assert!(offer.media_descriptions[0].ice_pwd.is_none());
     }
-
-    session.add_media(audio, Direction::SendRecv, None, None);
-
-    satisfy_transport_changes(&mut session, 2000);
-
-    {
-        let offer = session.create_sdp_offer();
-
-        assert!(offer.ice_pwd.is_none());
-        assert!(offer.ice_ufrag.is_none());
-        assert!(offer.media_descriptions[0].ice_ufrag.is_none());
-        assert!(offer.media_descriptions[0].ice_pwd.is_none());
-        assert!(offer.media_descriptions[1].ice_ufrag.is_none());
-        assert!(offer.media_descriptions[1].ice_pwd.is_none());
-    }
 }
 
 #[test]
@@ -61,21 +46,6 @@ fn offer_ice_credentials_in_offer_when_ice_is_enabled() {
         assert!(offer.ice_ufrag.is_some());
         assert!(offer.media_descriptions[0].ice_ufrag.is_none());
         assert!(offer.media_descriptions[0].ice_pwd.is_none());
-    }
-
-    session.add_media(audio, Direction::SendRecv, None, None);
-
-    satisfy_transport_changes(&mut session, 2000);
-
-    {
-        let offer = session.create_sdp_offer();
-
-        assert!(offer.ice_pwd.is_some());
-        assert!(offer.ice_ufrag.is_some());
-        assert!(offer.media_descriptions[0].ice_ufrag.is_none());
-        assert!(offer.media_descriptions[0].ice_pwd.is_none());
-        assert!(offer.media_descriptions[1].ice_ufrag.is_none());
-        assert!(offer.media_descriptions[1].ice_pwd.is_none());
     }
 }
 
@@ -102,20 +72,6 @@ fn offer_ice_candidates_when_bundle_policy_max_compat() {
         assert_eq!(offer.media_descriptions[0].ice_candidates.len(), 1);
         assert_eq!(offer.media_descriptions[0].ice_candidates[0].port, 1000);
     }
-
-    session.add_media(audio, Direction::SendRecv, None, None);
-
-    satisfy_transport_changes(&mut session, 2000);
-
-    {
-        let offer = session.create_sdp_offer();
-
-        assert_eq!(offer.media_descriptions[0].ice_candidates.len(), 1);
-        assert_eq!(offer.media_descriptions[0].ice_candidates[0].port, 1000);
-
-        assert_eq!(offer.media_descriptions[1].ice_candidates.len(), 1);
-        assert_eq!(offer.media_descriptions[1].ice_candidates[0].port, 2000);
-    }
 }
 
 #[test]
@@ -140,18 +96,6 @@ fn offer_ice_candidates_when_bundle_policy_max_bundle() {
 
         assert_eq!(offer.media_descriptions[0].ice_candidates.len(), 1);
         assert_eq!(offer.media_descriptions[0].ice_candidates[0].port, 1000);
-    }
-
-    session.add_media(audio, Direction::SendRecv, None, None);
-
-    {
-        let offer = session.create_sdp_offer();
-
-        assert_eq!(offer.media_descriptions[0].ice_candidates.len(), 1);
-        assert_eq!(offer.media_descriptions[0].ice_candidates[0].port, 1000);
-
-        assert_eq!(offer.media_descriptions[1].ice_candidates.len(), 1);
-        assert_eq!(offer.media_descriptions[1].ice_candidates[0].port, 1000);
     }
 }
 

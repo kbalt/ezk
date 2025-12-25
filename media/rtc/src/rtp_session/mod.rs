@@ -165,6 +165,19 @@ impl RtpSession {
         self.rx.remove(&ssrc);
     }
 
+    /// Returns an iterator over all outbound streams
+    pub fn tx_streams(&self) -> impl Iterator<Item = &RtpOutboundStream> {
+        self.tx.values()
+    }
+
+    /// Returns an iterator over all inbound streams (excluding rtx SSRCs as they're included in the original RtpInboundStream)
+    pub fn rx_streams(&self) -> impl Iterator<Item = &RtpInboundStream> {
+        self.rx.values().filter_map(|rx| match rx {
+            RxStream::Original(rx) => Some(rx),
+            RxStream::Rtx(..) => None,
+        })
+    }
+
     /// Hand of the RTCP packet to the RTP session
     #[must_use]
     pub fn receive_rtcp(

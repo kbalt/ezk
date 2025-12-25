@@ -52,7 +52,7 @@ struct Rtx {
     pt: u8,
 
     /// Queue of already sent RTP packets
-    sent_packets: VecDeque<(RtpPacket, Instant)>,
+    sent_packets: VecDeque<(RtpPacket, Instant, u32)>,
 
     /// Determines how long a RTP packet is stored for retransmission before being dropped
     sent_packets_max_size: Duration,
@@ -190,10 +190,10 @@ impl OutboundQueue {
 
         // Store packet in sent_packets if configured
         if let Some(rtx) = &mut self.rtx {
-            rtx.sent_packets.push_back((rtp_packet.clone(), now));
+            rtx.sent_packets.push_back((rtp_packet.clone(), now, 0));
 
             // Remove old packets
-            while let Some((_, sent_at)) = rtx.sent_packets.front()
+            while let Some((_, sent_at, _)) = rtx.sent_packets.front()
                 && now.saturating_duration_since(*sent_at) > rtx.sent_packets_max_size
             {
                 rtx.sent_packets.pop_front();
@@ -223,12 +223,16 @@ impl OutboundQueue {
         };
 
         for entry in entries {
-            if let Some((rtp_packet, _)) = rtx
+            if let Some((rtp_packet, _, sent_counter)) = rtx
                 .sent_packets
-                .iter()
+                .iter_mut()
                 .find(|x| x.0.sequence_number.0 == entry)
             {
-                rtx.retransmit_queue.push_back(rtp_packet.clone());
+                // Limit the same RTP packet to being sent 5 times
+                if *sent_counter < 5 {
+                    *sent_counter += 1;
+                    rtx.retransmit_queue.push_back(rtp_packet.clone());
+                }
             }
         }
     }
@@ -238,10 +242,37 @@ impl OutboundQueue {
 mod tests {
     use super::*;
     use bytes::Bytes;
-    use rtp::RtpTimestamp;
+    use rtp::{RtpTimestamp, SequenceNumber};
 
     fn packet(media_time: Instant, pt: u8) -> SendRtpPacket {
         SendRtpPacket::new(media_time, pt, Bytes::new())
+    }
+
+    #[test]
+    fn sequence_rollover() {
+        for i in 0..65535 {
+            let mut queue = OutboundQueue::new(Ssrc(0), 1000, None);
+            queue.current_sequence_number = ExtendedSequenceNumber((i << 16) | (65535 - 6));
+
+            let now = Instant::now();
+
+            for _ in 0..20 {
+                queue.push(SendRtpPacket::new(now, 9, Bytes::new()));
+            }
+
+            for i in 0..20 {
+                let packet = queue.poll(now + Duration::from_millis(100)).unwrap();
+
+                match packet {
+                    RtpOutboundStreamEvent::SendRtpPacket { rtp_packet, .. } => {
+                        assert_eq!(
+                            rtp_packet.sequence_number,
+                            SequenceNumber(65530u16.wrapping_add(i))
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

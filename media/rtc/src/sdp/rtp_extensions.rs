@@ -1,22 +1,24 @@
 use bytesstr::BytesStr;
 use rtp::RtpExtensionIds;
-use sdp_types::{Direction, ExtMap, MediaDescription, SessionDescription};
+use sdp_types::{Direction, ExtMap, MediaDescription, MediaType, SessionDescription};
 
 const RTP_MID_HDREXT: &str = "urn:ietf:params:rtp-hdrext:sdes:mid";
+const RTP_AUDIO_LEVEL_HDREXT: &str = "urn:ietf:params:rtp-hdrext:ssrc-audio-level";
 const RTP_TWCC_HDREXT: &str =
     "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01";
 
 pub(crate) trait RtpExtensionIdsExt {
-    fn offer() -> Self;
+    fn offer(media_type: MediaType) -> Self;
     fn from_sdp(session_desc: &SessionDescription, media_desc: &MediaDescription) -> Self;
     fn to_extmap(&self) -> Vec<ExtMap>;
 }
 
 impl RtpExtensionIdsExt for RtpExtensionIds {
-    fn offer() -> Self {
+    fn offer(media_type: MediaType) -> Self {
         RtpExtensionIds {
             mid: Some(1),
-            twcc_sequence_number: Some(2),
+            audio_level: Some(2).filter(|_| media_type == MediaType::Audio),
+            twcc_sequence_number: Some(3),
         }
     }
 
@@ -25,11 +27,15 @@ impl RtpExtensionIdsExt for RtpExtensionIds {
             RtpExtensionIds {
                 mid: v
                     .iter()
-                    .find(|extmap| extmap.uri == RTP_MID_HDREXT)
+                    .find(|extmap| extmap.extension_name == RTP_MID_HDREXT)
+                    .map(|extmap| extmap.id),
+                audio_level: v
+                    .iter()
+                    .find(|extmap| extmap.extension_name == RTP_AUDIO_LEVEL_HDREXT)
                     .map(|extmap| extmap.id),
                 twcc_sequence_number: v
                     .iter()
-                    .find(|extmap| extmap.uri == RTP_TWCC_HDREXT)
+                    .find(|extmap| extmap.extension_name == RTP_TWCC_HDREXT)
                     .map(|extmap| extmap.id),
             }
         }
@@ -39,6 +45,7 @@ impl RtpExtensionIdsExt for RtpExtensionIds {
 
         Self {
             mid: b.mid.or(a.mid),
+            audio_level: b.audio_level.or(a.audio_level),
             twcc_sequence_number: b.twcc_sequence_number.or(a.twcc_sequence_number),
         }
     }
@@ -49,16 +56,27 @@ impl RtpExtensionIdsExt for RtpExtensionIds {
         if let Some(mid_id) = self.mid {
             extmap.push(ExtMap {
                 id: mid_id,
-                uri: BytesStr::from_static(RTP_MID_HDREXT),
                 direction: Direction::SendRecv,
+                extension_name: BytesStr::from_static(RTP_MID_HDREXT),
+                extension_attributes: vec![],
+            });
+        }
+
+        if let Some(audio_level) = self.audio_level {
+            extmap.push(ExtMap {
+                id: audio_level,
+                direction: Direction::SendRecv,
+                extension_name: BytesStr::from_static(RTP_AUDIO_LEVEL_HDREXT),
+                extension_attributes: vec![BytesStr::from_static("vad=on")],
             });
         }
 
         if let Some(twcc_sequence_number) = self.twcc_sequence_number {
             extmap.push(ExtMap {
                 id: twcc_sequence_number,
-                uri: BytesStr::from_static(RTP_TWCC_HDREXT),
                 direction: Direction::SendRecv,
+                extension_name: BytesStr::from_static(RTP_TWCC_HDREXT),
+                extension_attributes: vec![],
             });
         }
 

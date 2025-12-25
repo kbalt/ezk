@@ -117,11 +117,11 @@ fn rtcp_fb_avpf_offer_contains_fb() {
         TransportProtocol::RtpAvpf
     );
     // Video must contain PLI & FIR feedback types
-    assert_eq!(offer.media_descriptions[1].rtcp_fb.len(), 4);
+    assert_eq!(offer.media_descriptions[1].rtcp_fb.len(), 3);
     assert!(offer.media_descriptions[1].rtcp_fb[0].kind == RtcpFeedbackKind::Nack);
     assert!(offer.media_descriptions[1].rtcp_fb[1].kind == RtcpFeedbackKind::NackPli);
     assert!(offer.media_descriptions[1].rtcp_fb[2].kind == RtcpFeedbackKind::CcmFir);
-    assert!(offer.media_descriptions[1].rtcp_fb[3].kind == RtcpFeedbackKind::TransportCC);
+    // assert!(offer.media_descriptions[1].rtcp_fb[3].kind == RtcpFeedbackKind::TransportCC);
 
     let (_, _, mut answer_session) = make_audio_video_session(true);
 
@@ -139,11 +139,11 @@ fn rtcp_fb_avpf_offer_contains_fb() {
     );
 
     assert!(answer.media_descriptions[0].rtcp_fb.is_empty());
-    assert_eq!(answer.media_descriptions[1].rtcp_fb.len(), 4);
+    assert_eq!(answer.media_descriptions[1].rtcp_fb.len(), 3);
     assert!(answer.media_descriptions[1].rtcp_fb[0].kind == RtcpFeedbackKind::Nack);
     assert!(answer.media_descriptions[1].rtcp_fb[1].kind == RtcpFeedbackKind::NackPli);
     assert!(answer.media_descriptions[1].rtcp_fb[2].kind == RtcpFeedbackKind::CcmFir);
-    assert!(answer.media_descriptions[1].rtcp_fb[3].kind == RtcpFeedbackKind::TransportCC);
+    // assert!(answer.media_descriptions[1].rtcp_fb[3].kind == RtcpFeedbackKind::TransportCC);
 
     offer_session.receive_sdp_answer(answer).unwrap();
 

@@ -12,11 +12,23 @@ pub struct RtpInboundStats {
     /// Total lost packets (not received or dropped)
     pub packets_lost: u64,
 
-    /// Packet loss percentage ranging from 0 to 1.0
+    /// Packet loss percentage of the original stream (excluding retransmissions) ranging from 0 to 1.0
     pub loss: f32,
 
     /// An estimate of the statistical variance of the RTP data packet interarrival time
     pub jitter: Duration,
+
+    /// Total RTX packets received in time
+    pub rtx_packets_received_in_time: u64,
+
+    /// Total RTX packets received too late
+    pub rtx_packets_received_too_late: u64,
+
+    /// Total RTX packets received redudant as the original packet was received
+    pub rtx_packets_received_redudant: u64,
+
+    /// Total RTX payload bytes received
+    pub rtx_bytes_received: u64,
 
     /// Stats that are dependent on the remote sending a sender report
     pub remote: Option<RtpInboundRemoteStats>,

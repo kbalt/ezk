@@ -4,7 +4,7 @@ use super::{ntp_timestamp::NtpTimestamp, report::ReportsQueue};
 use queue::InboundQueue;
 use rtp::{
     RtpPacket, Ssrc,
-    rtcp_types::{Fir, PayloadFeedback, Pli, ReportBlock, SenderReport},
+    rtcp_types::{Fir, PayloadFeedback, Pli, ReportBlock, SenderReport, TransportFeedback},
 };
 use std::time::{Duration, Instant};
 
@@ -64,6 +64,10 @@ impl RtpInboundStream {
         }
     }
 
+    pub fn ssrc(&self) -> Ssrc {
+        self.ssrc
+    }
+
     pub fn request_nack_pli(&mut self) {
         self.want_nack_pli = true
     }
@@ -114,8 +118,8 @@ impl RtpInboundStream {
         if self.emit_nack
             && let Some(nack) = self.queue.poll_nack(now)
         {
-            reports.add_payload_feedback(
-                PayloadFeedback::builder_owned(nack)
+            reports.add_transport_feedback(
+                TransportFeedback::builder_owned(nack)
                     .media_ssrc(self.ssrc.0)
                     .sender_ssrc(fallback_sender_ssrc.0),
             );
@@ -241,6 +245,10 @@ impl RtpInboundStream {
         RtpInboundStats {
             packets_received: self.queue.received,
             bytes_received: self.queue.received_bytes,
+            rtx_packets_received_in_time: self.queue.rtx_received_in_time,
+            rtx_packets_received_too_late: self.queue.rtx_received_too_late,
+            rtx_packets_received_redudant: self.queue.rtx_received_redudant,
+            rtx_bytes_received: self.queue.rtx_bytes_received,
             packets_lost: self.queue.lost,
             loss: self.packet_loss(),
             jitter: Duration::from_secs_f64(self.queue.jitter / self.queue.clock_rate as f64),

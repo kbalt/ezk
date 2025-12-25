@@ -22,7 +22,7 @@ use bytes::Bytes;
 use bytesstr::BytesStr;
 use ice::{Component, IceAgent, IceCredentials, ReceivedPkt};
 use openssl::hash::MessageDigest;
-use rtp::{RtpExtensions, RtpPacket, rtcp_types::Compound};
+use rtp::{RtpPacket, rtcp_types::Compound};
 use sdp_types::{
     Connection, Fingerprint, FingerprintAlgorithm, Fmtp, Group, IceCandidate, IceOptions,
     IcePassword, IceUsernameFragment, MediaDescription, MsId, Origin, Rtcp, RtcpFeedback,
@@ -93,7 +93,6 @@ pub struct SdpSession {
     config: SdpSessionConfig,
 
     id: u64,
-    // TODO: actually increment the version
     version: u64,
 
     // Local ip address to use in connection attribute
@@ -121,6 +120,7 @@ pub struct SdpSession {
     media: Vec<Media>,
 
     // Pending changes for the next SDP exchange
+    offered_changes: Vec<PendingChange>,
     pending_changes: Vec<PendingChange>,
 
     // Events for the user
@@ -191,6 +191,7 @@ impl SdpSession {
             offered_transports: SlotMap::with_key(),
             next_media_id: MediaId(0),
             media: Vec::new(),
+            offered_changes: Vec::new(),
             pending_changes: Vec::new(),
             transport_changes: VecDeque::new(),
             events: VecDeque::new(),
@@ -413,7 +414,12 @@ impl SdpSession {
     ///
     /// The actual deletion will be performed with the next SDP exchange
     pub fn remove_media(&mut self, media_id: MediaId) {
-        if self.media.iter().any(|e| e.id == media_id) {
+        let already_exists = self
+            .pending_changes
+            .iter()
+            .any(|c| matches!(c, PendingChange::RemoveMedia(id) if *id == media_id));
+
+        if !already_exists && self.media.iter().any(|e| e.id == media_id) {
             self.pending_changes
                 .push(PendingChange::RemoveMedia(media_id))
         }
@@ -439,6 +445,15 @@ impl SdpSession {
 
     pub fn pending_media(&self) -> impl Iterator<Item = &PendingMedia> {
         self.pending_changes
+            .iter()
+            .filter_map(|pending_change| match pending_change {
+                PendingChange::AddMedia(pending_media) => Some(pending_media),
+                _ => None,
+            })
+    }
+
+    pub fn offered_media(&self) -> impl Iterator<Item = &PendingMedia> {
+        self.offered_changes
             .iter()
             .filter_map(|pending_change| match pending_change {
                 PendingChange::AddMedia(pending_media) => Some(pending_media),
@@ -749,12 +764,12 @@ impl SdpSession {
 
             // Try to match an active media session, while filtering out media that is to be deleted
             for media in &mut self.media {
-                let pending_removal = self
-                    .pending_changes
+                let offered_removal = self
+                    .offered_changes
                     .iter()
                     .any(|c| matches!(c, PendingChange::RemoveMedia(id) if *id == media.id));
 
-                if pending_removal {
+                if offered_removal {
                     // Ignore this active media since it's supposed to be removed
                     continue;
                 }
@@ -767,8 +782,8 @@ impl SdpSession {
             }
 
             // Try to match a new media session
-            let pending_media_index =
-                self.pending_changes
+            let offered_media_index =
+                self.offered_changes
                     .iter()
                     .position(|pending_change| match pending_change {
                         PendingChange::AddMedia(pending_media) => pending_media.matches_answer(
@@ -780,9 +795,9 @@ impl SdpSession {
                         PendingChange::ChangeDirection(..) => false,
                     });
 
-            if let Some(pending_media_index) = pending_media_index {
+            if let Some(offered_media_index) = offered_media_index {
                 let PendingChange::AddMedia(pending_media) =
-                    &self.pending_changes[pending_media_index]
+                    &self.offered_changes[offered_media_index]
                 else {
                     continue;
                 };
@@ -838,17 +853,17 @@ impl SdpSession {
                         });
 
                         // Update any other offered media using the bundled transport
-                        for pending_change in &mut self.pending_changes {
-                            if let PendingChange::AddMedia(pending_media) = pending_change {
+                        for offered_change in &mut self.offered_changes {
+                            if let PendingChange::AddMedia(offered_media) = offered_change {
                                 let offered_id = AnyTransportId::Offered(offered_id);
                                 let established_id = AnyTransportId::Established(established_id);
 
-                                if pending_media.bundle_transport_id == offered_id {
-                                    pending_media.bundle_transport_id = established_id;
+                                if offered_media.bundle_transport_id == offered_id {
+                                    offered_media.bundle_transport_id = established_id;
                                 }
 
-                                if pending_media.standalone_transport_id == Some(offered_id) {
-                                    pending_media.standalone_transport_id = Some(established_id)
+                                if offered_media.standalone_transport_id == Some(offered_id) {
+                                    offered_media.standalone_transport_id = Some(established_id)
                                 }
                             }
                         }
@@ -862,13 +877,13 @@ impl SdpSession {
                     }
                 };
 
-                let PendingChange::AddMedia(pending_media) =
-                    &self.pending_changes[pending_media_index]
+                let PendingChange::AddMedia(offered_media) =
+                    &self.offered_changes[offered_media_index]
                 else {
                     unreachable!("re-borrowing the same pending media as before")
                 };
 
-                let chosen_codec = self.local_media[pending_media.local_media_id]
+                let chosen_codec = self.local_media[offered_media.local_media_id]
                     .choose_codec_from_answer(remote_media_desc)
                     .ok_or(SdpError::AnswerHasNoValidCodecs)?;
 
@@ -892,9 +907,9 @@ impl SdpSession {
 
                 self.events
                     .push_back(SdpSessionEvent::MediaAdded(MediaAdded {
-                        id: pending_media.id,
+                        id: offered_media.id,
                         transport_id: public_transport_id,
-                        local_media_id: pending_media.local_media_id,
+                        local_media_id: offered_media.local_media_id,
                         direction: chosen_codec.direction.into(),
                         codec: NegotiatedCodec {
                             pt: chosen_codec.pt,
@@ -910,10 +925,10 @@ impl SdpSession {
                 let (stream_id, track_id) = msid_to_ids(remote_media_desc.msid.as_ref());
 
                 self.media.push(Media {
-                    id: pending_media.id,
-                    local_media_id: pending_media.local_media_id,
-                    media_type: pending_media.media_type,
-                    use_avpf: pending_media.use_avpf,
+                    id: offered_media.id,
+                    local_media_id: offered_media.local_media_id,
+                    media_type: offered_media.media_type,
+                    use_avpf: offered_media.use_avpf,
                     mid: remote_media_desc.mid.clone(),
                     stream_id,
                     track_id,
@@ -941,7 +956,7 @@ impl SdpSession {
                 });
 
                 // remove the matched pending added media to avoid doubly matching it
-                self.pending_changes.remove(pending_media_index);
+                self.offered_changes.remove(offered_media_index);
 
                 continue 'next_media_desc;
             }
@@ -950,7 +965,7 @@ impl SdpSession {
         }
 
         // remove all media that is pending removal
-        for change in take(&mut self.pending_changes) {
+        for change in take(&mut self.offered_changes) {
             if let PendingChange::RemoveMedia(media_id) = change {
                 self.media.retain(|m| {
                     if m.id == media_id {
@@ -1018,16 +1033,20 @@ impl SdpSession {
 
     fn remove_unused_transports(&mut self) {
         self.offered_transports.retain(|id, transport| {
-            let in_use_by_pending = self.pending_changes.iter().any(|change| {
-                let id = AnyTransportId::Offered(id);
+            let in_use_by_pending = self
+                .pending_changes
+                .iter()
+                .chain(self.offered_changes.iter())
+                .any(|change| {
+                    let id = AnyTransportId::Offered(id);
 
-                if let PendingChange::AddMedia(add_media) = change {
-                    add_media.bundle_transport_id == id
-                        || add_media.standalone_transport_id == Some(id)
-                } else {
-                    false
-                }
-            });
+                    if let PendingChange::AddMedia(add_media) = change {
+                        add_media.bundle_transport_id == id
+                            || add_media.standalone_transport_id == Some(id)
+                    } else {
+                        false
+                    }
+                });
 
             if !in_use_by_pending {
                 self.transport_changes
@@ -1042,16 +1061,20 @@ impl SdpSession {
             let in_use_by_active = self.media.iter().any(|media| media.transport_id == id);
 
             // Is the transport in use by any pending changes?
-            let in_use_by_pending = self.pending_changes.iter().any(|change| {
-                let id = AnyTransportId::Established(id);
+            let in_use_by_pending = self
+                .pending_changes
+                .iter()
+                .chain(self.offered_changes.iter())
+                .any(|change| {
+                    let id = AnyTransportId::Established(id);
 
-                if let PendingChange::AddMedia(add_media) = change {
-                    add_media.bundle_transport_id == id
-                        || add_media.standalone_transport_id == Some(id)
-                } else {
-                    false
-                }
-            });
+                    if let PendingChange::AddMedia(add_media) = change {
+                        add_media.bundle_transport_id == id
+                            || add_media.standalone_transport_id == Some(id)
+                    } else {
+                        false
+                    }
+                });
 
             let in_use = in_use_by_active || in_use_by_pending;
 
@@ -1128,6 +1151,8 @@ impl SdpSession {
 
     /// Create a SDP offer from the current state of the `SdpSession`, this includes any pending media.
     pub fn create_sdp_offer(&mut self) -> SessionDescription {
+        self.offered_changes = take(&mut self.pending_changes);
+
         let mut media_descriptions = vec![];
 
         // Put the current media sessions in the offer
@@ -1135,7 +1160,7 @@ impl SdpSession {
             let mut override_direction = None;
 
             // Apply requested changes
-            for change in &self.pending_changes {
+            for change in &self.offered_changes {
                 match change {
                     PendingChange::AddMedia(..) => {}
                     PendingChange::RemoveMedia(media_id) => {
@@ -1155,7 +1180,7 @@ impl SdpSession {
         }
 
         // Add all pending added media
-        for change in &self.pending_changes {
+        for change in &self.offered_changes {
             let PendingChange::AddMedia(pending_media) = change else {
                 continue;
             };
@@ -1240,10 +1265,11 @@ impl SdpSession {
                         kind: RtcpFeedbackKind::CcmFir,
                     });
 
-                    rtcp_fb.push(RtcpFeedback {
-                        pt: RtcpFeedbackPt::Pt(pt),
-                        kind: RtcpFeedbackKind::TransportCC,
-                    });
+                    //TODO: transport-cc doesn't actually do anything yet, so disable for now
+                    // rtcp_fb.push(RtcpFeedback {
+                    //     pt: RtcpFeedbackPt::Pt(pt),
+                    //     kind: RtcpFeedbackKind::TransportCC,
+                    // });
                 }
             }
 
@@ -1412,7 +1438,10 @@ impl SdpSession {
             payload: media.codec_pt.local,
             encoding: media.codec.name.as_ref().into(),
             clock_rate: media.codec.clock_rate,
-            params: Default::default(),
+            params: media
+                .codec
+                .channels
+                .map(|channels| channels.to_string().into()),
         });
 
         fmtp.extend(media.codec.fmtp.as_ref().map(|param| Fmtp {
@@ -1519,7 +1548,7 @@ impl SdpSession {
         media_desc
     }
 
-    fn build_bundle_groups(&self, include_pending_changes: bool) -> Vec<Group> {
+    fn build_bundle_groups(&self, include_offered_changes: bool) -> Vec<Group> {
         let mut bundle_groups: HashMap<AnyTransportId, Vec<BytesStr>> = HashMap::new();
 
         for media in &self.media {
@@ -1531,8 +1560,8 @@ impl SdpSession {
             }
         }
 
-        if include_pending_changes {
-            for change in &self.pending_changes {
+        if include_offered_changes {
+            for change in &self.offered_changes {
                 if let PendingChange::AddMedia(pending_media) = change {
                     bundle_groups
                         .entry(pending_media.bundle_transport_id)
@@ -1908,10 +1937,21 @@ impl SdpSession {
         )
     }
 
+    /// Returns if local changes have been made to the session which require renegotiation
+    pub fn needs_negotiation(&self) -> bool {
+        !self.needs_sdp_answer() && !self.pending_changes.is_empty()
+    }
+
+    /// Returns if an SDP offer has been made
+    pub fn needs_sdp_answer(&self) -> bool {
+        !self.offered_changes.is_empty()
+    }
+
     /// Returns a list of all pending media lines in the SDP session
     pub fn pending_media_iter(&self) -> impl Iterator<Item = &PendingMedia> {
         self.pending_changes
             .iter()
+            .chain(self.offered_changes.iter())
             .filter_map(|pending_change| match pending_change {
                 PendingChange::AddMedia(pending_media) => Some(pending_media),
                 _ => None,
@@ -1978,6 +2018,13 @@ impl SdpSession {
             .expect_original();
 
         Some(InboundMedia { media, stream })
+    }
+
+    /// Returns an iterator over all internal RTP transports and their corresponding transport id
+    pub fn rtp_sessions(&self) -> impl Iterator<Item = (TransportId, &RtpSession)> {
+        self.transports
+            .values()
+            .map(|x| (x.public_id, &x.rtp_session))
     }
 
     /// Returns the cumulative gathering state of all ice agents
@@ -2088,16 +2135,18 @@ pub struct OutboundMedia<'a> {
 }
 
 impl OutboundMedia<'_> {
+    /// Returns the media associated with this inbound stream
+    pub fn media(&self) -> &Media {
+        self.media
+    }
+
     pub fn send_rtp(&mut self, packet: SendRtpPacket) {
-        let mid: Option<&Bytes> = match &self.media.mid {
-            Some(e) => Some(e.as_ref()),
-            None => None,
+        let packet = match &self.media.mid {
+            Some(e) => packet.with_mid(AsRef::<Bytes>::as_ref(e).clone()),
+            None => packet,
         };
 
-        self.stream.send_rtp(packet.with_extensions(RtpExtensions {
-            mid: mid.cloned(),
-            twcc_sequence_number: None,
-        }));
+        self.stream.send_rtp(packet);
     }
 }
 

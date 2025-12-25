@@ -134,6 +134,10 @@ impl Media {
         }
     }
 
+    pub fn codec_local_pt(&self) -> u8 {
+        self.codec_pt.local
+    }
+
     /// Returns if the payload type is actual media, excludes rtx streams
     pub(super) fn is_remote_media_pt(&self, pt: u8) -> bool {
         self.codec_pt.remote == pt || self.dtmf_pt.is_some_and(|x| x.remote == pt)

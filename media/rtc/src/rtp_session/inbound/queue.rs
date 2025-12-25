@@ -47,6 +47,11 @@ pub(crate) struct InboundQueue {
     pub(crate) received: u64,
     pub(crate) received_bytes: u64,
 
+    pub(crate) rtx_received_in_time: u64,
+    pub(crate) rtx_received_too_late: u64,
+    pub(crate) rtx_received_redudant: u64,
+    pub(crate) rtx_bytes_received: u64,
+
     /// packets that were never received
     pub(crate) lost: u64,
     pub(crate) jitter: f64,
@@ -118,6 +123,10 @@ impl InboundQueue {
             dropped: 0,
             received: 0,
             received_bytes: 0,
+            rtx_received_in_time: 0,
+            rtx_received_too_late: 0,
+            rtx_received_redudant: 0,
+            rtx_bytes_received: 0,
             lost: 0,
             jitter: 0.0,
         }
@@ -305,8 +314,12 @@ impl InboundQueue {
         {
             Some(QueueEntry::Occupied { .. }) => {
                 // Retransmission was redundant
+                self.rtx_received_redudant += 1;
             }
             Some(vacant @ QueueEntry::Vacant { .. }) => {
+                self.rtx_received_in_time += 1;
+                self.rtx_bytes_received += rtp_packet.payload.len() as u64;
+
                 *vacant = QueueEntry::Occupied {
                     received_at: None,
                     timestamp,
@@ -316,6 +329,7 @@ impl InboundQueue {
             }
             None => {
                 // Retransmission is late
+                self.rtx_received_too_late += 1;
             }
         }
     }
