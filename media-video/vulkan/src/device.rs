@@ -132,12 +132,10 @@ impl Device {
             };
 
             // Query all available queues families
-            let queue_family_properties = dbg!(
-                vk_adapter
-                    .shared_instance()
-                    .raw_instance()
-                    .get_physical_device_queue_family_properties(vk_adapter.raw_physical_device())
-            );
+            let queue_family_properties = vk_adapter
+                .shared_instance()
+                .raw_instance()
+                .get_physical_device_queue_family_properties(vk_adapter.raw_physical_device());
 
             let mut separate_encode_queue_family_index = None;
 
@@ -245,7 +243,12 @@ impl Device {
                 inner: Arc::new(Inner {
                     instance,
                     physical_device,
-                    physical_device_memory_properties: transmute(physical_device_memory_properties),
+                    physical_device_memory_properties: transmute::<
+                        ash_stable::vk::PhysicalDeviceMemoryProperties,
+                        ash::vk::PhysicalDeviceMemoryProperties,
+                    >(
+                        physical_device_memory_properties
+                    ),
                     device: vk_device,
                     device_extensions,
                     video_queue_device,
@@ -425,26 +428,6 @@ impl Device {
             memory_type_bits,
             properties,
         })
-    }
-
-    pub fn set_debug_name<T: Handle>(&self, handle: T, name: &str) {
-        if cfg!(debug_assertions) {
-            unsafe {
-                let name_info = vk::DebugUtilsObjectNameInfoEXT::default()
-                    .object_handle(handle)
-                    .object_name(
-                        CStr::from_bytes_until_nul(name.as_bytes())
-                            .expect("debug_name must be a null terminated string"),
-                    );
-
-                if let Err(e) =
-                    ash::ext::debug_utils::Device::load(self.instance().ash(), self.ash())
-                        .set_debug_utils_object_name(&name_info)
-                {
-                    log::warn!("Failed to set debug object name, {e}");
-                }
-            }
-        }
     }
 
     pub fn instance(&self) -> &Instance {
