@@ -1,7 +1,7 @@
 /// H.264 encoding levels with their corresponding capabilities.
 #[derive(Debug, Clone, Copy)]
 #[allow(non_camel_case_types)]
-pub enum Level {
+pub enum H264Level {
     /// Level 1.0: Max resolution 176x144 (QCIF), 15 fps, 64 kbps (Main), 80 kbps (High)
     Level_1_0,
     /// Level 1.B: Specialized low-complexity baseline level.
@@ -49,32 +49,32 @@ pub enum Level {
     Level_6_2,
 }
 
-impl Level {
+impl H264Level {
     /// Returns the level idc as specified in H.264 for this level
     ///
     /// Note that level 1.1 & 1.b have the same value
     pub fn level_idc(self) -> u8 {
         match self {
-            Level::Level_1_0 => 10,
-            Level::Level_1_B => 11,
-            Level::Level_1_1 => 11,
-            Level::Level_1_2 => 12,
-            Level::Level_1_3 => 13,
-            Level::Level_2_0 => 20,
-            Level::Level_2_1 => 21,
-            Level::Level_2_2 => 22,
-            Level::Level_3_0 => 30,
-            Level::Level_3_1 => 31,
-            Level::Level_3_2 => 32,
-            Level::Level_4_0 => 40,
-            Level::Level_4_1 => 41,
-            Level::Level_4_2 => 42,
-            Level::Level_5_0 => 50,
-            Level::Level_5_1 => 51,
-            Level::Level_5_2 => 52,
-            Level::Level_6_0 => 60,
-            Level::Level_6_1 => 61,
-            Level::Level_6_2 => 62,
+            H264Level::Level_1_0 => 10,
+            H264Level::Level_1_B => 11,
+            H264Level::Level_1_1 => 11,
+            H264Level::Level_1_2 => 12,
+            H264Level::Level_1_3 => 13,
+            H264Level::Level_2_0 => 20,
+            H264Level::Level_2_1 => 21,
+            H264Level::Level_2_2 => 22,
+            H264Level::Level_3_0 => 30,
+            H264Level::Level_3_1 => 31,
+            H264Level::Level_3_2 => 32,
+            H264Level::Level_4_0 => 40,
+            H264Level::Level_4_1 => 41,
+            H264Level::Level_4_2 => 42,
+            H264Level::Level_5_0 => 50,
+            H264Level::Level_5_1 => 51,
+            H264Level::Level_5_2 => 52,
+            H264Level::Level_6_0 => 60,
+            H264Level::Level_6_1 => 61,
+            H264Level::Level_6_2 => 62,
         }
     }
 
@@ -102,26 +102,26 @@ impl Level {
     /// 7 - Max number of motion vectors per two consecutive MBs MaxMvsPer2Mb
     fn limits(self) -> (u32, u32, u32, u32, u32, u32, u32, Option<u32>) {
         match self {
-            Level::Level_1_0 => (1485, 99, 396, 64, 175, 64, 2, None),
-            Level::Level_1_B => (1485, 99, 396, 128, 350, 64, 2, None),
-            Level::Level_1_1 => (3000, 396, 900, 192, 500, 128, 2, None),
-            Level::Level_1_2 => (6000, 396, 2376, 384, 1000, 128, 2, None),
-            Level::Level_1_3 => (11880, 396, 2376, 768, 2000, 128, 2, None),
-            Level::Level_2_0 => (11880, 396, 2376, 2000, 2000, 128, 2, None),
-            Level::Level_2_1 => (19800, 792, 4752, 4000, 4000, 256, 2, None),
-            Level::Level_2_2 => (20250, 1620, 8100, 4000, 4000, 256, 2, None),
-            Level::Level_3_0 => (40500, 1620, 8100, 10000, 10000, 256, 2, Some(32)),
-            Level::Level_3_1 => (108000, 3600, 18000, 14000, 14000, 512, 4, Some(16)),
-            Level::Level_3_2 => (216000, 5120, 20480, 20000, 20000, 512, 4, Some(16)),
-            Level::Level_4_0 => (245760, 8192, 32768, 20000, 25000, 512, 4, Some(16)),
-            Level::Level_4_1 => (245760, 8192, 32768, 50000, 62500, 512, 2, Some(16)),
-            Level::Level_4_2 => (522240, 8704, 34816, 50000, 62500, 512, 2, Some(16)),
-            Level::Level_5_0 => (589824, 22080, 110400, 135000, 135000, 512, 2, Some(16)),
-            Level::Level_5_1 => (983040, 36864, 184320, 240000, 240000, 512, 2, Some(16)),
-            Level::Level_5_2 => (2073600, 36864, 184320, 240000, 240000, 512, 2, Some(16)),
-            Level::Level_6_0 => (4177920, 139264, 696320, 240000, 240000, 8192, 2, Some(16)),
-            Level::Level_6_1 => (8355840, 139264, 696320, 480000, 480000, 8192, 2, Some(16)),
-            Level::Level_6_2 => (16711680, 139264, 696320, 800000, 800000, 8192, 2, Some(16)),
+            H264Level::Level_1_0 => (1485, 99, 396, 64, 175, 64, 2, None),
+            H264Level::Level_1_B => (1485, 99, 396, 128, 350, 64, 2, None),
+            H264Level::Level_1_1 => (3000, 396, 900, 192, 500, 128, 2, None),
+            H264Level::Level_1_2 => (6000, 396, 2376, 384, 1000, 128, 2, None),
+            H264Level::Level_1_3 => (11880, 396, 2376, 768, 2000, 128, 2, None),
+            H264Level::Level_2_0 => (11880, 396, 2376, 2000, 2000, 128, 2, None),
+            H264Level::Level_2_1 => (19800, 792, 4752, 4000, 4000, 256, 2, None),
+            H264Level::Level_2_2 => (20250, 1620, 8100, 4000, 4000, 256, 2, None),
+            H264Level::Level_3_0 => (40500, 1620, 8100, 10000, 10000, 256, 2, Some(32)),
+            H264Level::Level_3_1 => (108000, 3600, 18000, 14000, 14000, 512, 4, Some(16)),
+            H264Level::Level_3_2 => (216000, 5120, 20480, 20000, 20000, 512, 4, Some(16)),
+            H264Level::Level_4_0 => (245760, 8192, 32768, 20000, 25000, 512, 4, Some(16)),
+            H264Level::Level_4_1 => (245760, 8192, 32768, 50000, 62500, 512, 2, Some(16)),
+            H264Level::Level_4_2 => (522240, 8704, 34816, 50000, 62500, 512, 2, Some(16)),
+            H264Level::Level_5_0 => (589824, 22080, 110400, 135000, 135000, 512, 2, Some(16)),
+            H264Level::Level_5_1 => (983040, 36864, 184320, 240000, 240000, 512, 2, Some(16)),
+            H264Level::Level_5_2 => (2073600, 36864, 184320, 240000, 240000, 512, 2, Some(16)),
+            H264Level::Level_6_0 => (4177920, 139264, 696320, 240000, 240000, 8192, 2, Some(16)),
+            H264Level::Level_6_1 => (8355840, 139264, 696320, 480000, 480000, 8192, 2, Some(16)),
+            H264Level::Level_6_2 => (16711680, 139264, 696320, 800000, 800000, 8192, 2, Some(16)),
         }
     }
 }

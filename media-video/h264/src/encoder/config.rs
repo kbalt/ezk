@@ -1,14 +1,14 @@
-use crate::{Level, Profile};
+use crate::{H264Level, H264Profile};
 use std::num::NonZeroU32;
 
 /// Generic H.264 encoder config
 #[derive(Debug, Clone, Copy)]
 pub struct H264EncoderConfig {
     /// H.264 encoding profile to use. Defines the feature-set the encoder may use.
-    pub profile: Profile,
+    pub profile: H264Profile,
 
     /// H264 encoding level. Defines default constraints like frame size, fps and more.
-    pub level: Level,
+    pub level: H264Level,
 
     /// Maximum width & height of the image to be encoded.
     ///

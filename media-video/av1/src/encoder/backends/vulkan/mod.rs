@@ -95,7 +95,7 @@ impl VkAV1Encoder {
         let capabilities =
             VulkanEncoderCapabilities::<AV1>::new(physical_device, av1_profile_info)?;
 
-        Ok(dbg!(capabilities))
+        Ok(capabilities)
     }
 
     pub fn new(
@@ -131,7 +131,7 @@ impl VkAV1Encoder {
                         0, // frame_id_numbers_present_flag
                         0, // enable_superres,
                         0, // enable_cdef,
-                        0, // enable_restoration,
+                        1, // enable_restoration,
                         0, // film_grain_params_present,
                         0, // timing_info_present_flag,
                         0, // initial_display_delay_present_flag,
@@ -175,10 +175,10 @@ impl VkAV1Encoder {
                 .max_level(map_level(config.level))
                 .use_max_level(true),
             video_encode_av1_session_parameters_create_info,
-            Some(rate_control_from_config(&config, &caps)),
+            Some(rate_control_from_config(&config, caps)),
         )?;
 
-        let free_dpb_slots = (0..8 as usize)
+        let free_dpb_slots = (0..8)
             .map(|index| DpbSlot {
                 index,
                 order_hint: 0,
@@ -190,7 +190,7 @@ impl VkAV1Encoder {
             config,
             state: AV1EncoderState::new(config.frame_pattern),
             encoder,
-            caps: *caps,
+            caps: caps.clone(),
             free_dpb_slots,
             active_dpb_slots: VecDeque::new(),
         })
@@ -344,6 +344,11 @@ impl VkAV1Encoder {
         log::trace!("\tref_frame_idx {ref_frame_idx:?}");
         log::trace!("\tref_order_hint {ref_order_hint:?}");
 
+        let loop_restoration = vk::native::StdVideoAV1LoopRestoration {
+            FrameRestorationType: [vk::native::StdVideoAV1FrameRestorationType_STD_VIDEO_AV1_FRAME_RESTORATION_TYPE_SGRPROJ; 3],
+            LoopRestorationSize: [64; 3],
+        };
+
         let setup_std_reference_info = vk::native::StdVideoEncodeAV1ReferenceInfo {
             flags: vk::native::StdVideoEncodeAV1ReferenceInfoFlags {
                 _bitfield_align_1: [0; 0],
@@ -389,8 +394,8 @@ impl VkAV1Encoder {
                     0, // segmentation_update_map,
                     0, // segmentation_temporal_update,
                     0, // segmentation_update_data,
-                    0, // UsesLr,
-                    0, // usesChromaLr,
+                    1, // UsesLr,
+                    1, // usesChromaLr,
                     1, // show_frame
                     0, // showable_frame,
                     0, // reserved,
@@ -409,7 +414,7 @@ impl VkAV1Encoder {
             TxMode: vk::native::StdVideoAV1TxMode_STD_VIDEO_AV1_TX_MODE_LARGEST,
             delta_q_res: 0,
             delta_lf_res: 0,
-            ref_order_hint: ref_order_hint,
+            ref_order_hint,
             ref_frame_idx,
             reserved1: [0u8; 3],
             delta_frame_id_minus_1: [0; 7],
@@ -418,7 +423,7 @@ impl VkAV1Encoder {
             pSegmentation: null(),
             pLoopFilter: null(),
             pCDEF: null(),
-            pLoopRestoration: null(),
+            pLoopRestoration:  &raw const loop_restoration,
             pGlobalMotion: null(),
             pExtensionHeader: null(),
             pBufferRemovalTimes: null(),
@@ -438,10 +443,9 @@ impl VkAV1Encoder {
             .primary_reference_cdf_only(false)
             .generate_obu_extension_header(false);
 
-        if let VulkanAV1RateControlMode::ConstantQuality { q_index: qp } =
-            self.config.rate_control.mode
+        if let VulkanAV1RateControlMode::ConstantQuality { q_index } = self.config.rate_control.mode
         {
-            picture_info = picture_info.constant_q_index(qp.into());
+            picture_info = picture_info.constant_q_index(q_index);
         }
 
         self.encoder.submit_encode_slot(
@@ -543,11 +547,11 @@ fn rate_control_from_config(
             }),
     );
 
-    if let Some(min_qp) = min_q_index {
+    if let Some(min_q_index) = min_q_index {
         this.codec_layer.min_q_index = vk::VideoEncodeAV1QIndexKHR {
-            intra_q_index: min_qp.into(),
-            predictive_q_index: min_qp.into(),
-            bipredictive_q_index: min_qp.into(),
+            intra_q_index: min_q_index,
+            predictive_q_index: min_q_index,
+            bipredictive_q_index: min_q_index,
         };
 
         this.codec_layer.use_min_q_index = vk::TRUE;
@@ -555,11 +559,11 @@ fn rate_control_from_config(
         this.codec_layer.use_min_q_index = vk::FALSE;
     }
 
-    if let Some(max_qp) = max_q_index {
+    if let Some(max_q_index) = max_q_index {
         this.codec_layer.max_q_index = vk::VideoEncodeAV1QIndexKHR {
-            intra_q_index: max_qp.into(),
-            predictive_q_index: max_qp.into(),
-            bipredictive_q_index: max_qp.into(),
+            intra_q_index: max_q_index,
+            predictive_q_index: max_q_index,
+            bipredictive_q_index: max_q_index,
         };
 
         this.codec_layer.use_max_q_index = vk::TRUE;

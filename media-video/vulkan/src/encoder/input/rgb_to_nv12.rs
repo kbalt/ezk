@@ -430,10 +430,12 @@ impl RgbToNV12Converter {
         input_rgb: &ImageView,
     ) -> Result<(), VulkanError> {
         let scale = [
-            (1.0 / nv12_extent.width as f32) * rgb_image_content_extent.width as f32
-                / rgb_image_extent.width as f32,
-            (1.0 / nv12_extent.height as f32) * rgb_image_content_extent.height as f32
-                / rgb_image_extent.height as f32,
+            rgb_image_content_extent.width as f32
+                / rgb_image_extent.width as f32
+                / nv12_extent.width as f32,
+            rgb_image_content_extent.height as f32
+                / rgb_image_extent.height as f32
+                / nv12_extent.height as f32,
         ];
 
         if self.current_scale != scale {

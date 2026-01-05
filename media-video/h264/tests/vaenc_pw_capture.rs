@@ -3,7 +3,7 @@ use capture::wayland::{
     ScreenCaptureOptions, SourceType,
 };
 use ezk_h264::{
-    Level, Profile,
+    H264Level, H264Profile,
     encoder::{
         backends::libva::{VaH264Encoder, VaH264EncoderConfig},
         config::{FramePattern, SliceMode},
@@ -23,7 +23,7 @@ async fn va_encode_memory() {
 }
 
 async fn va_encode_memory_inner() {
-    env_logger::init();
+    env_logger::builder().is_test(true).init();
 
     let mut devices = Display::enumerate_drm().unwrap();
     let device = &mut devices[0];
@@ -73,7 +73,8 @@ async fn va_encode_memory_inner() {
     let width = first_image.width() as u32;
     let height = first_image.height() as u32;
 
-    let capabilities = VaH264Encoder::capabilities(device, Profile::ConstrainedBaseline).unwrap();
+    let capabilities =
+        VaH264Encoder::capabilities(device, H264Profile::ConstrainedBaseline).unwrap();
 
     let mut encoder = VaH264Encoder::new(
         &capabilities,
@@ -91,8 +92,8 @@ async fn va_encode_memory_inner() {
                     target_percentage: 100,
                 },
             },
-            profile: Profile::ConstrainedBaseline,
-            level: Level::Level_6_2,
+            profile: H264Profile::ConstrainedBaseline,
+            level: H264Level::Level_6_2,
             frame_pattern: FramePattern {
                 intra_idr_period: 60,
                 intra_period: 30,

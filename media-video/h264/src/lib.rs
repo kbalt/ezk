@@ -11,11 +11,11 @@ pub mod profile_level_id;
 pub mod encoder;
 
 pub use fmtp::{H264FmtpOptions, H264PacketizationMode, ParseH264FmtpOptionsError};
-pub use level::Level;
+pub use level::H264Level;
 pub use payload::{
     H264DePayloadError, H264DePayloader, H264DePayloaderOutputFormat, H264Payloader,
 };
-pub use profile::Profile;
+pub use profile::H264Profile;
 
 mod profile_iop_consts {
     #![allow(unused)]

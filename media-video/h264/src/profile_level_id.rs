@@ -1,4 +1,4 @@
-use crate::{Level, Profile, profile_iop_consts::CONSTRAINT_SET3_FLAG};
+use crate::{H264Level, H264Profile, profile_iop_consts::CONSTRAINT_SET3_FLAG};
 use std::{fmt, num::ParseIntError, str::FromStr};
 
 /// H.264 specific parameter which specifies the H.264 encoding profile and level
@@ -6,15 +6,15 @@ use std::{fmt, num::ParseIntError, str::FromStr};
 /// Represented in fmtp as 3 hex bytes e.g. (42E020)
 #[derive(Debug, Clone, Copy)]
 pub struct ProfileLevelId {
-    pub profile: Profile,
-    pub level: Level,
+    pub profile: H264Profile,
+    pub level: H264Level,
 }
 
 impl Default for ProfileLevelId {
     fn default() -> Self {
         Self {
-            profile: Profile::Baseline,
-            level: Level::Level_3_1,
+            profile: H264Profile::Baseline,
+            level: H264Level::Level_3_1,
         }
     }
 }
@@ -36,32 +36,32 @@ impl ProfileLevelId {
         #[rustfmt::skip]
         let table = const { [
             // Constrained baseline
-            (0x42, const { bitpattern("?1??_0000") }, Profile::ConstrainedBaseline),
-            (0x4D, const { bitpattern("1???_0000") }, Profile::ConstrainedBaseline),
-            (0x58, const { bitpattern("11??_0000") }, Profile::ConstrainedBaseline),
+            (0x42, const { bitpattern("?1??_0000") }, H264Profile::ConstrainedBaseline),
+            (0x4D, const { bitpattern("1???_0000") }, H264Profile::ConstrainedBaseline),
+            (0x58, const { bitpattern("11??_0000") }, H264Profile::ConstrainedBaseline),
             // Baseline
-            (0x42, const { bitpattern("?0??_0000") }, Profile::Baseline),
-            (0x58, const { bitpattern("10??_0000") }, Profile::Baseline),
+            (0x42, const { bitpattern("?0??_0000") }, H264Profile::Baseline),
+            (0x58, const { bitpattern("10??_0000") }, H264Profile::Baseline),
             // Main
-            (0x4D, const { bitpattern("0?0?_0000") }, Profile::Main),
+            (0x4D, const { bitpattern("0?0?_0000") }, H264Profile::Main),
             // Extended
-            (0x58, const { bitpattern("00??_0000") }, Profile::Extended),
+            (0x58, const { bitpattern("00??_0000") }, H264Profile::Extended),
             // High
-            (0x64, const { bitpattern("0000_0000") }, Profile::High),
+            (0x64, const { bitpattern("0000_0000") }, H264Profile::High),
             // High10
-            (0x6E, const { bitpattern("0000_0000") }, Profile::High10),
+            (0x6E, const { bitpattern("0000_0000") }, H264Profile::High10),
             // High422
-            (0x7A, const { bitpattern("0000_0000") }, Profile::High422),
+            (0x7A, const { bitpattern("0000_0000") }, H264Profile::High422),
             // High444Predictive
-            (0xF4, const { bitpattern("0000_0000") }, Profile::High444Predictive),
+            (0xF4, const { bitpattern("0000_0000") }, H264Profile::High444Predictive),
             // High10 Intra
-            (0x6E, const { bitpattern("0001_0000") }, Profile::High10Intra),
+            (0x6E, const { bitpattern("0001_0000") }, H264Profile::High10Intra),
             // High422 Intra
-            (0x7A, const { bitpattern("0001_0000") }, Profile::High422Intra),
+            (0x7A, const { bitpattern("0001_0000") }, H264Profile::High422Intra),
             // High444 Intra
-            (0xF4, const { bitpattern("0001_0000") }, Profile::High444Intra),
+            (0xF4, const { bitpattern("0001_0000") }, H264Profile::High444Intra),
             // CAVLC444 Intra
-            (0x2C, const { bitpattern("0001_0000") }, Profile::CAVLC444Intra),
+            (0x2C, const { bitpattern("0001_0000") }, H264Profile::CAVLC444Intra),
         ] };
 
         let profile = table
@@ -76,31 +76,31 @@ impl ProfileLevelId {
             .ok_or(ProfileLevelIdFromBytesError::UnknownProfileIdc(profile_idc))?;
 
         let level = match level_idc {
-            10 => Level::Level_1_0,
+            10 => H264Level::Level_1_0,
             11 => {
                 if profile_iop & CONSTRAINT_SET3_FLAG != 0 {
-                    Level::Level_1_B
+                    H264Level::Level_1_B
                 } else {
-                    Level::Level_1_1
+                    H264Level::Level_1_1
                 }
             }
-            12 => Level::Level_1_2,
-            13 => Level::Level_1_3,
-            20 => Level::Level_2_0,
-            21 => Level::Level_2_1,
-            22 => Level::Level_2_2,
-            30 => Level::Level_3_0,
-            31 => Level::Level_3_1,
-            32 => Level::Level_3_2,
-            40 => Level::Level_4_0,
-            41 => Level::Level_4_1,
-            42 => Level::Level_4_2,
-            50 => Level::Level_5_0,
-            51 => Level::Level_5_1,
-            52 => Level::Level_5_2,
-            60 => Level::Level_6_0,
-            61 => Level::Level_6_1,
-            62 => Level::Level_6_2,
+            12 => H264Level::Level_1_2,
+            13 => H264Level::Level_1_3,
+            20 => H264Level::Level_2_0,
+            21 => H264Level::Level_2_1,
+            22 => H264Level::Level_2_2,
+            30 => H264Level::Level_3_0,
+            31 => H264Level::Level_3_1,
+            32 => H264Level::Level_3_2,
+            40 => H264Level::Level_4_0,
+            41 => H264Level::Level_4_1,
+            42 => H264Level::Level_4_2,
+            50 => H264Level::Level_5_0,
+            51 => H264Level::Level_5_1,
+            52 => H264Level::Level_5_2,
+            60 => H264Level::Level_6_0,
+            61 => H264Level::Level_6_1,
+            62 => H264Level::Level_6_2,
             _ => return Err(ProfileLevelIdFromBytesError::UnknownLevelIdc(level_idc)),
         };
 
@@ -139,7 +139,7 @@ impl fmt::Display for ProfileLevelId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut profile_iop = self.profile.profile_iop();
 
-        if matches!(self.level, Level::Level_1_B) {
+        if matches!(self.level, H264Level::Level_1_B) {
             profile_iop |= CONSTRAINT_SET3_FLAG;
         }
 

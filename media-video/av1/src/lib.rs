@@ -2,18 +2,18 @@
 
 pub mod encoder;
 
-mod payload;
+mod rtp;
 
-pub use payload::{AV1DePayloader, AV1Payloader};
+pub use rtp::{AV1DePayloader, AV1Payloader};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AV1Profile {
     Main,
     High,
     Professional,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[allow(non_camel_case_types)]
 pub enum AV1Level {
     Level_2_0,
