@@ -160,7 +160,7 @@ impl VulkanEncCodec for AV1 {
     type StdReferenceInfo = vk::native::StdVideoEncodeAV1ReferenceInfo;
 
     fn slot_info_from_std(std_reference_info: &Self::StdReferenceInfo) -> Self::DpbSlotInfo<'_> {
-        vk::VideoEncodeAV1DpbSlotInfoKHR::default().std_reference_info(&std_reference_info)
+        vk::VideoEncodeAV1DpbSlotInfoKHR::default().std_reference_info(std_reference_info)
     }
 
     type PictureInfo<'a> = vk::VideoEncodeAV1PictureInfoKHR<'a>;

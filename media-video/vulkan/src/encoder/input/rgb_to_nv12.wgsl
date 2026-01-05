@@ -32,10 +32,7 @@ fn write_uv(
 }
 
 fn to_logical(physical_pos: vec2<u32>) -> vec2<f32> {
-    return vec2<f32>(
-        f32(physical_pos.x) * scale.x,
-        f32(physical_pos.y) * scale.y,
-    );
+    return (vec2<f32>(physical_pos) + 0.5) * scale;
 }
 
 fn sample_input(pos: vec2<f32>) -> vec4<f32> {
