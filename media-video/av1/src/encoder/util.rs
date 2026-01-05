@@ -26,7 +26,10 @@ impl AV1EncoderState {
     pub(crate) fn next(&mut self) -> FrameEncodeInfo {
         let mut is_key = false;
 
-        if self.keyframe_index % self.frame_pattern.keyframe_interval == 0 {
+        if self
+            .keyframe_index
+            .is_multiple_of(self.frame_pattern.keyframe_interval)
+        {
             self.keyframe_index = 0;
             is_key = true;
         }

@@ -3,7 +3,7 @@ use capture::wayland::{
     PipewireOptions, PixelFormat, RgbaSwizzle, ScreenCaptureOptions, SourceType,
 };
 use ezk_h264::{
-    Level, Profile,
+    H264Level, H264Profile,
     encoder::{
         backends::vulkan::{
             VkH264Encoder, VulkanH264EncoderConfig, VulkanH264RateControlConfig,
@@ -30,7 +30,7 @@ async fn vk_encode_dma() {
 }
 
 async fn vk_encode_dma_inner() {
-    env_logger::init();
+    env_logger::builder().is_test(true).init();
 
     let entry = unsafe { vulkan::ash::Entry::load().unwrap() };
     let instance = vulkan::Instance::create(entry, &[]).unwrap();
@@ -46,7 +46,7 @@ async fn vk_encode_dma_inner() {
     let width = 2560;
     let height = 1440;
 
-    let capabilities = VkH264Encoder::capabilities(physical_device, Profile::Baseline).unwrap();
+    let capabilities = VkH264Encoder::capabilities(physical_device, H264Profile::Baseline).unwrap();
 
     let device = vulkan::Device::create(physical_device, &[]).unwrap();
 
@@ -184,10 +184,7 @@ async fn vk_encode_dma_inner() {
         VulkanH264EncoderConfig {
             encoder: VulkanEncoderConfig {
                 max_encode_resolution: vk::Extent2D { width, height },
-                initial_encode_resolution: vk::Extent2D {
-                    width: width,
-                    height: height,
-                },
+                initial_encode_resolution: vk::Extent2D { width, height },
                 max_input_resolution: vk::Extent2D { width, height },
                 input_as_vulkan_image: true,
                 input_pixel_format: InputPixelFormat::RGBA {
@@ -197,8 +194,8 @@ async fn vk_encode_dma_inner() {
                 content_hints: vk::VideoEncodeContentFlagsKHR::DEFAULT,
                 tuning_mode: vk::VideoEncodeTuningModeKHR::DEFAULT,
             },
-            profile: Profile::Main,
-            level: Level::Level_6_0,
+            profile: H264Profile::Main,
+            level: H264Level::Level_6_0,
             frame_pattern: FramePattern {
                 intra_idr_period: u16::MAX,
                 intra_period: u16::MAX,
@@ -253,7 +250,7 @@ async fn vk_encode_memory() {
 }
 
 async fn vk_encode_memory_inner() {
-    env_logger::init();
+    env_logger::builder().is_test(true).init();
 
     let entry = unsafe { vulkan::ash::Entry::load().unwrap() };
     let instance = vulkan::Instance::create(entry, &[]).unwrap();
@@ -309,7 +306,7 @@ async fn vk_encode_memory_inner() {
 
     println!("{width}x{height}");
 
-    let capabilities = VkH264Encoder::capabilities(physical_device, Profile::Baseline).unwrap();
+    let capabilities = VkH264Encoder::capabilities(physical_device, H264Profile::Baseline).unwrap();
     let device = vulkan::Device::create(physical_device, &[]).unwrap();
 
     let mut encoder = VkH264Encoder::new(
@@ -334,8 +331,8 @@ async fn vk_encode_memory_inner() {
                 content_hints: vk::VideoEncodeContentFlagsKHR::DEFAULT,
                 tuning_mode: vk::VideoEncodeTuningModeKHR::DEFAULT,
             },
-            profile: Profile::Baseline,
-            level: Level::Level_6_2,
+            profile: H264Profile::Baseline,
+            level: H264Level::Level_6_2,
             frame_pattern: FramePattern {
                 intra_idr_period: 60,
                 intra_period: 30,

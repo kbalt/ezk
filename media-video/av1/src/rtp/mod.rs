@@ -7,11 +7,11 @@ mod leb128;
 
 const OBU_SEQUENCE_HEADER: u8 = 1;
 const OBU_TEMPORAL_DELIMITER: u8 = 2;
-const OBU_FRAME_HEADER: u8 = 3;
-const OBU_TILE_GROUP: u8 = 4;
-const OBU_METADATA: u8 = 5;
-const OBU_FRAME: u8 = 6;
-const OBU_REDUNDANT_FRAME_HEADER: u8 = 7;
+// const OBU_FRAME_HEADER: u8 = 3;
+// const OBU_TILE_GROUP: u8 = 4;
+// const OBU_METADATA: u8 = 5;
+// const OBU_FRAME: u8 = 6;
+// const OBU_REDUNDANT_FRAME_HEADER: u8 = 7;
 const OBU_TILE_LIST: u8 = 8;
 
 // Reference https://aomediacodec.github.io/av1-rtp-spec/v1.0.0.html
@@ -191,12 +191,20 @@ impl AV1Payloader {
     }
 }
 
+impl Default for AV1Payloader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AV1DePayloadError {
     #[error("Unexpected end of packet")]
     UnexpectedEndOfPacket,
     #[error("Got 0 length for OBU packet")]
     ZeroLengthOBU,
+    #[error("Received OBU exceeded maximum allowed size")]
+    FragmentedObuTooLarge,
 }
 
 pub struct AV1DePayloader {
@@ -225,19 +233,22 @@ impl AV1DePayloader {
 
         let mut continues_fragment = (aggregation_header & 1 << 7) != 0;
         let contains_fragment = (aggregation_header & 1 << 6) != 0;
-        let remaining_obus = (aggregation_header >> 4) & 0x3;
-        let mut remaining_obus = (remaining_obus > 0).then_some(remaining_obus);
+        let num_remaining_obus = (aggregation_header >> 4) & 0x3;
+        let mut num_remaining_obus = (num_remaining_obus > 0).then_some(num_remaining_obus);
 
         while !packet.is_empty() {
-            let has_length = if let Some(remaining_obu) = &mut remaining_obus {
+            // Check if the OBU has a length prefix
+            // If there's a obu count in the header then the last OBU has no length prefix
+            let has_length = if let Some(remaining_obu) = &mut num_remaining_obus {
                 *remaining_obu -= 1;
                 *remaining_obu > 0
             } else {
+                // No count specified, always a length prefix
                 true
             };
 
             let (consumed, len) = if has_length {
-                leb128::read_leb128(&packet).ok_or(AV1DePayloadError::UnexpectedEndOfPacket)?
+                leb128::read_leb128(packet).ok_or(AV1DePayloadError::UnexpectedEndOfPacket)?
             } else {
                 (0, packet.len() as u32)
             };
@@ -254,7 +265,15 @@ impl AV1DePayloader {
 
             if continues_fragment {
                 continues_fragment = false;
+
+                if self.current_obu.is_empty() {
+                    // Continued fragment but there isn't anything in current_obu, probably packet loss, ignore it
+                    continue;
+                }
+
                 self.current_obu.extend_from_slice(obu_bytes);
+
+                // When contains_fragment is set for the packet is set and `packet` contains no more bytes to consume, consider this fragmented OBU as complete
                 if !contains_fragment && packet.is_empty() {
                     obus.push(take(&mut self.current_obu));
                 }
@@ -263,12 +282,27 @@ impl AV1DePayloader {
             } else {
                 obus.push(obu_bytes.to_vec());
             }
+
+            // Cap the maximum OBU size somewhere to avoid allocating infinite memory
+            if self.current_obu.len() > 100_000_000 {
+                self.current_obu = Vec::new();
+                return Err(AV1DePayloadError::FragmentedObuTooLarge);
+            }
         }
 
         Ok(obus)
     }
 
+    /// Reset the payload to the initial state
+    ///
+    /// Must be called when encountering packet loss to avoid aggregating broken OBUs
     pub fn reset(&mut self) {
         self.current_obu.clear();
+    }
+}
+
+impl Default for AV1DePayloader {
+    fn default() -> Self {
+        Self::new()
     }
 }

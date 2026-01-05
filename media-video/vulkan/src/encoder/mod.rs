@@ -500,8 +500,8 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
         Ok(())
     }
 
-    unsafe fn record_encode_queue<'a>(
-        &'a mut self,
+    unsafe fn record_encode_queue(
+        &mut self,
         encode_slot: &VulkanEncodeSlot,
         recording: &RecordingCommandBuffer<'_>,
         reference_indices: SmallVec<[usize; 8]>,

@@ -12,7 +12,7 @@ use ezk_av1::{
         },
     },
 };
-use std::{fs::OpenOptions, io::Write, time::Instant, u32};
+use std::{fs::OpenOptions, io::Write, time::Instant};
 use tokio::sync::mpsc;
 use vulkan::{
     DrmPlane, Semaphore,
@@ -29,7 +29,7 @@ async fn vk_encode_dma() {
 }
 
 async fn vk_encode_dma_inner() {
-    env_logger::init();
+    env_logger::builder().is_test(true).init();
 
     let entry = unsafe { vulkan::ash::Entry::load().unwrap() };
     let instance = vulkan::Instance::create(entry, &[]).unwrap();
@@ -182,10 +182,13 @@ async fn vk_encode_dma_inner() {
         &capabilities,
         VulkanAV1EncoderConfig {
             encoder: VulkanEncoderConfig {
-                max_encode_resolution: vk::Extent2D { width, height },
+                max_encode_resolution: vk::Extent2D {
+                    width: 608,
+                    height: 1080,
+                },
                 initial_encode_resolution: vk::Extent2D {
-                    width: width / 10,
-                    height: height / 10,
+                    width: 608,
+                    height: 1080,
                 },
                 max_input_resolution: vk::Extent2D { width, height },
                 input_as_vulkan_image: true,
@@ -203,8 +206,8 @@ async fn vk_encode_dma_inner() {
             },
             rate_control: VulkanAV1RateControlConfig {
                 mode: VulkanAV1RateControlMode::VariableBitrate {
-                    average_bitrate: 5_000_000,
-                    max_bitrate: 6_000_000,
+                    average_bitrate: 10_000_000,
+                    max_bitrate: 12_000_000,
                 },
                 framerate: Some(AV1Framerate::from_fps(240)),
                 min_q_index: None, //Some(0),
@@ -227,7 +230,7 @@ async fn vk_encode_dma_inner() {
 
     let mut depayloader = AV1DePayloader::new();
 
-    for _ in 0..500 {
+    for _ in 0..200 {
         let input = rx.recv().await.unwrap();
 
         let start = Instant::now();
@@ -242,10 +245,11 @@ async fn vk_encode_dma_inner() {
 
             ivf::write_ivf_frame(&mut file, (ts - epoch).as_millis() as _, &buf);
 
-            let packets = AV1Payloader::new().payload(buf.into(), 1000);
+            let packets = AV1Payloader::new().payload(buf.clone().into(), 1000);
 
             for packet in packets {
                 for depayloaded in depayloader.depayload(&packet).unwrap() {
+                    assert!(depayloaded.len() == buf.len());
                     println!("Depayloaded OBU: {}", depayloaded.len());
                 }
             }
@@ -256,9 +260,10 @@ async fn vk_encode_dma_inner() {
         println!("buf: {}", buf.len());
 
         ivf::write_ivf_frame(&mut file, (ts - epoch).as_millis() as _, &buf);
-        let packets = AV1Payloader::new().payload(buf.into(), 1000);
+        let packets = AV1Payloader::new().payload(buf.clone().into(), 1000);
         for packet in packets {
             for depayloaded in depayloader.depayload(&packet).unwrap() {
+                assert!(depayloaded.len() == buf.len());
                 println!("Depayloaded OBU: {}", depayloaded.len());
             }
         }

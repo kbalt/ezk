@@ -1,5 +1,5 @@
 use crate::{
-    Level, Profile,
+    H264Level, H264Profile,
     encoder::{
         config::{FramePattern, Framerate, H264FrameType, SliceMode},
         util::{FrameEncodeInfo, H264EncoderState},
@@ -34,8 +34,8 @@ use vulkan::{
 #[derive(Debug, Clone, Copy)]
 pub struct VulkanH264EncoderConfig {
     pub encoder: VulkanEncoderConfig,
-    pub profile: Profile,
-    pub level: Level,
+    pub profile: H264Profile,
+    pub level: H264Level,
     pub frame_pattern: FramePattern,
     pub rate_control: VulkanH264RateControlConfig,
     pub slice_mode: SliceMode,
@@ -91,7 +91,7 @@ struct DpbSlot {
 impl VkH264Encoder {
     pub fn capabilities(
         physical_device: &PhysicalDevice,
-        profile: Profile,
+        profile: H264Profile,
     ) -> Result<VulkanEncoderCapabilities<H264>, VulkanEncoderCapabilitiesError> {
         let h264_profile_info = vk::VideoEncodeH264ProfileInfoKHR::default()
             .std_profile_idc(profile.profile_idc().into());
@@ -598,29 +598,29 @@ fn debug_list(list: &[u8]) -> String {
     )
 }
 
-fn map_level(profile: Level) -> vk::native::StdVideoH264LevelIdc {
+fn map_level(profile: H264Level) -> vk::native::StdVideoH264LevelIdc {
     match profile {
-        Level::Level_1_0 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_1_0,
+        H264Level::Level_1_0 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_1_0,
         // TODO: not super excited about silently discarding the B here, just hoping noone is actually using this
-        Level::Level_1_B => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_1_0,
-        Level::Level_1_1 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_1_1,
-        Level::Level_1_2 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_1_2,
-        Level::Level_1_3 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_1_3,
-        Level::Level_2_0 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_2_0,
-        Level::Level_2_1 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_2_1,
-        Level::Level_2_2 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_2_2,
-        Level::Level_3_0 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_3_0,
-        Level::Level_3_1 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_3_1,
-        Level::Level_3_2 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_3_2,
-        Level::Level_4_0 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_4_0,
-        Level::Level_4_1 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_4_1,
-        Level::Level_4_2 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_4_2,
-        Level::Level_5_0 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_5_0,
-        Level::Level_5_1 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_5_1,
-        Level::Level_5_2 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_5_2,
-        Level::Level_6_0 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_6_0,
-        Level::Level_6_1 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_6_1,
-        Level::Level_6_2 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_6_2,
+        H264Level::Level_1_B => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_1_0,
+        H264Level::Level_1_1 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_1_1,
+        H264Level::Level_1_2 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_1_2,
+        H264Level::Level_1_3 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_1_3,
+        H264Level::Level_2_0 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_2_0,
+        H264Level::Level_2_1 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_2_1,
+        H264Level::Level_2_2 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_2_2,
+        H264Level::Level_3_0 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_3_0,
+        H264Level::Level_3_1 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_3_1,
+        H264Level::Level_3_2 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_3_2,
+        H264Level::Level_4_0 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_4_0,
+        H264Level::Level_4_1 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_4_1,
+        H264Level::Level_4_2 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_4_2,
+        H264Level::Level_5_0 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_5_0,
+        H264Level::Level_5_1 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_5_1,
+        H264Level::Level_5_2 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_5_2,
+        H264Level::Level_6_0 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_6_0,
+        H264Level::Level_6_1 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_6_1,
+        H264Level::Level_6_2 => vk::native::StdVideoH264LevelIdc_STD_VIDEO_H264_LEVEL_IDC_6_2,
     }
 }
 
