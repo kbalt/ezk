@@ -1,7 +1,7 @@
 //! Utility functions for openh264
 
 use crate::{
-    H264FmtpOptions, H264PacketizationMode, Level, Profile,
+    H264FmtpOptions, H264Level, H264PacketizationMode, H264Profile,
     encoder::config::{Framerate, H264EncoderConfig, H264RateControlConfig},
     profile_level_id::ProfileLevelId,
 };
@@ -152,8 +152,8 @@ impl OpenH264Encoder {
     }
 }
 
-fn map_profile(profile: Profile) -> openh264::encoder::Profile {
-    use Profile::*;
+fn map_profile(profile: H264Profile) -> openh264::encoder::Profile {
+    use H264Profile::*;
 
     match profile {
         ConstrainedBaseline | Baseline => openh264::encoder::Profile::Baseline,
@@ -167,29 +167,29 @@ fn map_profile(profile: Profile) -> openh264::encoder::Profile {
     }
 }
 
-fn map_level(level: Level) -> openh264::encoder::Level {
+fn map_level(level: H264Level) -> openh264::encoder::Level {
     match level {
-        Level::Level_1_0 => openh264::encoder::Level::Level_1_0,
-        Level::Level_1_B => openh264::encoder::Level::Level_1_B,
-        Level::Level_1_1 => openh264::encoder::Level::Level_1_1,
-        Level::Level_1_2 => openh264::encoder::Level::Level_1_2,
-        Level::Level_1_3 => openh264::encoder::Level::Level_1_3,
-        Level::Level_2_0 => openh264::encoder::Level::Level_2_0,
-        Level::Level_2_1 => openh264::encoder::Level::Level_2_1,
-        Level::Level_2_2 => openh264::encoder::Level::Level_2_2,
-        Level::Level_3_0 => openh264::encoder::Level::Level_3_0,
-        Level::Level_3_1 => openh264::encoder::Level::Level_3_1,
-        Level::Level_3_2 => openh264::encoder::Level::Level_3_2,
-        Level::Level_4_0 => openh264::encoder::Level::Level_4_0,
-        Level::Level_4_1 => openh264::encoder::Level::Level_4_1,
-        Level::Level_4_2 => openh264::encoder::Level::Level_4_2,
-        Level::Level_5_0 => openh264::encoder::Level::Level_5_0,
-        Level::Level_5_1 => openh264::encoder::Level::Level_5_1,
-        Level::Level_5_2 => openh264::encoder::Level::Level_5_2,
+        H264Level::Level_1_0 => openh264::encoder::Level::Level_1_0,
+        H264Level::Level_1_B => openh264::encoder::Level::Level_1_B,
+        H264Level::Level_1_1 => openh264::encoder::Level::Level_1_1,
+        H264Level::Level_1_2 => openh264::encoder::Level::Level_1_2,
+        H264Level::Level_1_3 => openh264::encoder::Level::Level_1_3,
+        H264Level::Level_2_0 => openh264::encoder::Level::Level_2_0,
+        H264Level::Level_2_1 => openh264::encoder::Level::Level_2_1,
+        H264Level::Level_2_2 => openh264::encoder::Level::Level_2_2,
+        H264Level::Level_3_0 => openh264::encoder::Level::Level_3_0,
+        H264Level::Level_3_1 => openh264::encoder::Level::Level_3_1,
+        H264Level::Level_3_2 => openh264::encoder::Level::Level_3_2,
+        H264Level::Level_4_0 => openh264::encoder::Level::Level_4_0,
+        H264Level::Level_4_1 => openh264::encoder::Level::Level_4_1,
+        H264Level::Level_4_2 => openh264::encoder::Level::Level_4_2,
+        H264Level::Level_5_0 => openh264::encoder::Level::Level_5_0,
+        H264Level::Level_5_1 => openh264::encoder::Level::Level_5_1,
+        H264Level::Level_5_2 => openh264::encoder::Level::Level_5_2,
         // Level 6+ is not supported by openh264 - use 5.2
-        Level::Level_6_0 => openh264::encoder::Level::Level_5_2,
-        Level::Level_6_1 => openh264::encoder::Level::Level_5_2,
-        Level::Level_6_2 => openh264::encoder::Level::Level_5_2,
+        H264Level::Level_6_0 => openh264::encoder::Level::Level_5_2,
+        H264Level::Level_6_1 => openh264::encoder::Level::Level_5_2,
+        H264Level::Level_6_2 => openh264::encoder::Level::Level_5_2,
     }
 }
 

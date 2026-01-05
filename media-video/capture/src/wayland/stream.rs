@@ -1,6 +1,6 @@
 use crate::wayland::{
-    CapturedDmaBuffer, CapturedDmaBufferSync, CapturedDmaRegion, CapturedFrame,
-    CapturedFrameBuffer, CapturedMemBuffer, DmaPlane, MemPlane, PipewireOptions, PixelFormat,
+    CapturedDmaBuffer, CapturedDmaBufferSync, CapturedFrame, CapturedFrameBuffer,
+    CapturedFrameCrop, CapturedMemBuffer, DmaPlane, MemPlane, PipewireOptions, PixelFormat,
     RgbaSwizzle,
 };
 use pipewire::{
@@ -27,7 +27,7 @@ use std::{
     cell::RefCell,
     io::Cursor,
     os::fd::{BorrowedFd, OwnedFd, RawFd},
-    ptr::{null, null_mut},
+    ptr::null,
     rc::Rc,
     slice::from_raw_parts,
 };
@@ -79,8 +79,9 @@ impl UserStreamState {
             }
         } else {
             let mem_buffer_params = serialize_object(mem_buffer_params());
+            let crop_region_params = serialize_object(crop_region_param());
 
-            let mut update_params = [pod(&mem_buffer_params)];
+            let mut update_params = [pod(&mem_buffer_params), pod(&crop_region_params)];
 
             if let Err(e) = stream.update_params(&mut update_params) {
                 log::error!("Failed to update stream params: {e}");
@@ -147,24 +148,7 @@ impl UserStreamState {
     }
 
     fn handle_process(&mut self, stream: &Stream) {
-        let mut pw_buffer: *mut pipewire::sys::pw_buffer = null_mut();
-
-        // Get the newest buffer from the queue
-        loop {
-            let tmp = unsafe { stream.dequeue_raw_buffer() };
-
-            if tmp.is_null() {
-                break;
-            }
-
-            if !pw_buffer.is_null() {
-                unsafe {
-                    stream.queue_raw_buffer(pw_buffer);
-                }
-            }
-
-            pw_buffer = tmp;
-        }
+        let pw_buffer: *mut pipewire::sys::pw_buffer = unsafe { stream.dequeue_raw_buffer() };
 
         let Some(buffer) = (unsafe { pw_buffer.as_ref() }) else {
             return;
@@ -207,8 +191,29 @@ impl UserStreamState {
                 return;
             }
 
-            self.handle_dma_data(metas, datas, dma_data)
+            Some(self.handle_dma_data(metas, datas, dma_data))
         };
+
+        let Some(mut frame) = frame else { return };
+
+        frame.crop = metas.iter().find_map(|meta| {
+            if meta.type_ == spa::sys::SPA_META_VideoCrop {
+                let meta = unsafe {
+                    meta.data
+                        .cast::<spa::sys::spa_meta_region>()
+                        .read_unaligned()
+                };
+
+                Some(CapturedFrameCrop {
+                    x: meta.region.position.x,
+                    y: meta.region.position.y,
+                    width: meta.region.size.width,
+                    height: meta.region.size.height,
+                })
+            } else {
+                None
+            }
+        });
 
         if !(self.on_frame)(frame) {
             // on_frame returned false, exit the main loop
@@ -272,25 +277,6 @@ impl UserStreamState {
             _ => unreachable!(),
         };
 
-        let region = metas.iter().find_map(|meta| {
-            if meta.type_ == spa::sys::SPA_META_VideoCrop {
-                let meta = unsafe {
-                    meta.data
-                        .cast::<spa::sys::spa_meta_region>()
-                        .read_unaligned()
-                };
-
-                Some(CapturedDmaRegion {
-                    x: meta.region.position.x,
-                    y: meta.region.position.y,
-                    width: meta.region.size.width,
-                    height: meta.region.size.height,
-                })
-            } else {
-                None
-            }
-        });
-
         let sync_timeline = metas
             .iter()
             .find(|m| m.type_ == spa::sys::SPA_META_SyncTimeline);
@@ -328,9 +314,9 @@ impl UserStreamState {
             buffer: CapturedFrameBuffer::Dma(CapturedDmaBuffer {
                 modifier: self.format.modifier(),
                 planes,
-                region,
                 sync,
             }),
+            crop: None,
         }
     }
 
@@ -339,7 +325,7 @@ impl UserStreamState {
         width: usize,
         height: usize,
         data: &SmallVec<[&spa::sys::spa_data; 3]>,
-    ) -> CapturedFrame {
+    ) -> Option<CapturedFrame> {
         match self.format.format() {
             VideoFormat::NV12 => {
                 let mut memory = vec![0u8; (width * height * 12).div_ceil(8)];
@@ -352,7 +338,7 @@ impl UserStreamState {
                 let width = width as u32;
                 let height = height as u32;
 
-                CapturedFrame {
+                Some(CapturedFrame {
                     width,
                     height,
                     format: PixelFormat::NV12,
@@ -369,7 +355,8 @@ impl UserStreamState {
                             }
                         ],
                     }),
-                }
+                    crop: None,
+                })
             }
             VideoFormat::I420 => {
                 let mut memory = vec![0u8; (width * height * 12).div_ceil(8)];
@@ -387,7 +374,7 @@ impl UserStreamState {
                 let u_offset = width * height;
                 let v_offset = u_offset + (width * height) / 4;
 
-                CapturedFrame {
+                Some(CapturedFrame {
                     width,
                     height,
                     format: PixelFormat::I420,
@@ -408,7 +395,8 @@ impl UserStreamState {
                             }
                         ],
                     }),
-                }
+                    crop: None,
+                })
             }
             VideoFormat::RGBA
             | VideoFormat::RGBx
@@ -429,12 +417,12 @@ impl UserStreamState {
                 let mut memory = vec![0u8; width * height * 4];
 
                 // Single plane
-                copy_plane(data[0], &mut memory, height, width * 4);
+                copy_plane(data[0], &mut memory, height, width * 4)?;
 
                 let width = width as u32;
                 let height = height as u32;
 
-                CapturedFrame {
+                Some(CapturedFrame {
                     width,
                     height,
                     format: PixelFormat::RGBA(swizzle),
@@ -445,7 +433,8 @@ impl UserStreamState {
                             stride: width as usize * 4,
                         }],
                     }),
-                }
+                    crop: None,
+                })
             }
             _ => unreachable!("Received unexpected video format"),
         }
@@ -457,7 +446,7 @@ fn copy_plane(
     buffer: &mut [u8],
     height: usize,
     buffer_stride: usize,
-) {
+) -> Option<()> {
     let data_slice = unsafe {
         from_raw_parts(
             spa_data.data.cast::<u8>(),
@@ -469,6 +458,11 @@ fn copy_plane(
     };
 
     let chunk = unsafe { spa_data.chunk.read_unaligned() };
+
+    if chunk.size == 0 {
+        return None;
+    }
+
     let chunk_offset = (chunk.offset % spa_data.maxsize) as usize;
     let chunk_size = chunk.size as usize;
     let chunk_stride = chunk.stride as usize;
@@ -488,6 +482,8 @@ fn copy_plane(
             dst_slice.copy_from_slice(src_slice);
         }
     }
+
+    Some(())
 }
 
 pub(super) enum Command {
@@ -542,16 +538,13 @@ pub(super) fn start(
             }
         }
         Command::RemoveModifier(modifier) => {
-            println!("Remove mod: {modifier}  1");
             let mut user_data = data.user_data.borrow_mut();
 
             if let Some(dma_usage) = &mut user_data.options.dma_usage {
-                println!("Remove mod: {modifier}  2");
                 let prev_modifier_len = dma_usage.supported_modifier.len();
                 dma_usage.supported_modifier.retain(|m| *m != modifier);
 
                 if prev_modifier_len != dma_usage.supported_modifier.len() {
-                    println!("Remove mod: {modifier}  3");
                     if let Err(e) = data.stream.set_active(false) {
                         log::error!("Failed to pause stream to remove DRM modifier: {e}");
                     }

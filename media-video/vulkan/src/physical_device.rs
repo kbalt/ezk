@@ -186,6 +186,13 @@ impl PhysicalDevice {
             })
             .context("Failed to find adapter when enumerating vulkan adapters")
     }
+
+    pub fn name(&self) -> String {
+        let mut device_name = self.properties().device_name;
+        device_name[vk::MAX_PHYSICAL_DEVICE_NAME_SIZE - 1] = 0; // you never know
+        let device_name = unsafe { CStr::from_ptr(device_name.as_ptr()) };
+        device_name.to_string_lossy().into_owned()
+    }
 }
 
 impl fmt::Debug for PhysicalDevice {

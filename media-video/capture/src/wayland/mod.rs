@@ -121,6 +121,7 @@ pub struct CapturedFrame {
     pub height: u32,
     pub format: PixelFormat,
     pub buffer: CapturedFrameBuffer,
+    pub crop: Option<CapturedFrameCrop>,
 }
 
 /// Captured buffer type, contents are defined by [`CapturedFrameFormat`]
@@ -154,7 +155,6 @@ pub struct MemPlane {
 pub struct CapturedDmaBuffer {
     pub modifier: u64,
     pub planes: SmallVec<[DmaPlane; 4]>,
-    pub region: Option<CapturedDmaRegion>,
     pub sync: Option<CapturedDmaBufferSync>,
 }
 
@@ -165,14 +165,6 @@ pub struct DmaPlane {
     pub stride: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct CapturedDmaRegion {
-    pub x: i32,
-    pub y: i32,
-    pub width: u32,
-    pub height: u32,
-}
-
 #[derive(Debug)]
 pub struct CapturedDmaBufferSync {
     pub acquire_point: u64,
@@ -180,6 +172,14 @@ pub struct CapturedDmaBufferSync {
 
     pub acquire_fd: OwnedFd,
     pub release_fd: OwnedFd,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CapturedFrameCrop {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Debug, thiserror::Error)]

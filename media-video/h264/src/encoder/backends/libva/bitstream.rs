@@ -1,7 +1,7 @@
 use bitstream_io::{BigEndian, BitWrite, BitWriter};
 use libva::ffi;
 
-use crate::{Profile, encoder::backends::libva::VaH264EncoderConfig};
+use crate::{H264Profile, encoder::backends::libva::VaH264EncoderConfig};
 
 const SLICE_TYPE_P: u8 = 0;
 const SLICE_TYPE_B: u8 = 1;
@@ -96,11 +96,11 @@ pub(super) fn write_sps_rbsp(
 
     if matches!(
         encode_config.profile,
-        Profile::High
-            | Profile::High10
-            | Profile::High422
-            | Profile::High444Intra
-            | Profile::High444Predictive
+        H264Profile::High
+            | H264Profile::High10
+            | H264Profile::High422
+            | H264Profile::High444Intra
+            | H264Profile::High444Predictive
     ) {
         writer.write_ue(1); // TODO: YUV420 - THIS IS WRONG for every non-yuv420 entrypoint
         // TODO: if chroma_format_idc == 3 put separate_colour_plane_flag

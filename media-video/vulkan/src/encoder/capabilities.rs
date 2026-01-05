@@ -21,15 +21,16 @@ pub enum VulkanEncoderCapabilitiesError {
     VideoCapabilities(VulkanError),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct VulkanEncoderCapabilities<C: VulkanEncCodec> {
+    pub physical_device: PhysicalDevice,
     pub video: vk::VideoCapabilitiesKHR<'static>,
     pub encode: vk::VideoEncodeCapabilitiesKHR<'static>,
     pub codec: C::Capabilities<'static>,
 }
 
 impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
-    pub fn new<'a>(
+    pub fn new(
         physical_device: &PhysicalDevice,
         codec_profile_info: C::ProfileInfo<'_>,
     ) -> Result<VulkanEncoderCapabilities<C>, VulkanEncoderCapabilitiesError> {
@@ -47,6 +48,7 @@ impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
             .map_err(|e| VulkanEncoderCapabilitiesError::VideoCapabilities(e.into()))?;
 
         Ok(VulkanEncoderCapabilities {
+            physical_device: physical_device.clone(),
             video,
             encode,
             codec,

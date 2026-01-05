@@ -55,7 +55,7 @@ impl Instance {
             inner: Arc::new(Inner {
                 _entry: entry,
                 _stable_entry: Some(stable_entry),
-                instance: instance,
+                instance,
                 video_queue_instance,
                 wgpu: Some(wgpu),
                 debug_messenger: None,

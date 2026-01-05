@@ -1,5 +1,5 @@
 use crate::{
-    Level, Profile,
+    H264Level, H264Profile,
     encoder::{
         config::{FramePattern, H264FrameType, SliceMode},
         util::{FrameEncodeInfo, H264EncoderState},
@@ -26,8 +26,8 @@ mod bitstream;
 #[derive(Debug, Clone, Copy)]
 pub struct VaH264EncoderConfig {
     pub encoder: VaEncoderConfig,
-    pub profile: Profile,
-    pub level: Level,
+    pub profile: H264Profile,
+    pub level: H264Level,
     pub frame_pattern: FramePattern,
     pub slice_mode: SliceMode,
 }
@@ -51,16 +51,16 @@ struct DpbSlot {
 }
 
 impl VaH264Encoder {
-    pub fn profiles(display: &Display) -> Result<Vec<Profile>, VaError> {
+    pub fn profiles(display: &Display) -> Result<Vec<H264Profile>, VaError> {
         let mut profiles = Vec::new();
 
         for va_profile in display.profiles()? {
             let profile = match va_profile {
-                ffi::VAProfile_VAProfileH264Baseline => Profile::Baseline,
-                ffi::VAProfile_VAProfileH264ConstrainedBaseline => Profile::ConstrainedBaseline,
-                ffi::VAProfile_VAProfileH264High => Profile::High,
-                ffi::VAProfile_VAProfileH264High10 => Profile::High10,
-                ffi::VAProfile_VAProfileH264Main => Profile::Main,
+                ffi::VAProfile_VAProfileH264Baseline => H264Profile::Baseline,
+                ffi::VAProfile_VAProfileH264ConstrainedBaseline => H264Profile::ConstrainedBaseline,
+                ffi::VAProfile_VAProfileH264High => H264Profile::High,
+                ffi::VAProfile_VAProfileH264High10 => H264Profile::High10,
+                ffi::VAProfile_VAProfileH264Main => H264Profile::Main,
                 _ => continue,
             };
 
@@ -79,7 +79,7 @@ impl VaH264Encoder {
 
     pub fn capabilities(
         display: &Display,
-        profile: Profile,
+        profile: H264Profile,
     ) -> Result<VaEncoderCapabilities, VaEncoderCapabilitiesError> {
         let va_profile = profile_to_va_profile(profile)
             .expect("Passed profile which was not returned by VaH264Encoder::profiles");
@@ -641,20 +641,20 @@ fn fill_pic_list<'a>(list: &mut [ffi::VAPictureH264], iter: impl IntoIterator<It
     }
 }
 
-fn profile_to_va_profile(profile: crate::Profile) -> Option<i32> {
+fn profile_to_va_profile(profile: crate::H264Profile) -> Option<i32> {
     let profile = match profile {
-        crate::Profile::Baseline => ffi::VAProfile_VAProfileH264Baseline,
-        crate::Profile::ConstrainedBaseline => ffi::VAProfile_VAProfileH264ConstrainedBaseline,
-        crate::Profile::Main => ffi::VAProfile_VAProfileH264Main,
-        crate::Profile::Extended => return None,
-        crate::Profile::High => ffi::VAProfile_VAProfileH264High,
-        crate::Profile::High10 => ffi::VAProfile_VAProfileH264High10,
-        crate::Profile::High422 => ffi::VAProfile_VAProfileH264High,
-        crate::Profile::High444Predictive => ffi::VAProfile_VAProfileH264High,
-        crate::Profile::High10Intra => ffi::VAProfile_VAProfileH264High10,
-        crate::Profile::High422Intra => ffi::VAProfile_VAProfileH264High,
-        crate::Profile::High444Intra => ffi::VAProfile_VAProfileH264High,
-        crate::Profile::CAVLC444Intra => return None,
+        crate::H264Profile::Baseline => ffi::VAProfile_VAProfileH264Baseline,
+        crate::H264Profile::ConstrainedBaseline => ffi::VAProfile_VAProfileH264ConstrainedBaseline,
+        crate::H264Profile::Main => ffi::VAProfile_VAProfileH264Main,
+        crate::H264Profile::Extended => return None,
+        crate::H264Profile::High => ffi::VAProfile_VAProfileH264High,
+        crate::H264Profile::High10 => ffi::VAProfile_VAProfileH264High10,
+        crate::H264Profile::High422 => ffi::VAProfile_VAProfileH264High,
+        crate::H264Profile::High444Predictive => ffi::VAProfile_VAProfileH264High,
+        crate::H264Profile::High10Intra => ffi::VAProfile_VAProfileH264High10,
+        crate::H264Profile::High422Intra => ffi::VAProfile_VAProfileH264High,
+        crate::H264Profile::High444Intra => ffi::VAProfile_VAProfileH264High,
+        crate::H264Profile::CAVLC444Intra => return None,
     };
 
     Some(profile)
