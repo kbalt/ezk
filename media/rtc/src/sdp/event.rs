@@ -69,6 +69,14 @@ pub struct MediaChanged {
     pub new_direction: Direction,
 }
 
+/// Media was removed
+#[derive(Debug)]
+pub struct MediaRemoved {
+    pub id: MediaId,
+    pub stream_id: Option<String>,
+    pub track_id: Option<String>,
+}
+
 /// The gathering state of the ICE agent used by the transport changed state
 ///
 /// This event will only trigger on transports which use an ICE agent
@@ -107,7 +115,7 @@ pub enum SdpSessionEvent {
     /// See [`MediaChanged`]
     MediaChanged(MediaChanged),
     /// Media was removed from the session
-    MediaRemoved(MediaId),
+    MediaRemoved(MediaRemoved),
     /// See [`IceGatheringStateChanged`]
     IceGatheringState(IceGatheringStateChanged),
     /// See [`IceConnectionStateChanged`]

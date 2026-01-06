@@ -36,9 +36,9 @@ impl StunConfig {
 
     pub(crate) fn retransmit_delta(&self, attempts: u32) -> Duration {
         let rto = Duration::from_millis(
-            (self.initial_rto.as_millis() << attempts)
-                .try_into()
-                .unwrap(),
+            (self.initial_rto.as_millis().checked_shl(attempts))
+                .unwrap_or(u128::from(u64::MAX))
+                .min(u128::from(u64::MAX)) as u64,
         );
 
         min(rto, self.max_rto)
@@ -106,7 +106,7 @@ pub(super) fn make_role_error(
     is_controlling: bool,
     control_tie_breaker: u64,
 ) -> Vec<u8> {
-    let mut stun_message = MessageBuilder::new(Class::Success, Method::Binding, transaction_id);
+    let mut stun_message = MessageBuilder::new(Class::Error, Method::Binding, transaction_id);
 
     let username = format!("{}:{}", local_credentials.ufrag, remote_credentials.ufrag);
     stun_message.add_attr(Username::new(&username));
@@ -218,6 +218,10 @@ impl StunServerBinding {
         self.component
     }
 
+    pub(crate) fn server(&self) -> SocketAddr {
+        self.server
+    }
+
     /// Returns if the binding has either been completed or failed to complete
     pub(crate) fn is_completed(&self) -> bool {
         self.last_mapped_addr.is_some() || matches!(self.state, StunServerBindingState::Failed)
@@ -277,7 +281,7 @@ impl StunServerBinding {
                 });
             }
             StunServerBindingState::WaitingForRefresh { refresh_at, .. } => {
-                if now > *refresh_at {
+                if now >= *refresh_at {
                     self.start_binding_request(now, stun_config, on_event);
                 }
             }
@@ -324,13 +328,14 @@ impl StunServerBinding {
     /// Returns a SocketAddr discovered through the STUN binding
     pub(crate) fn receive_stun_response(
         &mut self,
+        now: Instant,
         stun_config: &StunConfig,
         mut stun_msg: Message,
     ) -> Option<SocketAddr> {
-        let mapped = stun_msg.attribute::<XorMappedAddress>()?.unwrap();
+        let mapped = stun_msg.attribute::<XorMappedAddress>()?.ok()?;
 
         self.state = StunServerBindingState::WaitingForRefresh {
-            refresh_at: Instant::now() + stun_config.binding_refresh_interval,
+            refresh_at: now + stun_config.binding_refresh_interval,
         };
         self.last_mapped_addr = Some(mapped.0);
 

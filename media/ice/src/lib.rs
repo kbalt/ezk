@@ -96,7 +96,7 @@ pub struct IceAgent {
     last_ta_trigger: Option<Instant>,
 
     /// STUN Messages that are received before the remote credentials are available
-    backlog: Vec<ReceivedPkt<Message>>,
+    backlog: Vec<(Instant, ReceivedPkt<Message>)>,
 
     events: VecDeque<IceEvent>,
 }
@@ -148,6 +148,7 @@ enum CandidateKind {
     // TODO: Relayed = 0,
 }
 
+#[derive(Debug)]
 struct Candidate {
     addr: SocketAddr,
     // transport: udp
@@ -164,6 +165,7 @@ struct Candidate {
     base: SocketAddr,
 }
 
+#[derive(Debug)]
 struct CandidatePair {
     local: LocalCandidateId,
     remote: RemoteCandidateId,
@@ -171,9 +173,9 @@ struct CandidatePair {
     state: CandidatePairState,
     component: Component,
 
-    // Nominated by the peer
+    /// Nominated by the peer
     received_use_candidate: bool,
-    // Nominated by us
+    /// Nominated by us
     nominated: bool,
 }
 
@@ -297,8 +299,8 @@ impl IceAgent {
             self.add_remote_candidate(candidate);
         }
 
-        for pkt in take(&mut self.backlog) {
-            self.receive_stun(pkt);
+        for (instant, pkt) in take(&mut self.backlog) {
+            self.receive_stun(instant, pkt);
         }
     }
 
@@ -321,7 +323,7 @@ impl IceAgent {
             }
         }
 
-        self.add_local_candidate(component, CandidateKind::Host, addr, addr);
+        self.add_local_candidate(component, CandidateKind::Host, addr, addr, None);
     }
 
     /// Add a STUN server which the ICE agent should use to gather additional (server-reflexive) candidates.
@@ -373,6 +375,7 @@ impl IceAgent {
         kind: CandidateKind,
         base: SocketAddr,
         addr: SocketAddr,
+        stun_server: Option<SocketAddr>,
     ) {
         // Check if we need to create a new candidate for this
         let already_exists = self
@@ -399,7 +402,7 @@ impl IceAgent {
         let local_preference = self
             .local_candidates
             .values()
-            .filter(|c| c.kind == kind)
+            .filter(|c| c.component == component && c.kind == kind)
             .count() as u32
             + local_preference_offset;
 
@@ -411,7 +414,7 @@ impl IceAgent {
             addr,
             kind,
             priority,
-            foundation: compute_foundation(kind, base.ip(), None, "udp").to_string(),
+            foundation: compute_foundation(kind, base.ip(), stun_server, "udp").to_string(),
             component,
             base,
         });
@@ -572,14 +575,35 @@ impl IceAgent {
 
     /// Prune the lowest priority pairs until `max_pairs` is reached
     fn prune_pairs(&mut self) {
-        while self.pairs.len() > self.max_pairs {
-            let pair = self
-                .pairs
-                .pop()
-                .expect("just checked that self.pairs.len() > self.max_pairs");
+        let mut to_prune = Vec::new();
+
+        for (index, pair) in self.pairs.iter().enumerate().rev() {
+            // Stop pruning when no longer exceeding the limit
+            if (self.pairs.len() - to_prune.len()) <= self.max_pairs {
+                break;
+            }
+
+            // Don't prune nominated candidates
+            if pair.nominated {
+                continue;
+            }
+
+            // Don't prune successful or in-flight candidates
+            if matches!(
+                pair.state,
+                CandidatePairState::Succeeded | CandidatePairState::InProgress { .. }
+            ) {
+                continue;
+            }
+
+            to_prune.push(index);
+        }
+
+        for index in to_prune {
+            let pair = self.pairs.remove(index);
 
             log::debug!(
-                "Pruned pair {}",
+                "pruned pair {}",
                 DisplayPair(
                     &self.local_candidates[pair.local],
                     &self.remote_candidates[pair.remote]
@@ -589,7 +613,7 @@ impl IceAgent {
     }
 
     /// Receive network packets for this ICE agent
-    pub fn receive(&mut self, pkt: ReceivedPkt) {
+    pub fn receive(&mut self, now: Instant, pkt: ReceivedPkt) {
         let mut stun_msg = match Message::parse(pkt.data) {
             Ok(stun_msg) => stun_msg,
             Err(e) => {
@@ -617,37 +641,40 @@ impl IceAgent {
             component: pkt.component,
         };
 
-        self.receive_stun(pkt);
+        self.receive_stun(now, pkt);
     }
 
-    fn receive_stun(&mut self, pkt: ReceivedPkt<Message>) {
+    fn receive_stun(&mut self, now: Instant, pkt: ReceivedPkt<Message>) {
         match pkt.data.class() {
-            Class::Request => self.receive_stun_request(pkt),
+            Class::Request => self.receive_stun_request(now, pkt),
             Class::Indication => { /* ignore */ }
-            Class::Success => self.receive_stun_success(pkt),
-            Class::Error => self.receive_stun_error(pkt),
+            Class::Success => self.receive_stun_success(now, pkt),
+            Class::Error => self.receive_stun_error(now, pkt),
         }
     }
 
-    fn receive_stun_success(&mut self, mut pkt: ReceivedPkt<Message>) {
+    fn receive_stun_success(&mut self, now: Instant, mut pkt: ReceivedPkt<Message>) {
         // Check our stun server binding checks before verifying integrity since these aren't authenticated
         for stun_server_binding in &mut self.stun_server {
             if !stun_server_binding.wants_stun_response(pkt.data.transaction_id()) {
                 continue;
             }
 
-            let Some(addr) = stun_server_binding.receive_stun_response(&self.stun_config, pkt.data)
+            let Some(addr) =
+                stun_server_binding.receive_stun_response(now, &self.stun_config, pkt.data)
             else {
                 // TODO; no xor mapped in response, discard message
                 return;
             };
 
             let component = stun_server_binding.component();
+            let stun_server = stun_server_binding.server();
             self.add_local_candidate(
                 component,
                 CandidateKind::ServerReflexive,
                 pkt.destination,
                 addr,
+                Some(stun_server),
             );
 
             return;
@@ -655,7 +682,7 @@ impl IceAgent {
 
         // Store messages later if the remote credentials aren't set yet
         let Some(remote_credentials) = &self.remote_credentials else {
-            self.backlog.push(pkt);
+            self.backlog.push((now, pkt));
             return;
         };
 
@@ -702,6 +729,11 @@ impl IceAgent {
                     component: local_candidate.component,
                     target: remote_candidate.addr,
                 });
+
+                // Remove all triggered checks for this component
+                self.triggered_check_queue.retain(|(local_id, _)| {
+                    self.local_candidates[*local_id].component != local_candidate.component
+                });
             }
 
             pair.state = CandidatePairState::Succeeded;
@@ -732,6 +764,7 @@ impl IceAgent {
                     CandidateKind::PeerReflexive,
                     pkt.destination,
                     mapped_addr.0,
+                    None,
                 );
             }
         } else {
@@ -739,9 +772,9 @@ impl IceAgent {
         }
     }
 
-    fn receive_stun_error(&mut self, mut pkt: ReceivedPkt<Message>) {
+    fn receive_stun_error(&mut self, now: Instant, mut pkt: ReceivedPkt<Message>) {
         let Some(remote_credentials) = &self.remote_credentials else {
-            self.backlog.push(pkt);
+            self.backlog.push((now, pkt));
             return;
         };
 
@@ -792,9 +825,9 @@ impl IceAgent {
         }
     }
 
-    fn receive_stun_request(&mut self, mut pkt: ReceivedPkt<Message>) {
+    fn receive_stun_request(&mut self, now: Instant, mut pkt: ReceivedPkt<Message>) {
         let Some(remote_credentials) = &self.remote_credentials else {
-            self.backlog.push(pkt);
+            self.backlog.push((now, pkt));
             return;
         };
 
@@ -913,11 +946,37 @@ impl IceAgent {
             }
         };
 
-        let pair = self
+        let pair = if let Some(pair) = self
             .pairs
             .iter_mut()
             .find(|p| p.local == local_id && p.remote == remote_id)
-            .expect("local_id & remote_id are valid");
+        {
+            pair
+        } else {
+            log::debug!(
+                "Got STUN request for candidates without pair, local-candidate: {} remote-candidate: {}, adding new pair",
+                DisplayCandidate(&self.local_candidates[local_id]),
+                DisplayCandidate(&self.remote_candidates[remote_id])
+            );
+
+            // Pair it with the local candidate
+            Self::add_candidate_pair(
+                local_id,
+                &self.local_candidates[local_id],
+                remote_id,
+                &self.remote_candidates[remote_id],
+                self.is_controlling,
+                &mut self.pairs,
+                false,
+            );
+
+            self.triggered_check_queue.push_back((local_id, remote_id));
+
+            self.pairs
+                .iter_mut()
+                .find(|p| p.local == local_id && p.remote == remote_id)
+                .expect("just inserted pair")
+        };
 
         pair.received_use_candidate = use_candidate;
         log::trace!(
@@ -988,7 +1047,7 @@ impl IceAgent {
 
         let pair = if let Some(pair) = pair {
             Some(pair)
-        } else {
+        } else if !self.all_components_have_nominated_valid_pair() {
             // If there are one or more candidate pairs in the Waiting state,
             // the agent picks the highest-priority candidate pair (if there are
             // multiple pairs with the same priority, the pair with the lowest
@@ -998,6 +1057,8 @@ impl IceAgent {
             self.pairs
                 .iter_mut()
                 .find(|p| p.state == CandidatePairState::Waiting)
+        } else {
+            None
         };
 
         if let Some(pair) = pair {
@@ -1062,12 +1123,29 @@ impl IceAgent {
             }
 
             if *retransmits >= self.stun_config.max_retransmits {
+                log::debug!(
+                    "failed connectivity check for pair {}",
+                    DisplayPair(
+                        &self.local_candidates[pair.local],
+                        &self.remote_candidates[pair.remote]
+                    )
+                );
+
                 pair.state = CandidatePairState::Failed;
+                pair.nominated = false;
                 continue;
             }
 
             *retransmits += 1;
             *retransmit_at += self.stun_config.retransmit_delta(*retransmits);
+
+            log::trace!(
+                "retransmitting connectivity check for pair {}",
+                DisplayPair(
+                    &self.local_candidates[pair.local],
+                    &self.remote_candidates[pair.remote]
+                )
+            );
 
             self.events.push_back(IceEvent::SendData {
                 component: pair.component,
@@ -1103,6 +1181,11 @@ impl IceAgent {
             self.gathering_state = IceGatheringState::Gathering;
         }
 
+        // Don't try to evaluate connection state when the remote data hasn't been set yet
+        if self.remote_credentials.is_none() {
+            return;
+        }
+
         // Check connection state
         let mut has_rtp_nomination = false;
         let mut has_rtcp_nomination = false;
@@ -1120,7 +1203,9 @@ impl IceAgent {
 
             if matches!(
                 pair.state,
-                CandidatePairState::Waiting | CandidatePairState::InProgress { .. }
+                CandidatePairState::Waiting
+                    | CandidatePairState::InProgress { .. }
+                    | CandidatePairState::Succeeded
             ) {
                 match pair.component {
                     Component::Rtp => rtp_in_progress = true,
@@ -1184,15 +1269,12 @@ impl IceAgent {
     }
     /// Progress the candidate nomination for a given component
     fn poll_nomination_of_component(&mut self, component: Component) {
+        if self.component_has_nominated_valid_pair(component) {
+            return;
+        }
+
         if self.is_controlling {
-            // Nothing to do, already nominated a pair
-            let skip = self
-                .pairs
-                .iter()
-                .any(|p| p.component == component && p.nominated);
-            if skip {
-                return;
-            }
+            // Controlling, select a succeeded pair and send a use-candidate
 
             let best_pair = self
                 .pairs
@@ -1222,12 +1304,6 @@ impl IceAgent {
                 .push_front((pair.local, pair.remote));
         } else {
             // Not controlling, check if we have received a use-candidate for a successful pair
-
-            // Skip this if we already have a nominated pair
-            let skip = self.pairs.iter().any(|p| p.nominated);
-            if skip {
-                return;
-            }
 
             // Find the highest priority pair that received a use-candidate && was successful
             let pair = self
@@ -1259,7 +1335,27 @@ impl IceAgent {
                 component,
                 target: self.remote_candidates[pair.remote].addr,
             });
+
+            // Remove all triggered checks for this component
+            self.triggered_check_queue
+                .retain(|(local_id, _)| self.local_candidates[*local_id].component != component);
         }
+    }
+
+    fn all_components_have_nominated_valid_pair(&self) -> bool {
+        self.component_has_nominated_valid_pair(Component::Rtp)
+            && (self.rtcp_mux || self.component_has_nominated_valid_pair(Component::Rtcp))
+    }
+
+    fn component_has_nominated_valid_pair(&self, component: Component) -> bool {
+        self.pairs.iter().any(|p| {
+            p.component == component
+                && p.nominated
+                && matches!(
+                    p.state,
+                    CandidatePairState::InProgress { .. } | CandidatePairState::Succeeded
+                )
+        })
     }
 
     /// Returns the next event to process
@@ -1272,7 +1368,9 @@ impl IceAgent {
     /// Returns a duration after which to call [`poll`](IceAgent::poll)
     pub fn timeout(&self, now: Instant) -> Option<Duration> {
         // Next TA trigger
-        let ta = if self.remote_credentials.is_some() {
+        let ta = if self.remote_credentials.is_some()
+            && !self.all_components_have_nominated_valid_pair()
+        {
             Some(
                 self.last_ta_trigger
                     .map(|it| {
@@ -1285,10 +1383,23 @@ impl IceAgent {
             None
         };
 
+        // Pair STUN retransmit
+        let pair_retransmit = self
+            .pairs
+            .iter()
+            .filter_map(|p| {
+                if let CandidatePairState::InProgress { retransmit_at, .. } = &p.state {
+                    retransmit_at.checked_duration_since(now)
+                } else {
+                    None
+                }
+            })
+            .min();
+
         // Next stun binding refresh/retransmit
         let stun_bindings = self.stun_server.iter().filter_map(|b| b.timeout(now)).min();
 
-        opt_min(ta, stun_bindings)
+        opt_min(opt_min(ta, pair_retransmit), stun_bindings)
     }
 
     /// Returns all discovered local ice agents, does not include peer-reflexive candidates
@@ -1348,11 +1459,12 @@ fn pair_priority(
 fn compute_foundation(
     kind: CandidateKind,
     base: IpAddr,
-    rel_addr: Option<IpAddr>,
+    // for server-reflexive candidates
+    stun_server: Option<SocketAddr>,
     proto: &str,
 ) -> u64 {
     let mut hasher = DefaultHasher::new();
-    (kind, base, rel_addr, proto).hash(&mut hasher);
+    (kind, base, stun_server, proto).hash(&mut hasher);
     hasher.finish()
 }
 
@@ -1375,6 +1487,26 @@ impl fmt::Display for DisplayPair<'_> {
         fmt_candidate(f, self.0)?;
         write!(f, " <-> ")?;
         fmt_candidate(f, self.1)
+    }
+}
+
+struct DisplayCandidate<'a>(&'a Candidate);
+
+impl fmt::Display for DisplayCandidate<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fn fmt_candidate(f: &mut fmt::Formatter<'_>, c: &Candidate) -> fmt::Result {
+            match c.kind {
+                CandidateKind::Host => write!(f, "host({})", c.addr),
+                CandidateKind::PeerReflexive => {
+                    write!(f, "peer-reflexive(base:{}, peer:{})", c.base, c.addr)
+                }
+                CandidateKind::ServerReflexive => {
+                    write!(f, "server-reflexive(base:{}, server:{})", c.base, c.addr)
+                } // CandidateKind::Relayed => write!(f, "relayed(base:{}, relay:{})", c.base, c.addr),
+            }
+        }
+
+        fmt_candidate(f, self.0)
     }
 }
 

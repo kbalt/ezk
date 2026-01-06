@@ -183,25 +183,23 @@ impl RtpTransport {
         if let Connectivity::Ice(ice_agent) = &mut self.connectivity {
             ice_agent.poll(now);
 
-            if let Some(event) = ice_agent.pop_event().and_then(ice_to_transport_event) {
-                self.events.push_back(event);
-
-                match ice_agent.connection_state() {
-                    IceConnectionState::New => {}
-                    IceConnectionState::Checking => {}
-                    IceConnectionState::Connected => {
-                        self.update_connection_state_on_ice_connected()
-                    }
-                    IceConnectionState::Failed => {
-                        self.set_connection_state(TransportConnectionState::Failed);
-                    }
-                    IceConnectionState::Disconnected => {
-                        // unclear if the transport state should change here, since this state may be temporary
-                    }
+            while let Some(event) = ice_agent.pop_event() {
+                if let Some(event) = ice_to_transport_event(event) {
+                    self.events.push_back(event);
                 }
             }
-        } else {
-            self.update_connection_state_on_ice_connected();
+
+            match ice_agent.connection_state() {
+                IceConnectionState::New => {}
+                IceConnectionState::Checking => {}
+                IceConnectionState::Connected => {}
+                IceConnectionState::Failed => {
+                    self.set_connection_state(TransportConnectionState::Failed);
+                }
+                IceConnectionState::Disconnected => {
+                    // unclear if the transport state should change here, since this state may be temporary
+                }
+            }
         }
 
         // Poll DTLS if RTP addr is known
@@ -232,9 +230,11 @@ impl RtpTransport {
                 });
             }
         }
+
+        self.evaluate_transport_connection_state();
     }
 
-    fn update_connection_state_on_ice_connected(&mut self) {
+    fn evaluate_transport_connection_state(&mut self) {
         match &mut self.kind {
             RtpTransportKind::Unencrypted | RtpTransportKind::SdesSrtp(..) => {
                 self.set_connection_state(TransportConnectionState::Connected);
@@ -296,7 +296,7 @@ impl RtpTransport {
     ///
     /// May return a received and unprotected RTP or RTCP packet.
     #[must_use]
-    pub fn receive(&mut self, mut pkt: ReceivedPkt) -> Option<RtpOrRtcp> {
+    pub fn receive(&mut self, now: Instant, mut pkt: ReceivedPkt) -> Option<RtpOrRtcp> {
         match PacketKind::identify(&pkt.data) {
             PacketKind::Rtp => {
                 match &mut self.kind {
@@ -364,7 +364,7 @@ impl RtpTransport {
             }
             PacketKind::Stun => {
                 if let Connectivity::Ice(ice_agent) = &mut self.connectivity {
-                    ice_agent.receive(pkt);
+                    ice_agent.receive(now, pkt);
                 }
 
                 None
