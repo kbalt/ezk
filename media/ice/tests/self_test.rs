@@ -23,11 +23,16 @@ fn same_network() {
     env_logger::init();
     let (mut a, mut b) = create_pair();
 
-    let a_addr: SocketAddr = "192.168.178.2:5555".parse().unwrap();
-    let b_addr: SocketAddr = "192.168.178.3:5555".parse().unwrap();
-
-    a.add_host_addr(Component::Rtp, a_addr);
-    b.add_host_addr(Component::Rtp, b_addr);
+    for addr in [
+        "127.0.0.1",
+        "192.168.178.10",
+        "10.10.10.10",
+        "10.127.10.10",
+        "172.17.0.1",
+    ] {
+        a.add_host_addr(Component::Rtp, format!("{addr}:5555").parse().unwrap());
+        b.add_host_addr(Component::Rtp, format!("{addr}:4444").parse().unwrap());
+    }
 
     for c in a.ice_candidates() {
         b.add_remote_candidate(&c);
@@ -49,8 +54,8 @@ fn same_network() {
         let mut to_b = Vec::new();
 
         while {
-            poll_agent(&mut a, a_addr, &mut to_b, &mut to_a);
-            poll_agent(&mut b, b_addr, &mut to_a, &mut to_b);
+            poll_agent(now, &mut a, 5555, &mut to_b, &mut to_a);
+            poll_agent(now, &mut b, 4444, &mut to_a, &mut to_b);
 
             !to_a.is_empty() || !to_b.is_empty()
         } {}
@@ -60,31 +65,35 @@ fn same_network() {
 }
 
 fn poll_agent(
+    now: Instant,
     agent: &mut IceAgent,
-    agent_addr: SocketAddr,
+    agent_port: u16,
     to_peer: &mut Vec<Packet>,
     from_peer: &mut Vec<Packet>,
 ) {
     for packet in take(from_peer) {
-        agent.receive(ReceivedPkt {
-            data: packet.data,
-            source: packet.source,
-            destination: packet.destination,
-            component: Component::Rtp,
-        });
+        agent.receive(
+            now,
+            ReceivedPkt {
+                data: packet.data,
+                source: packet.source,
+                destination: packet.destination,
+                component: Component::Rtp,
+            },
+        );
     }
 
     while let Some(event) = agent.pop_event() {
         if let IceEvent::SendData {
             component: _,
             data,
-            source: _,
+            source,
             target,
         } = event
         {
             to_peer.push(Packet {
                 data,
-                source: agent_addr,
+                source: SocketAddr::new(source.unwrap(), agent_port),
                 destination: target,
             });
         }
