@@ -15,7 +15,7 @@ use std::fmt::Formatter;
 use std::str::FromStr;
 
 /// substate-value defined in [RFC 6665](https://datatracker.ietf.org/doc/html/rfc6665#section-8.4)
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SubStateValue {
     Active,
     Pending,
