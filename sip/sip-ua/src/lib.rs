@@ -24,9 +24,11 @@ mod media_backend;
 #[cfg(feature = "rtc")]
 mod media_rtc;
 mod outbound_call;
+mod refer;
 mod registration;
+mod subscription;
 
-pub use call::{Call, CallError, CallEvent};
+pub use call::{Call, CallError, CallEvent, ReferError};
 pub use inbound_call::{AcceptCallError, InboundCall, InboundCallFromInviteError, NoMedia};
 pub use media_backend::MediaBackend;
 #[cfg(feature = "rtc")]
@@ -34,4 +36,6 @@ pub use media_rtc::{
     Codec, MediaEvent, RtcMediaBackend, RtcMediaBackendError, RtpReceiver, RtpSender,
 };
 pub use outbound_call::{MakeCallCompletionError, MakeCallError, OutboundCall};
+pub use refer::{ReferEvent, ReferEventFromNotifyError};
 pub use registration::{RegisterError, RegistrarConfig, Registration};
+pub use subscription::EventSubscriptionReceiver;

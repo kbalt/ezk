@@ -73,16 +73,3 @@ pub fn create_prack(dialog: &Dialog, response: &mut TsxResponse, rack: u32) -> R
 
     request
 }
-
-pub async fn send_prack(dialog: &Dialog, request: Request) -> Result<TsxResponse, sip_core::Error> {
-    let mut target_tp_info = dialog.target_tp_info.lock().await;
-
-    let mut transaction = dialog
-        .endpoint
-        .send_request(request, &mut target_tp_info)
-        .await?;
-
-    drop(target_tp_info);
-
-    transaction.receive_final().await
-}

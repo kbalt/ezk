@@ -1,13 +1,21 @@
 use crate::invite::session::{
     InviteSession, InviteSessionEvent, ReInviteReceived, SessionRefreshError,
 };
+use crate::refer::ReferEvent;
+use crate::subscription::{EventSubscriptionReceiver, EventSubscriptionState};
 use crate::{MediaBackend, media_backend::CONTENT_TYPE_SDP};
 use bytes::Bytes;
 use bytesstr::BytesStr;
 use sdp_types::SessionDescription;
+use sip_core::IncomingRequest;
+use sip_types::header::typed::{Event, ReferTo, SubStateValue};
+use sip_types::uri::NameAddr;
+use sip_types::uri::params::Params;
+use sip_types::{CodeKind, Method, Name};
 use sip_types::{StatusCode, header::typed::ContentType};
 use std::collections::VecDeque;
 use std::fmt::Debug;
+use std::future::pending;
 use std::pin::pin;
 use tokio::select;
 
@@ -22,11 +30,23 @@ pub enum CallError<M> {
     Media(M),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ReferError {
+    #[error("There's already a REFER in progress")]
+    AlreadyInProgress,
+    #[error("REFER request failed with error: {0}")]
+    RequestFailed(#[from] sip_core::Error),
+    #[error("REFER request got non-success status code: {0:?}")]
+    Unsuccessful(StatusCode),
+}
+
 /// An established Call with a successfully negotiated SDP media session
 ///
 /// Can only be created using [`OutboundCall`](crate::OutboundCall) or [`InboundCall`](crate::InboundCall).
 pub struct Call<M: MediaBackend> {
     invite_session: Option<InviteSession>,
+    refer_state: Option<EventSubscriptionState<ReferEvent>>,
+
     media: M,
 
     backlog: VecDeque<CallEvent<M>>,
@@ -40,6 +60,7 @@ pub enum CallEvent<M: MediaBackend> {
     Internal(InternalCallEvent),
     /// Media backend specific evet
     Media(M::Event),
+
     /// Call has been terminated by the peer
     Terminated,
 }
@@ -53,6 +74,7 @@ impl<M: MediaBackend> Call<M> {
     pub(crate) fn new(invite_session: InviteSession, media: M) -> Self {
         Self {
             invite_session: Some(invite_session),
+            refer_state: None,
             media,
             backlog: VecDeque::new(),
             terminated: false,
@@ -77,16 +99,22 @@ impl<M: MediaBackend> Call<M> {
             return Ok(CallEvent::Terminated);
         };
 
-        let event = select! {
-            invite_session_event = invite_session.run() => {
-                CallEvent::Internal(InternalCallEvent { event: Box::new(invite_session_event?) })
-            },
-            media_event = self.media.run() => {
-                CallEvent::Media(media_event.map_err(CallError::Media)?)
-            }
-        };
+        loop {
+            let event = select! {
+                invite_session_event = invite_session.run() => {
+                    CallEvent::Internal(InternalCallEvent { event: Box::new(invite_session_event?) })
+                },
+                media_event = self.media.run() => {
+                    CallEvent::Media(media_event.map_err(CallError::Media)?)
+                }
+                _refer_expired = wait_refer_expires(self.refer_state.as_mut()) => {
+                    self.refer_state = None;
+                    continue;
+                }
+            };
 
-        Ok(event)
+            return Ok(event);
+        }
     }
 
     /// Handle an [`CallEvent::Internal`]
@@ -104,6 +132,9 @@ impl<M: MediaBackend> Call<M> {
 
                 run_media_and_future(&mut self.backlog, &mut self.media, refresh).await?;
             }
+            InviteSessionEvent::Notify(notify) => {
+                self.handle_notify(notify).await;
+            }
             InviteSessionEvent::ReInviteReceived(event) => {
                 self.handle_reinvite(event).await?;
             }
@@ -118,6 +149,26 @@ impl<M: MediaBackend> Call<M> {
         }
 
         Ok(())
+    }
+
+    async fn handle_notify(&mut self, notify: IncomingRequest) {
+        let event = match notify.headers.get::<Event>(Name::EVENT) {
+            Ok(event) => event,
+            Err(e) => {
+                log::warn!("Failed to get Event header from NOTIFY: {e}");
+                return;
+            }
+        };
+
+        if event.0.contains("refer")
+            && let Some(refer_state) = &mut self.refer_state
+        {
+            refer_state.handle_notify(notify).await;
+
+            if refer_state.state() == SubStateValue::Terminated {
+                self.refer_state = None;
+            }
+        }
     }
 
     async fn handle_reinvite(
@@ -213,6 +264,44 @@ impl<M: MediaBackend> Call<M> {
         &mut self.media
     }
 
+    /// Refer to the given URI
+    pub async fn refer(
+        &mut self,
+        uri: NameAddr,
+    ) -> Result<EventSubscriptionReceiver<ReferEvent>, ReferError> {
+        if self.refer_state.is_some() {
+            return Err(ReferError::AlreadyInProgress);
+        }
+
+        let invite_session = self.invite_session.as_mut().unwrap();
+
+        let mut refer = invite_session.dialog.create_request(Method::REFER);
+        refer.headers.insert_named(&ReferTo {
+            uri,
+            params: Params::default(),
+        });
+
+        let mut target = invite_session.dialog.target_tp_info.lock().await;
+
+        let mut refer_tsx = invite_session
+            .endpoint
+            .send_request(refer, &mut target)
+            .await?;
+
+        drop(target);
+
+        let response = refer_tsx.receive_final().await?;
+
+        if response.line.code.kind() != CodeKind::Success {
+            return Err(ReferError::Unsuccessful(response.line.code));
+        }
+
+        let (refer_state, refer_rx) = crate::subscription::pair();
+        self.refer_state = Some(refer_state);
+
+        Ok(refer_rx)
+    }
+
     /// Terminate the call
     pub async fn terminate(mut self) -> Result<(), sip_core::Error> {
         self.invite_session.as_mut().unwrap().terminate().await?;
@@ -279,5 +368,12 @@ where
                 backlog.push_back(CallEvent::Media(media_event.map_err(CallError::Media)?));
             }
         }
+    }
+}
+
+async fn wait_refer_expires(state: Option<&mut EventSubscriptionState<ReferEvent>>) {
+    match state {
+        Some(state) => state.wait_expired().await,
+        None => pending().await,
     }
 }
