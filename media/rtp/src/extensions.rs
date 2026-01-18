@@ -31,7 +31,7 @@ impl RtpExtensionsWriter {
             assert!(id >= 1);
             assert!(id <= 14);
 
-            assert!(data.len() >= 1);
+            assert!(!data.is_empty());
             assert!(data.len() <= 16);
 
             assert!(!data.is_empty());

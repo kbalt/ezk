@@ -162,7 +162,7 @@ impl RtpAudioLevelExt {
     }
 
     pub fn has_voice_activiy(self) -> bool {
-        (self.0 | 0x80) != 0
+        (self.0 & 0x80) != 0
     }
 
     /// Level between -127 and 0 as dBov
