@@ -15,17 +15,15 @@ default = ["vulkan"]
 vulkan = ["dep:vulkan"]
 
 [dependencies]
-bitstream-io = "4"
 bytes = "1.10.0"
-ezk-image = { workspace = true, features = ["NV12", "I420"] }
 log = "0.4"
 thiserror = "2.0.11"
 vulkan = { workspace = true, optional = true }
 smallvec = "1"
-ivf = "0.1.4"
 
 
 [dev-dependencies]
 env_logger = "0.11"
 capture.workspace = true
 tokio = { version = "1", features = ["sync", "macros", "rt"] }
+ivf = "0.1.4"
