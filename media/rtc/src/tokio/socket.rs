@@ -1,4 +1,4 @@
-use quinn_udp::{BATCH_SIZE, RecvMeta, Transmit, UdpSockRef, UdpSocketState};
+use quinn_udp::{RecvMeta, Transmit, UdpSockRef, UdpSocketState};
 use std::{
     collections::VecDeque,
     io::{self, IoSliceMut},
@@ -76,7 +76,7 @@ impl Socket {
     pub(super) fn poll_recv_from(
         &mut self,
         cx: &mut Context<'_>,
-        bufs: &mut [IoSliceMut<'_>; BATCH_SIZE],
+        bufs: &mut [IoSliceMut<'_>; super::BATCH_SIZE],
         addrs: &mut [RecvMeta],
     ) -> Poll<io::Result<usize>> {
         // Loop makes sure that the waker is registered with the runtime,

@@ -232,7 +232,7 @@ impl OfferedTransport {
 
         // Feed the already received messages into the transport
         for (instant, pkt) in self.backlog {
-            if let Some(rtp_or_rtcp) = transport.receive(pkt) {
+            if let Some(rtp_or_rtcp) = transport.receive(instant, pkt) {
                 received_rtp_or_rtcp.push((instant, rtp_or_rtcp));
             }
         }
@@ -262,7 +262,7 @@ impl OfferedTransport {
         if let Some(ice_agent) = &mut self.ice_agent
             && matches!(is_stun_message(&pkt.data), IsStunMessageInfo::Yes { .. })
         {
-            ice_agent.receive(pkt);
+            ice_agent.receive(now, pkt);
             return;
         }
 

@@ -3,7 +3,7 @@ use crate::{
     sdp::{SdpSession, SdpSessionEvent, TransportChange, TransportId},
 };
 use ice::{Component, ReceivedPkt};
-use quinn_udp::{BATCH_SIZE, RecvMeta};
+use quinn_udp::RecvMeta;
 use socket::Socket;
 use std::{
     collections::HashMap,
@@ -22,6 +22,7 @@ use tokio::{
 
 mod socket;
 
+const BATCH_SIZE: usize = if quinn_udp::BATCH_SIZE > 8 { 8 } else { 1 };
 const RECV_BUFFER_SIZE: usize = 65535;
 
 /// IO implementation to be used alongside [`SdpSession`]
@@ -147,6 +148,7 @@ impl TokioIoState {
 
         let mut received = false;
 
+        // Poll sockets
         for ((transport_id, component), socket) in self.sockets.iter_mut() {
             socket.send_pending(cx);
 
@@ -190,12 +192,13 @@ impl TokioIoState {
             return Poll::Pending;
         }
 
-        // Polled without IO being the reason, ignore sleep and poll session once
+        // Polled without receiving data, so poll session once
         if !received {
             session.poll(now);
-
-            self.update_sleep(session, now);
         }
+
+        // Sleep must be updated after polling or receiving data
+        let mut update_sleep = true;
 
         // Poll sleep until it returns pending, to register the sleep with the context
         while let Some(sleep) = &mut self.sleep
@@ -203,6 +206,12 @@ impl TokioIoState {
         {
             session.poll(now);
 
+            self.update_sleep(session, now);
+
+            update_sleep = false;
+        }
+
+        if update_sleep {
             self.update_sleep(session, now);
         }
 

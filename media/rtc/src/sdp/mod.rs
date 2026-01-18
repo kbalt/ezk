@@ -16,7 +16,7 @@ use crate::{
         RtpSessionReceiveRtcpEvent, RxStream, SendRtpPacket,
     },
     rtp_transport::{RtpOrRtcp, TransportConnectionState},
-    sdp::{local_media::LocalMedia, media::MediaStreams},
+    sdp::{event::MediaRemoved, local_media::LocalMedia, media::MediaStreams},
 };
 use bytes::Bytes;
 use bytesstr::BytesStr;
@@ -629,7 +629,11 @@ impl SdpSession {
 
         for media in removed_media {
             self.events
-                .push_back(SdpSessionEvent::MediaRemoved(media.id));
+                .push_back(SdpSessionEvent::MediaRemoved(MediaRemoved {
+                    id: media.id,
+                    stream_id: media.stream_id.as_ref().map(|v| v.to_string()),
+                    track_id: media.track_id.as_ref().map(|v| v.to_string()),
+                }));
         }
 
         self.remove_unused_transports();
@@ -982,7 +986,12 @@ impl SdpSession {
                         }
 
                         self.events
-                            .push_back(SdpSessionEvent::MediaRemoved(media_id));
+                            .push_back(SdpSessionEvent::MediaRemoved(MediaRemoved {
+                                id: m.id,
+                                stream_id: m.stream_id.as_ref().map(|v| v.to_string()),
+                                track_id: m.track_id.as_ref().map(|v| v.to_string()),
+                            }));
+
                         false
                     } else {
                         true
@@ -1151,6 +1160,11 @@ impl SdpSession {
 
     /// Create a SDP offer from the current state of the `SdpSession`, this includes any pending media.
     pub fn create_sdp_offer(&mut self) -> SessionDescription {
+        assert!(
+            self.offered_changes.is_empty(),
+            "Tried to create SDP offer while another SDP offer is still pending"
+        );
+
         self.offered_changes = take(&mut self.pending_changes);
 
         let mut media_descriptions = vec![];
@@ -1766,7 +1780,7 @@ impl SdpSession {
         {
             let public_id = transport.public_id;
 
-            if let Some(rtp_or_rtcp) = transport.transport.receive(pkt) {
+            if let Some(rtp_or_rtcp) = transport.transport.receive(now, pkt) {
                 Self::handle_received_rtp_or_rtcp(
                     &mut self.events,
                     &mut self.media,
