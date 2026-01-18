@@ -222,8 +222,10 @@ impl MediaBackend for RtcMediaBackend {
                         self.events.push_back(add_receiver(event.id, media_state));
                     }
                 }
-                SdpSessionEvent::MediaRemoved(media_id) => {
-                    if let Some(sender) = self.media.remove(&media_id).and_then(|m| m.sender) {
+                SdpSessionEvent::MediaRemoved(media_removed) => {
+                    if let Some(sender) =
+                        self.media.remove(&media_removed.id).and_then(|m| m.sender)
+                    {
                         sender.store(false, Ordering::Relaxed);
                     }
                 }
