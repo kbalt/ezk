@@ -1,0 +1,336 @@
+use ashpd::{
+    desktop::{
+        Session,
+        screencast::{CursorMode, Screencast},
+    },
+    enumflags2::BitFlags,
+};
+use smallvec::SmallVec;
+use std::{os::fd::OwnedFd, thread};
+use tokio::sync::oneshot;
+
+mod stream;
+
+pub use ashpd::{
+    desktop::{PersistMode, screencast::SourceType},
+    enumflags2::BitFlag,
+};
+
+/// Options for configuring a Wayland/Pipewire capture session
+#[derive(Debug)]
+pub struct ScreenCaptureOptions {
+    /// Embed the cursor in the video
+    pub show_cursor: bool,
+
+    /// Which sources to captures
+    pub source_types: BitFlags<SourceType>,
+
+    /// Screen capture permission persistence
+    pub persist_mode: PersistMode,
+
+    /// Restore token to restore previous capture
+    pub restore_token: Option<String>,
+
+    /// Pipewire specific options
+    pub pipewire: PipewireOptions,
+}
+
+impl Default for ScreenCaptureOptions {
+    fn default() -> Self {
+        ScreenCaptureOptions {
+            show_cursor: true,
+            source_types: SourceType::all(),
+            persist_mode: PersistMode::DoNot,
+            restore_token: None,
+            pipewire: PipewireOptions::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PipewireOptions {
+    /// Maximum framerate to negotiate in the pipewire stream
+    ///
+    /// > Note: This does not guarantee that the framerate is exceeded and a proper frame limit can only be achieved by
+    /// >       blocking the frame callback.
+    pub max_framerate: u32,
+
+    /// Set the supported pixel formats, only they will be negotiated
+    pub pixel_formats: Vec<PixelFormat>,
+
+    /// Configure usage of DMA buffers
+    pub dma_usage: Option<DmaUsageOptions>,
+}
+
+impl Default for PipewireOptions {
+    fn default() -> Self {
+        PipewireOptions {
+            max_framerate: 30,
+            pixel_formats: vec![
+                PixelFormat::NV12,
+                PixelFormat::I420,
+                PixelFormat::RGBA(RgbaSwizzle::RGBA),
+                PixelFormat::RGBA(RgbaSwizzle::BGRA),
+                PixelFormat::RGBA(RgbaSwizzle::ARGB),
+                PixelFormat::RGBA(RgbaSwizzle::ABGR),
+            ],
+            dma_usage: None,
+        }
+    }
+}
+
+/// Options for configuring usage of DMA Buffers
+#[derive(Debug, Clone)]
+pub struct DmaUsageOptions {
+    /// Request sync objects for explicit DMA buffer synchronization
+    pub request_sync_obj: bool,
+
+    /// Number of buffers to allocate for the session
+    ///
+    /// This must be set to a high enough value to avoid deadlocking in certain scenarios
+    ///
+    /// E.g. if a H.264 encoder is used, `num_buffers` must be at least as large as the `ip_interval + 1`,
+    /// as the encoder will hold onto these buffers until they can be encoded out of order, releasing them all at once.
+    pub num_buffers: u32,
+
+    /// Supported DRM modifiers
+    pub supported_modifier: Vec<u64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum PixelFormat {
+    /// 2 Plane YUV with 4:2:0 subsampling
+    NV12,
+    /// 3 Plane YUV with 4:2:0 subsampling
+    I420,
+    /// Any form of 4 component RGB
+    RGBA(RgbaSwizzle),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum RgbaSwizzle {
+    RGBA,
+    BGRA,
+    ARGB,
+    ABGR,
+}
+
+#[derive(Debug)]
+pub struct CapturedFrame {
+    pub width: u32,
+    pub height: u32,
+    pub format: PixelFormat,
+    pub buffer: CapturedFrameBuffer,
+    pub crop: Option<CapturedFrameCrop>,
+}
+
+/// Captured buffer type, contents are defined by [`CapturedFrameFormat`]
+#[derive(Debug)]
+pub enum CapturedFrameBuffer {
+    Mem(CapturedMemBuffer),
+    Dma(CapturedDmaBuffer),
+}
+
+pub struct CapturedMemBuffer {
+    pub memory: Vec<u8>,
+    pub planes: SmallVec<[MemPlane; 3]>,
+}
+
+impl std::fmt::Debug for CapturedMemBuffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CapturedMemBuffer")
+            .field("memory(len)", &self.memory.len())
+            .field("planes", &self.planes)
+            .finish()
+    }
+}
+
+#[derive(Debug)]
+pub struct MemPlane {
+    pub offset: usize,
+    pub stride: usize,
+}
+
+#[derive(Debug)]
+pub struct CapturedDmaBuffer {
+    pub modifier: u64,
+    pub planes: SmallVec<[DmaPlane; 4]>,
+    pub sync: Option<CapturedDmaBufferSync>,
+}
+
+#[derive(Debug)]
+pub struct DmaPlane {
+    pub fd: OwnedFd,
+    pub offset: usize,
+    pub stride: usize,
+}
+
+#[derive(Debug)]
+pub struct CapturedDmaBufferSync {
+    pub acquire_point: u64,
+    pub release_point: u64,
+
+    pub acquire_fd: OwnedFd,
+    pub release_fd: OwnedFd,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CapturedFrameCrop {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("Stream has been closed")]
+pub struct StreamClosedError;
+
+/// Handle to a current capture stream
+///
+/// Dropping it does **not** end the stream.
+///
+/// To properly close a capture stream call [`StreamHandle::close`].
+pub struct StreamHandle {
+    session: Session<'static, Screencast<'static>>,
+    restore_token: Option<String>,
+    sender: pipewire::channel::Sender<stream::Command>,
+}
+
+impl StreamHandle {
+    /// Continue playing the stream.
+    ///
+    /// Should only be called after pausing the stream - created captures are automatically playing
+    pub fn play(&self) -> Result<(), StreamClosedError> {
+        self.sender
+            .send(stream::Command::Play)
+            .map_err(|_| StreamClosedError)
+    }
+
+    /// Pause the stream, can be unpaused using [`StreamHandle::play`].
+    pub fn pause(&self) -> Result<(), StreamClosedError> {
+        self.sender
+            .send(stream::Command::Pause)
+            .map_err(|_| StreamClosedError)
+    }
+
+    /// Gracefully close the pipewire stream and close the dbus connection.
+    pub async fn close(&self) -> Result<(), StreamClosedError> {
+        if let Err(e) = self.session.close().await {
+            log::warn!("Failed to close xdg session properly {e}");
+        }
+
+        self.sender
+            .send(stream::Command::Close)
+            .map_err(|_| StreamClosedError)
+    }
+
+    /// Renegotiate the stream without the given DRM modifier
+    ///
+    /// All future renegotiations will not include this modifier.
+    pub fn remove_modifier(&self, modifier: u64) -> Result<(), StreamClosedError> {
+        self.sender
+            .send(stream::Command::RemoveModifier(modifier))
+            .map_err(|_| StreamClosedError)
+    }
+
+    /// Get the restore token
+    pub fn restore_token(&self) -> Option<&str> {
+        self.restore_token.as_deref()
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum StartCaptureError {
+    #[error("Config contains an empty list of pixel formats")]
+    NoPixelFormats,
+    #[error(transparent)]
+    DesktopPortal(#[from] ashpd::Error),
+    #[error("no streams were selected")]
+    NoStreamSelected,
+    #[error("capture thread panicked while creating stream")]
+    CaptureThreadPanicked,
+    #[error("Failed to create pipewire stream: {0}")]
+    Pipewire(#[from] pipewire::Error),
+}
+
+/// Start a screen capture thread with the given options
+///
+/// Calls `on_frame` until either the screen capture is cancelled or `on_frame` returns false
+pub async fn start_screen_capture<F>(
+    options: ScreenCaptureOptions,
+    on_frame: F,
+) -> Result<StreamHandle, StartCaptureError>
+where
+    F: FnMut(CapturedFrame) -> bool + Send + 'static,
+{
+    start_screen_capture_boxed(options, Box::new(on_frame)).await
+}
+
+async fn start_screen_capture_boxed(
+    options: ScreenCaptureOptions,
+    on_frame: Box<dyn FnMut(CapturedFrame) -> bool + Send>,
+) -> Result<StreamHandle, StartCaptureError> {
+    if options.pipewire.pixel_formats.is_empty() {
+        return Err(StartCaptureError::NoPixelFormats);
+    }
+
+    let proxy = Screencast::new().await?;
+
+    let session = proxy.create_session().await?;
+
+    let cursor_mode = if options.show_cursor {
+        CursorMode::Embedded
+    } else {
+        CursorMode::Hidden
+    };
+
+    proxy
+        .select_sources(
+            &session,
+            cursor_mode,
+            options.source_types,
+            false,
+            options.restore_token.as_deref(),
+            options.persist_mode,
+        )
+        .await?;
+
+    let response = proxy.start(&session, None).await?.response()?;
+
+    let restore_token = response.restore_token();
+
+    let stream = response
+        .streams()
+        .first()
+        .ok_or(StartCaptureError::NoStreamSelected)?;
+
+    let node_id = stream.pipe_wire_node_id();
+    let fd = proxy.open_pipe_wire_remote(&session).await?;
+
+    let (result_tx, result_rx) = oneshot::channel();
+
+    thread::Builder::new()
+        .name("pipewire-video-capture".into())
+        .spawn(move || {
+            stream::start(
+                Some(node_id),
+                fd,
+                options.pipewire,
+                "Screen",
+                on_frame,
+                result_tx,
+            );
+        })
+        .expect("Thread creation ");
+
+    let sender = result_rx
+        .await
+        .map_err(|_| StartCaptureError::CaptureThreadPanicked)??;
+
+    Ok(StreamHandle {
+        session,
+        restore_token: restore_token.map(|s| s.to_owned()),
+        sender,
+    })
+}
