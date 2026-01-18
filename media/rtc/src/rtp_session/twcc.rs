@@ -87,7 +87,15 @@ impl TwccTxState {
         self.last_feedback_count = Some(feedback.feedback_packet_count());
 
         let mut reference_time = feedback.reference_time() as i64 * 64000;
-        for (sequence_number, status) in feedback.packets() {
+        for result in feedback.packets() {
+            let (sequence_number, status) = match result {
+                Ok((sequence_number, status)) => (sequence_number, status),
+                Err(e) => {
+                    log::warn!("Got invalid TWCC packet status {e}");
+                    break;
+                }
+            };
+
             let Some(sent_packet) = self.sent_packets.get_mut(&sequence_number) else {
                 continue;
             };
