@@ -26,7 +26,6 @@ openh264-sys2 = { version = "0.9", optional = true }
 thiserror = "2.0.11"
 vulkan = { workspace = true, optional = true }
 smallvec = "1"
-ivf = "0.1.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libva = { workspace = true, optional = true }
