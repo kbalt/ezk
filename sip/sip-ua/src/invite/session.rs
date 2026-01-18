@@ -46,6 +46,7 @@ pub enum SessionRefreshError {
 #[allow(clippy::large_enum_variant)] // TODO address this
 pub enum InviteSessionEvent {
     RefreshNeeded,
+    Notify(IncomingRequest),
     ReInviteReceived(ReInviteReceived),
     Bye(ByeEvent),
     Terminated,
@@ -88,7 +89,7 @@ impl InviteSession {
                self.handle_session_timer().await
             }
             event = self.usage_events.recv() => {
-                self.handle_usage_event(event)
+                self.handle_usage_event(event).await
             }
         }
     }
@@ -111,7 +112,7 @@ impl InviteSession {
         transaction.receive_final().await
     }
 
-    fn handle_usage_event(&mut self, evt: Option<UsageEvent>) -> Result<InviteSessionEvent> {
+    async fn handle_usage_event(&mut self, evt: Option<UsageEvent>) -> Result<InviteSessionEvent> {
         let evt = if let Some(evt) = evt {
             evt
         } else {
@@ -121,6 +122,16 @@ impl InviteSession {
         };
 
         match evt {
+            UsageEvent::Notify(mut incoming_request) => {
+                // Always respond with 200 OK
+                let transaction = self.endpoint.create_server_tsx(&mut incoming_request);
+                let response =
+                    self.dialog
+                        .create_response(&incoming_request, StatusCode::OK, None)?;
+                transaction.respond(response).await?;
+
+                Ok(InviteSessionEvent::Notify(incoming_request))
+            }
             UsageEvent::Bye(mut request) => {
                 let transaction = self.endpoint.create_server_tsx(&mut request);
 
@@ -233,6 +244,7 @@ impl InviteSession {
 }
 
 pub(super) enum UsageEvent {
+    Notify(IncomingRequest),
     ReInvite(IncomingRequest),
     Bye(IncomingRequest),
 }

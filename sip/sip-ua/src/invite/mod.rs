@@ -290,6 +290,23 @@ impl Usage for InviteUsage {
                     log::warn!("Failed to handle PRACK request {e:?}");
                 }
             }
+            Method::NOTIFY => {
+                let state = self.inner.state.lock().await;
+
+                match &*state {
+                    InviteSessionState::Established { evt_sink } => {
+                        if let Err(SendError(UsageEvent::Notify(notify))) = evt_sink
+                            .send(UsageEvent::Notify(request.inner().take().unwrap()))
+                            .await
+                        {
+                            *request.inner() = Some(notify);
+                        }
+                    }
+                    _ => {
+                        // ignore
+                    }
+                }
+            }
             _ => {}
         }
     }

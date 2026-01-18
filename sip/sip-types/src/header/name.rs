@@ -238,6 +238,9 @@ header_names! {
     /// [[RFC3621, Section 20.30](https://tools.ietf.org/html/rfc3261#section-20.30)]
     "Record-Route",         RecordRoute,        ["record-route"],           RECORD_ROUTE;
 
+    /// [[RFC3515, Section 2.1](https://www.rfc-editor.org/rfc/rfc3515#section-2.1)]
+    "Refer-To",             ReferTo,            ["refer-to", "r"],          REFER_TO;
+
     /// [[RFC3891, Section 6.1](https://datatracker.ietf.org/doc/html/rfc3891#section-6.1)]
     "Replaces",             Replaces,           ["replaces"],               REPLACES;
 

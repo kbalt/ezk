@@ -24,7 +24,9 @@ mod media_backend;
 #[cfg(feature = "rtc")]
 mod media_rtc;
 mod outbound_call;
+mod refer;
 mod registration;
+mod subscription;
 
 pub use call::{Call, CallError, CallEvent};
 pub use inbound_call::{AcceptCallError, InboundCall, InboundCallFromInviteError, NoMedia};
