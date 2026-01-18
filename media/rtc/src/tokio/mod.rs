@@ -192,13 +192,7 @@ impl TokioIoState {
             return Poll::Pending;
         }
 
-        // Polled without receiving data, so poll session once
-        if !received {
-            session.poll(now);
-        }
-
-        // Sleep must be updated after polling or receiving data
-        let mut update_sleep = true;
+        let mut polled = false;
 
         // Poll sleep until it returns pending, to register the sleep with the context
         while let Some(sleep) = &mut self.sleep
@@ -208,10 +202,13 @@ impl TokioIoState {
 
             self.update_sleep(session, now);
 
-            update_sleep = false;
+            polled = true;
         }
 
-        if update_sleep {
+        // When nothing was received, and sleep also didn't cause a poll, poll once anyway
+        // since this migth be the first poll after handling a session event
+        if !received && !polled {
+            session.poll(now);
             self.update_sleep(session, now);
         }
 
