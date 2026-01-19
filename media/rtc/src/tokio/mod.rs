@@ -192,6 +192,10 @@ impl TokioIoState {
             return Poll::Pending;
         }
 
+        if received {
+            self.update_sleep(session, now, true);
+        }
+
         let mut polled = false;
 
         // Poll sleep until it returns pending, to register the sleep with the context
@@ -200,7 +204,7 @@ impl TokioIoState {
         {
             session.poll(now);
 
-            self.update_sleep(session, now);
+            self.update_sleep(session, now, false);
 
             polled = true;
         }
@@ -209,7 +213,7 @@ impl TokioIoState {
         // since this migth be the first poll after handling a session event
         if !received && !polled {
             session.poll(now);
-            self.update_sleep(session, now);
+            self.update_sleep(session, now, false);
         }
 
         if session.has_events() {
@@ -219,13 +223,15 @@ impl TokioIoState {
         }
     }
 
-    fn update_sleep(&mut self, session: &mut SdpSession, now: Instant) {
+    fn update_sleep(&mut self, session: &mut SdpSession, now: Instant, allow_zero: bool) {
         match session.timeout(now) {
             Some(duration) => {
-                debug_assert!(
-                    duration != Duration::ZERO,
-                    "SdpSession::timeout must not return Duration::ZERO after SdpSession::poll"
-                );
+                if !allow_zero {
+                    debug_assert!(
+                        duration != Duration::ZERO,
+                        "SdpSession::timeout must not return Duration::ZERO after SdpSession::poll"
+                    );
+                }
 
                 let deadline = tokio::time::Instant::from(now + duration);
 
