@@ -93,6 +93,10 @@ impl InviteInitiator {
         request
     }
 
+    pub fn increment_cseq(&mut self) {
+        self.dialog_builder.local_cseq += 1;
+    }
+
     pub async fn send_invite(&mut self, request: Request) -> Result<(), sip_core::Error> {
         let transaction = self
             .dialog_builder
