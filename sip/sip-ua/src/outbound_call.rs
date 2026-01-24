@@ -104,7 +104,9 @@ impl<M: MediaBackend> OutboundCall<M> {
                     }
                     Response::Failure(tsx_response) => {
                         // Authorize requests if possible
-                        if tsx_response.line.code != StatusCode::UNAUTHORIZED {
+                        if tsx_response.line.code != StatusCode::UNAUTHORIZED
+                            && tsx_response.line.code != StatusCode::PROXY_AUTHENTICATION_REQUIRED
+                        {
                             return Err(MakeCallError::Failed(tsx_response.line));
                         }
 

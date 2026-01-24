@@ -48,6 +48,10 @@ impl ClientDialogBuilder {
     pub fn create_request(&mut self, method: Method) -> Request {
         let mut headers = Headers::new();
 
+        if method != Method::CANCEL {
+            self.local_cseq += 1;
+        }
+
         headers.insert_named(&MaxForwards(70));
         headers.insert_type(Name::FROM, &self.local_fromto);
         headers.insert_type(Name::TO, &self.peer_fromto);
@@ -76,7 +80,7 @@ impl ClientDialogBuilder {
 
         let dialog = Dialog {
             endpoint: self.endpoint.clone(),
-            local_cseq: self.local_cseq.into(),
+            local_cseq: (self.local_cseq + 1).into(),
             local_fromto: self.local_fromto.clone(),
             peer_fromto: response.base_headers.to.clone(),
             local_contact: self.local_contact.clone(),
