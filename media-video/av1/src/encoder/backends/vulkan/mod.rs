@@ -286,14 +286,12 @@ impl VkAV1Encoder {
                 caps.max_unidirectional_compound_group1_reference_count,
                 caps.unidirectional_compound_reference_name_mask,
             )
-        } else if self.active_dpb_slots.len() == 1 && caps.single_reference_name_mask == 1 {
+        } else {
             (
                 vk::VideoEncodeAV1PredictionModeKHR::SINGLE_REFERENCE,
                 1,
                 caps.single_reference_name_mask,
             )
-        } else {
-            panic!("Failed to identify prediction mode");
         };
 
         let reference_slots: SmallVec<[_; 8]> = self
