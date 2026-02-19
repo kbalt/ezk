@@ -12,7 +12,7 @@ use std::{
 use time::ext::InstantExt as _;
 
 /// Fixed size of the jitter buffer
-const RX_BUFFER_DURATION: Duration = Duration::from_millis(100);
+const RX_BUFFER_DURATION: Duration = Duration::from_millis(10);
 
 /// Time to wait before generating a NACK packet
 const NACK_DELAY: Duration = Duration::from_millis(20);
@@ -49,7 +49,7 @@ pub(crate) struct InboundQueue {
 
     pub(crate) rtx_received_in_time: u64,
     pub(crate) rtx_received_too_late: u64,
-    pub(crate) rtx_received_redudant: u64,
+    pub(crate) rtx_received_redundant: u64,
     pub(crate) rtx_bytes_received: u64,
 
     /// packets that were never received
@@ -125,7 +125,7 @@ impl InboundQueue {
             received_bytes: 0,
             rtx_received_in_time: 0,
             rtx_received_too_late: 0,
-            rtx_received_redudant: 0,
+            rtx_received_redundant: 0,
             rtx_bytes_received: 0,
             lost: 0,
             jitter: 0.0,
@@ -314,7 +314,7 @@ impl InboundQueue {
         {
             Some(QueueEntry::Occupied { .. }) => {
                 // Retransmission was redundant
-                self.rtx_received_redudant += 1;
+                self.rtx_received_redundant += 1;
             }
             Some(vacant @ QueueEntry::Vacant { .. }) => {
                 self.rtx_received_in_time += 1;

@@ -3,7 +3,7 @@ use crate::opt_min;
 use super::{ntp_timestamp::NtpTimestamp, report::ReportsQueue};
 use queue::InboundQueue;
 use rtp::{
-    RtpPacket, Ssrc,
+    RtpPacket, RtpTimestamp, Ssrc,
     rtcp_types::{Fir, PayloadFeedback, Pli, ReportBlock, SenderReport, TransportFeedback},
 };
 use std::time::{Duration, Instant};
@@ -21,8 +21,9 @@ pub struct RtpInboundStream {
     ssrc: Ssrc,
     queue: InboundQueue,
     report_interval: Duration,
+
     last_report_sent: Option<(Instant, u64)>,
-    last_received_sender_report: Option<NtpTimestamp>,
+    media_time_ref: Option<MediaTimeRef>,
 
     remote_stats: Option<RtpInboundRemoteStats>,
 
@@ -38,6 +39,16 @@ pub struct RtpInboundStream {
     last_ccm_fir: Option<Instant>,
 }
 
+/// Reference NTP timestamp & RTP timestamp used to create a media time for incoming packets
+struct MediaTimeRef {
+    /// The first few packets, before a SR with a NTP timestamp is received, will have a guesstimated `media_time`
+    ///
+    /// RTP & NTP timestamp are taken from the first RTP packet instead. (where the NTP packet is the received timestamp)
+    is_sender_report: bool,
+    rtp_timestamp: RtpTimestamp,
+    ntp_timestamp: NtpTimestamp,
+}
+
 impl RtpInboundStream {
     pub(crate) fn new(
         pt: u8,
@@ -51,7 +62,7 @@ impl RtpInboundStream {
             queue: InboundQueue::new(pt, ssrc, clock_rate),
             report_interval,
             last_report_sent: None,
-            last_received_sender_report: None,
+            media_time_ref: None,
             remote_stats: None,
 
             emit_nack,
@@ -179,11 +190,13 @@ impl RtpInboundStream {
             return;
         };
 
-        let (last_sr, delay) = if let Some(last_sr) = self.last_received_sender_report {
-            let delay = NtpTimestamp::from_instant(now) - last_sr;
+        let (last_sr, delay) = if let Some(sr) = &self.media_time_ref
+            && sr.is_sender_report
+        {
+            let delay = NtpTimestamp::from_instant(now) - sr.ntp_timestamp;
             let delay = (delay.as_seconds_f64() * 65536.0) as u32;
 
-            let last_sr = last_sr.to_fixed_u32();
+            let last_sr = sr.ntp_timestamp.to_fixed_u32();
 
             (last_sr, delay)
         } else {
@@ -210,7 +223,11 @@ impl RtpInboundStream {
     }
 
     pub(crate) fn handle_sender_report(&mut self, now: Instant, sender_report: &SenderReport) {
-        self.last_received_sender_report = Some(NtpTimestamp::from_instant(now));
+        self.media_time_ref = Some(MediaTimeRef {
+            is_sender_report: true,
+            rtp_timestamp: RtpTimestamp(sender_report.rtp_timestamp()),
+            ntp_timestamp: NtpTimestamp::from_fixed_u64(sender_report.ntp_timestamp()),
+        });
 
         self.remote_stats = Some(RtpInboundRemoteStats {
             timestamp: now,
@@ -233,12 +250,39 @@ impl RtpInboundStream {
 
     /// Check for a RTP packet that is ready to be received
     pub(crate) fn poll(&mut self, now: Instant) -> Option<RtpInboundStreamEvent> {
-        let (rtp_packet, received_at) = self.queue.poll(now)?;
+        let mut packets = smallvec::SmallVec::new();
 
-        Some(RtpInboundStreamEvent::ReceiveRtpPacket {
-            received_at,
-            rtp_packet,
-        })
+        while let Some((rtp_packet, received_at)) = self.queue.poll(now) {
+            let media_time_ref = self.media_time_ref.get_or_insert_with(|| MediaTimeRef {
+                is_sender_report: false,
+                rtp_timestamp: rtp_packet.timestamp,
+                ntp_timestamp: NtpTimestamp::from_instant(
+                    received_at.expect("first rtp packet MUST have received_at as Some"),
+                ),
+            });
+
+            let diff = rtp_packet
+                .timestamp
+                .0
+                .wrapping_sub(media_time_ref.rtp_timestamp.0)
+                .cast_signed();
+
+            let secs_diff = diff as f64 / self.queue.clock_rate as f64;
+            let media_time =
+                media_time_ref.ntp_timestamp.to_instant() + time::Duration::seconds_f64(secs_diff);
+
+            packets.push(RtpInboundPacket {
+                received_at,
+                media_time,
+                rtp_packet,
+            });
+        }
+
+        if packets.is_empty() {
+            return None;
+        }
+
+        Some(RtpInboundStreamEvent::ReceiveRtpPackets(packets))
     }
 
     pub fn stats(&self) -> RtpInboundStats {
@@ -247,7 +291,7 @@ impl RtpInboundStream {
             bytes_received: self.queue.received_bytes,
             rtx_packets_received_in_time: self.queue.rtx_received_in_time,
             rtx_packets_received_too_late: self.queue.rtx_received_too_late,
-            rtx_packets_received_redudant: self.queue.rtx_received_redudant,
+            rtx_packets_received_redundant: self.queue.rtx_received_redundant,
             rtx_bytes_received: self.queue.rtx_bytes_received,
             packets_lost: self.queue.lost,
             loss: self.packet_loss(),
@@ -258,8 +302,16 @@ impl RtpInboundStream {
 }
 
 pub enum RtpInboundStreamEvent {
-    ReceiveRtpPacket {
-        received_at: Option<Instant>,
-        rtp_packet: RtpPacket,
-    },
+    ReceiveRtpPackets(smallvec::SmallVec<[RtpInboundPacket; 1]>),
+}
+
+#[derive(Debug)]
+pub struct RtpInboundPacket {
+    /// Timestamp at which the packet was received, none if the packet was a retransmission
+    pub received_at: Option<Instant>,
+    /// Media time derived from RTCP SR reports and their NTP timestamp
+    ///
+    /// Must only be compared to other `media_time` instants.
+    pub media_time: Instant,
+    pub rtp_packet: RtpPacket,
 }

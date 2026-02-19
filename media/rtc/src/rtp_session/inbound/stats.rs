@@ -25,7 +25,7 @@ pub struct RtpInboundStats {
     pub rtx_packets_received_too_late: u64,
 
     /// Total RTX packets received redudant as the original packet was received
-    pub rtx_packets_received_redudant: u64,
+    pub rtx_packets_received_redundant: u64,
 
     /// Total RTX payload bytes received
     pub rtx_bytes_received: u64,

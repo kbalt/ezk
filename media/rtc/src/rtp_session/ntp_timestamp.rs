@@ -37,15 +37,25 @@ impl NtpTimestamp {
         }
     }
 
+    pub(super) fn to_instant(self) -> Instant {
+        let (ref_time, ref_instant) = &*SYSTEM_TIME_TO_INSTANT;
+        let system_time = NTP_EPOCH + self.inner;
+        let offset = system_time - *ref_time;
+
+        *ref_instant + offset
+    }
+
     pub(super) fn as_seconds_f64(self) -> f64 {
         self.inner.as_seconds_f64()
     }
 
     pub(super) fn to_fixed_u64(self) -> u64 {
-        let seconds = self.inner.whole_seconds() as u64;
+        let total_nanos = self.inner.whole_nanoseconds();
 
-        let subseconds = self.inner.as_seconds_f64().fract() * u32::MAX as f64;
-        let subseconds = subseconds as u64;
+        let seconds = total_nanos.div_euclid(1_000_000_000) as u64;
+        let nanos = total_nanos.rem_euclid(1_000_000_000) as f64;
+
+        let subseconds = (nanos / 1_000_000_000.0 * 2f64.powi(32)) as u64;
 
         (seconds << 32) | subseconds
     }
@@ -55,21 +65,20 @@ impl NtpTimestamp {
         ((self.to_fixed_u64() >> 16) & u64::from(u32::MAX)) as u32
     }
 
-    // Not a fan of commented out code, but I don't know if or when I might need this
-    //pub(super) fn from_fixed_u64(fixed: u64) -> Self {
-    //    let seconds = (fixed >> 32) as i64;
-    //    let subseconds = (fixed & u64::from(u32::MAX)) as u32;
-    //    let subseconds = subseconds as f64 / (u32::MAX as f64);
-    //    Self {
-    //        inner: SignedDuration::new(seconds, (subseconds * 1_000_000_000.) as i32),
-    //    }
-    //}
+    pub(super) fn from_fixed_u64(fixed: u64) -> Self {
+        let seconds = (fixed >> 32) as i64;
+        let subseconds = (fixed & u64::from(u32::MAX)) as f64;
+        let subseconds = subseconds / (2f64.powi(32));
+        Self {
+            inner: SignedDuration::new(seconds, (subseconds * 1_000_000_000.) as i32),
+        }
+    }
 
     pub(super) fn from_fixed_u32(fixed: u32) -> Self {
         let seconds = (fixed >> 16) as i64;
 
-        let subseconds = (fixed & u32::from(u16::MAX)) as u16;
-        let subseconds = subseconds as f64 / (u16::MAX as f64);
+        let subseconds = (fixed & u32::from(u16::MAX)) as f64;
+        let subseconds = subseconds / (2f64.powi(16));
 
         Self {
             inner: SignedDuration::new(seconds, (subseconds * 1_000_000_000.) as i32),
@@ -89,4 +98,11 @@ impl Sub for NtpTimestamp {
             inner: self.inner - rhs.inner,
         }
     }
+}
+
+#[test]
+fn self_test() {
+    let now = NtpTimestamp::from_instant(Instant::now());
+
+    assert_eq!(NtpTimestamp::from_fixed_u64(now.to_fixed_u64()), now);
 }

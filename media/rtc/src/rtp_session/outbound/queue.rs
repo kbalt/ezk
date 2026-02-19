@@ -164,9 +164,9 @@ impl OutboundQueue {
         }
 
         // Deque outbound packets
-        let (QueueKey { send_at, .. }, _) = self.queue.first_key_value()?;
+        let (&QueueKey { send_at, .. }, _) = self.queue.first_key_value()?;
 
-        if now < *send_at {
+        if now < send_at {
             return None;
         }
 

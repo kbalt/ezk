@@ -91,18 +91,14 @@ impl RtpOutboundStream {
     }
 
     pub(crate) fn handle_report_block(&mut self, now: Instant, report_block: ReportBlock) {
-        let rtt = if let Some(last_report_sent) = self.last_report_sent {
-            let now = NtpTimestamp::from_instant(now);
-            let lsr = NtpTimestamp::from_instant(last_report_sent);
+        let rtt = {
+            let now = NtpTimestamp::from_fixed_u32(NtpTimestamp::from_instant(now).to_fixed_u32());
+            let lsr = NtpTimestamp::from_fixed_u32(report_block.last_sender_report_timestamp());
             let dlsr = NtpTimestamp::from_fixed_u32(
                 report_block.delay_since_last_sender_report_timestamp(),
             );
 
-            let rtt = now - lsr - dlsr;
-
-            rtt.to_std_duration()
-        } else {
-            None
+            now - lsr - dlsr
         };
 
         self.stats.remote = Some(RtpOutboundRemoteStats {
@@ -111,7 +107,7 @@ impl RtpOutboundStream {
             jitter: Duration::from_secs_f32(
                 report_block.interarrival_jitter() as f32 / self.queue.clock_rate,
             ),
-            rtt,
+            rtt: rtt.to_std_duration(),
         });
     }
 

@@ -14,6 +14,7 @@ use rtp::{
     RtpPacket, Ssrc,
     rtcp_types::{Compound, Fir, Nack, Packet as RtcpPacket, Pli, RtcpPacketParser, Twcc},
 };
+use smallvec::SmallVec;
 use ssrc_hasher::SsrcHasher;
 use std::{
     collections::HashMap,
@@ -28,7 +29,8 @@ mod ssrc_hasher;
 mod twcc;
 
 pub use inbound::{
-    RtpInboundRemoteStats, RtpInboundStats, RtpInboundStream, RtpInboundStreamEvent,
+    RtpInboundPacket, RtpInboundRemoteStats, RtpInboundStats, RtpInboundStream,
+    RtpInboundStreamEvent,
 };
 pub use outbound::{
     RtpOutboundRemoteStats, RtpOutboundStats, RtpOutboundStream, RtpOutboundStreamEvent,
@@ -356,18 +358,17 @@ impl RtpSession {
 
             if let Some(event) = rx.poll(now) {
                 match event {
-                    RtpInboundStreamEvent::ReceiveRtpPacket {
-                        received_at,
-                        rtp_packet,
-                    } => {
+                    RtpInboundStreamEvent::ReceiveRtpPackets(packets) => {
                         // If the packet has a received_at timestamp its not a retransmission, pass it to twcc when set
-                        if let Some(twcc_rx) = &mut self.twcc_rx
-                            && let Some(received_at) = received_at
-                        {
-                            twcc_rx.receive_packet(received_at, &rtp_packet);
+                        if let Some(twcc_rx) = &mut self.twcc_rx {
+                            for packet in &packets {
+                                if let Some(received_at) = packet.received_at {
+                                    twcc_rx.receive_packet(received_at, &packet.rtp_packet);
+                                }
+                            }
                         }
 
-                        return Some(RtpSessionPollEvent::ReceiveRtp(rtp_packet));
+                        return Some(RtpSessionPollEvent::ReceiveRtp(packets));
                     }
                 }
             }
@@ -379,7 +380,7 @@ impl RtpSession {
 
 /// Event returned by [`RtpSession::poll`]
 pub enum RtpSessionPollEvent {
-    ReceiveRtp(RtpPacket),
+    ReceiveRtp(SmallVec<[RtpInboundPacket; 1]>),
     SendRtp(RtpPacket),
     SendRtcp(Vec<u8>),
 }

@@ -1,4 +1,5 @@
 use crate::{
+    rtp_session::RtpInboundPacket,
     rtp_transport::TransportConnectionState,
     sdp::{
         TransportId,
@@ -7,8 +8,8 @@ use crate::{
     },
 };
 use ice::{Component, IceConnectionState, IceGatheringState};
-use rtp::RtpPacket;
 use sdp_types::Direction;
+use smallvec::SmallVec;
 use std::{
     borrow::Cow,
     net::{IpAddr, SocketAddr},
@@ -136,7 +137,7 @@ pub enum SdpSessionEvent {
     /// Receive RTP on a track
     ReceiveRTP {
         media_id: MediaId,
-        rtp_packet: RtpPacket,
+        packets: SmallVec<[RtpInboundPacket; 1]>,
     },
 
     /// Receive a Picture Loss Indication for the given media

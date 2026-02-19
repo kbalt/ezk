@@ -238,14 +238,13 @@ impl MediaBackend for RtcMediaBackend {
                         .or_insert_with(|| watch::channel(event.new).0)
                         .send_replace(event.new);
                 }
-                SdpSessionEvent::ReceiveRTP {
-                    media_id,
-                    rtp_packet,
-                } => {
-                    if let Some(receiver) =
-                        self.media.get(&media_id).and_then(|m| m.receiver.as_ref())
-                    {
-                        let _ = receiver.send(rtp_packet).await;
+                SdpSessionEvent::ReceiveRTP { media_id, packets } => {
+                    for packet in packets {
+                        if let Some(receiver) =
+                            self.media.get(&media_id).and_then(|m| m.receiver.as_ref())
+                        {
+                            let _ = receiver.send(packet.rtp_packet).await;
+                        }
                     }
                 }
                 SdpSessionEvent::IceGatheringState(..) => {}

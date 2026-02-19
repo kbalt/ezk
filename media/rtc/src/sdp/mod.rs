@@ -1655,21 +1655,19 @@ impl SdpSession {
 
             while let Some(event) = rtp_session.poll(now, mtu) {
                 match event {
-                    RtpSessionPollEvent::ReceiveRtp(rtp_packet) => {
-                        let media = self
-                            .media
-                            .iter()
-                            .find(|m| m.streams.rx == Some(rtp_packet.ssrc));
+                    RtpSessionPollEvent::ReceiveRtp(packets) => {
+                        let ssrc = packets[0].rtp_packet.ssrc;
+
+                        let media = self.media.iter().find(|m| m.streams.rx == Some(ssrc));
 
                         if let Some(media) = media {
                             self.events.push_back(SdpSessionEvent::ReceiveRTP {
                                 media_id: media.id,
-                                rtp_packet,
+                                packets,
                             });
                         } else {
                             log::warn!(
-                                "Failed to find media for received RTP packet ssrc={:?}",
-                                rtp_packet.ssrc
+                                "Failed to find media for received RTP packet ssrc={ssrc:?}"
                             );
                         }
                     }

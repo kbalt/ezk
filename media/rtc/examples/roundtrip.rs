@@ -136,7 +136,7 @@ fn handle_event(io: &mut TokioIoState, event: SdpSessionEvent) {
         }
         SdpSessionEvent::ReceiveRTP {
             media_id: _,
-            rtp_packet: _,
+            packets: _,
         } => {}
         SdpSessionEvent::ReceivePictureLossIndication { .. } => {}
         SdpSessionEvent::ReceiveFullIntraRefresh { .. } => {}

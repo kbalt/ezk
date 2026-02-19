@@ -5,7 +5,7 @@ use std::{
 
 use ezk_rtc::{
     Mtu, OpenSslContext,
-    rtp_session::SendRtpPacket,
+    rtp_session::{RtpInboundPacket, SendRtpPacket},
     sdp::{
         BundlePolicy, Codec, Codecs, LocalMediaId, RtcpMuxPolicy, SdpSession, SdpSessionConfig,
         SdpSessionEvent, TransportType,
@@ -105,21 +105,25 @@ fn handle_event(
         } => {
             io.send(transport_id, component, data, source, target);
         }
-        SdpSessionEvent::ReceiveRTP {
-            media_id,
-            rtp_packet,
-        } => {
-            let timestamp = Duration::from_secs_f64(rtp_packet.timestamp.0 as f64 / 90_000.0);
+        SdpSessionEvent::ReceiveRTP { media_id, packets } => {
+            for RtpInboundPacket {
+                received_at: _,
+                media_time: _,
+                rtp_packet,
+            } in packets
+            {
+                let timestamp = Duration::from_secs_f64(rtp_packet.timestamp.0 as f64 / 90_000.0);
 
-            let rtp_time = base_time + timestamp;
+                let rtp_time = base_time + timestamp;
 
-            let mut outbound_media = sdp_session.outbound_media(media_id).unwrap();
+                let mut outbound_media = sdp_session.outbound_media(media_id).unwrap();
 
-            outbound_media.send_rtp(
-                SendRtpPacket::new(rtp_time, rtp_packet.pt, rtp_packet.payload)
-                    .marker(rtp_packet.marker)
-                    .send_at(base_time),
-            );
+                outbound_media.send_rtp(
+                    SendRtpPacket::new(rtp_time, rtp_packet.pt, rtp_packet.payload)
+                        .marker(rtp_packet.marker)
+                        .send_at(base_time),
+                );
+            }
         }
         SdpSessionEvent::ReceivePictureLossIndication { .. } => {}
         SdpSessionEvent::ReceiveFullIntraRefresh { .. } => {}
