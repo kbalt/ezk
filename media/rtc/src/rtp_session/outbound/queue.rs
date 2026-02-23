@@ -207,14 +207,21 @@ impl OutboundQueue {
     }
 
     pub(crate) fn timeout(&self, now: Instant) -> Option<Duration> {
-        Some(
-            self.queue
-                .first_key_value()?
-                .0
-                .send_at
-                .checked_duration_since(now)
-                .unwrap_or_default(),
-        )
+        if let Some(rtx) = &self.rtx
+            && !rtx.retransmit_queue.is_empty()
+        {
+            return Some(Duration::ZERO);
+        }
+
+        let timeout = self
+            .queue
+            .first_key_value()?
+            .0
+            .send_at
+            .checked_duration_since(now)
+            .unwrap_or_default();
+
+        Some(timeout)
     }
 
     pub(crate) fn handle_nack(&mut self, entries: impl Iterator<Item = u16>) {
