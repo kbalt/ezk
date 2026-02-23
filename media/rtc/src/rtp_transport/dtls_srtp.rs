@@ -1,15 +1,18 @@
+use crate::{Mtu, OpenSslContext};
 use openssl::{
     hash::MessageDigest,
     ssl::{ErrorCode, Ssl, SslStream, SslVerifyMode},
 };
 use srtp::{DtlsSrtpPolicies, SrtpError, SrtpFromSslError, SrtpSession};
 use std::{
+    cmp,
     collections::VecDeque,
     io::{self, Cursor, Read, Write},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
-use crate::{Mtu, OpenSslContext};
+const DTLS_INITIAL_TIMEOUT: Duration = Duration::from_millis(100);
+const DTLS_MAX_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[derive(Debug, thiserror::Error)]
 pub enum DtlsSrtpCreateError {
@@ -51,6 +54,10 @@ pub struct RtpDtlsSrtpTransport {
     stream: SslStream<IoQueue>,
     setup: DtlsSetup,
     state: DtlsState,
+
+    /// When to retransmit DTLS packets during the initial handshake
+    retransmit_at: Option<Instant>,
+    next_retransmit_delta: Duration,
 }
 
 impl RtpDtlsSrtpTransport {
@@ -91,27 +98,31 @@ impl RtpDtlsSrtpTransport {
             },
         );
 
+        match setup {
+            DtlsSetup::Accept => ssl.set_accept_state(),
+            DtlsSetup::Connect => ssl.set_connect_state(),
+        }
+
         let stream = SslStream::new(
             ssl,
             IoQueue {
-                to_read: None,
+                to_read: VecDeque::new(),
+                current: None,
                 out: VecDeque::new(),
             },
         )
         .map_err(DtlsSrtpCreateError::NewSslStream)?;
 
-        let mut this = RtpDtlsSrtpTransport {
+        let this = RtpDtlsSrtpTransport {
             stream,
             setup,
             state: match setup {
                 DtlsSetup::Accept => DtlsState::Accepting,
                 DtlsSetup::Connect => DtlsState::Connecting,
             },
+            retransmit_at: None,
+            next_retransmit_delta: DTLS_INITIAL_TIMEOUT,
         };
-
-        // Put initial handshake into the IoQueue
-        this.handshake()
-            .expect("First call to handshake must not fail");
 
         Ok(this)
     }
@@ -128,54 +139,100 @@ impl RtpDtlsSrtpTransport {
         &mut self.state
     }
 
-    pub(crate) fn timeout(&self) -> Option<Duration> {
-        match self.state {
-            DtlsState::Accepting => Some(Duration::from_millis(100)),
-            DtlsState::Connecting => Some(Duration::from_millis(100)),
-            DtlsState::Connected { .. } => None,
-            DtlsState::Failed => None,
+    pub(crate) fn timeout(&self, now: Instant) -> Option<Duration> {
+        self.retransmit_at
+            .map(|deadline| deadline.checked_duration_since(now).unwrap_or_default())
+    }
+
+    pub(crate) fn receive(
+        &mut self,
+        now: Instant,
+        data: Vec<u8>,
+    ) -> Result<(), DtlsHandshakeError> {
+        self.stream.get_mut().to_read.push_back(data);
+        self.next_retransmit_delta = DTLS_INITIAL_TIMEOUT;
+        self.do_poll(now)
+    }
+
+    pub(crate) fn poll(&mut self, now: Instant) -> Result<(), DtlsHandshakeError> {
+        if self.retransmit_at.is_none()
+            && let DtlsState::Connecting | DtlsState::Accepting = &self.state
+        {
+            // First poll call, set initial retransmit timeout
+            //
+            // do_poll must not set the timeout if it is `None`, since `receive` may be called before
+            // the ICE connection is established from our POV, causing the timeout to be wrong once
+            // the DTLS setup should begin.
+            self.retransmit_at = Some(now + DTLS_INITIAL_TIMEOUT);
+            return self.do_poll(now);
         }
+
+        // Only when there's a timeout poll the dtls session, after handshake this transport doesn't do anything anymore, keys have been exchanged
+        let retransmit_at = self.retransmit_at.is_some_and(|deadline| deadline <= now);
+
+        if retransmit_at {
+            self.do_poll(now)?;
+        }
+
+        Ok(())
     }
 
-    pub(crate) fn receive(&mut self, data: Vec<u8>) {
-        assert!(self.stream.get_mut().to_read.is_none());
-        self.stream.get_mut().to_read = Some(Cursor::new(data));
-    }
-
-    pub(crate) fn handshake(&mut self) -> Result<(), DtlsHandshakeError> {
+    fn do_poll(&mut self, now: Instant) -> Result<(), DtlsHandshakeError> {
         let result = match self.state {
-            DtlsState::Connecting => self.stream.connect(),
-            DtlsState::Accepting => self.stream.accept(),
-            DtlsState::Connected { .. } => match self.setup {
-                DtlsSetup::Accept => self.stream.accept(),
-                DtlsSetup::Connect => self.stream.connect(),
-            },
-            DtlsState::Failed => {
+            DtlsState::Connecting => self.stream.do_handshake(),
+            DtlsState::Accepting => self.stream.do_handshake(),
+            DtlsState::Connected { .. } => {
+                // Poll DTLS state machine
+                while let Ok(1..) = self.stream.read(&mut [0]) {}
                 return Ok(());
             }
+            DtlsState::Failed => return Ok(()),
         };
 
         if let Err(e) = result {
             if e.code() == ErrorCode::WANT_READ {
+                // Set timeout only if it has one and it has elapsed. See comment in `poll`
+                let retransmit_at = self.retransmit_at.is_some_and(|deadline| deadline <= now);
+                if retransmit_at {
+                    self.bump_retransmit_at(now);
+                }
                 return Ok(());
             } else {
+                self.retransmit_at = None;
                 self.state = DtlsState::Failed;
                 return Err(DtlsHandshakeError::OpenSsl(e));
             }
         }
 
-        if matches!(self.state, DtlsState::Connected { .. }) {
-            Ok(())
-        } else {
-            let DtlsSrtpPolicies { inbound, outbound } =
-                DtlsSrtpPolicies::from_ssl(self.stream.ssl())?;
-
-            self.state = DtlsState::Connected {
-                inbound: SrtpSession::new(vec![inbound])?,
-                outbound: SrtpSession::new(vec![outbound])?,
+        let DtlsSrtpPolicies { inbound, outbound } =
+            match DtlsSrtpPolicies::from_ssl(self.stream.ssl()) {
+                Ok(policies) => policies,
+                Err(e) => {
+                    self.retransmit_at = None;
+                    self.state = DtlsState::Failed;
+                    return Err(DtlsHandshakeError::SrtpFromSsl(e));
+                }
             };
 
-            Ok(())
+        self.state = DtlsState::Connected {
+            inbound: SrtpSession::new(vec![inbound])?,
+            outbound: SrtpSession::new(vec![outbound])?,
+        };
+
+        self.retransmit_at = None;
+
+        Ok(())
+    }
+
+    fn bump_retransmit_at(&mut self, now: Instant) {
+        if matches!(self.state, DtlsState::Connecting | DtlsState::Accepting) {
+            self.retransmit_at = Some(now + self.next_retransmit_delta);
+            self.next_retransmit_delta = cmp::min(
+                self.next_retransmit_delta.saturating_mul(2),
+                DTLS_MAX_TIMEOUT,
+            );
+        } else {
+            self.retransmit_at = None;
         }
     }
 
@@ -185,22 +242,27 @@ impl RtpDtlsSrtpTransport {
 }
 
 struct IoQueue {
-    to_read: Option<Cursor<Vec<u8>>>,
+    to_read: VecDeque<Vec<u8>>,
+    current: Option<Cursor<Vec<u8>>>,
     out: VecDeque<Vec<u8>>,
 }
 
 impl Read for IoQueue {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let Some(to_read) = &mut self.to_read else {
+        if self.to_read.is_empty() && self.current.is_none() {
             return Err(io::ErrorKind::WouldBlock.into());
-        };
+        }
+
+        let to_read = self
+            .current
+            .get_or_insert_with(|| Cursor::new(self.to_read.pop_front().unwrap()));
 
         let result = to_read.read(buf)?;
 
         let position = usize::try_from(to_read.position()).expect("position must fit into usize");
 
         if position == to_read.get_ref().len() {
-            self.to_read = None;
+            self.current = None;
         }
 
         Ok(result)

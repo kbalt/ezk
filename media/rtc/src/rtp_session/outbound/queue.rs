@@ -1,10 +1,10 @@
 use crate::rtp_session::outbound::RtpOutboundStreamEvent;
 
 use super::SendRtpPacket;
-use bytes::{BufMut, Bytes, BytesMut};
 use crate::rtp::{
     ExtendedRtpTimestamp, ExtendedSequenceNumber, RtpExtensions, RtpPacket, RtpTimestamp, Ssrc,
 };
+use bytes::{BufMut, Bytes, BytesMut};
 use std::{
     collections::{BTreeMap, VecDeque},
     time::{Duration, Instant},
@@ -207,14 +207,21 @@ impl OutboundQueue {
     }
 
     pub(crate) fn timeout(&self, now: Instant) -> Option<Duration> {
-        Some(
-            self.queue
-                .first_key_value()?
-                .0
-                .send_at
-                .checked_duration_since(now)
-                .unwrap_or_default(),
-        )
+        if let Some(rtx) = &self.rtx
+            && !rtx.retransmit_queue.is_empty()
+        {
+            return Some(Duration::ZERO);
+        }
+
+        let timeout = self
+            .queue
+            .first_key_value()?
+            .0
+            .send_at
+            .checked_duration_since(now)
+            .unwrap_or_default();
+
+        Some(timeout)
     }
 
     pub(crate) fn handle_nack(&mut self, entries: impl Iterator<Item = u16>) {
@@ -241,8 +248,8 @@ impl OutboundQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::Bytes;
     use crate::rtp::{RtpTimestamp, SequenceNumber};
+    use bytes::Bytes;
 
     fn packet(media_time: Instant, pt: u8) -> SendRtpPacket {
         SendRtpPacket::new(media_time, pt, Bytes::new())

@@ -58,7 +58,7 @@ impl RtpInboundStream {
     ) -> Self {
         RtpInboundStream {
             ssrc,
-            queue: InboundQueue::new(pt, ssrc, clock_rate),
+            queue: InboundQueue::new(pt, ssrc, clock_rate, emit_nack),
             report_interval,
             last_report_sent: None,
             media_time_ref: None,
@@ -243,8 +243,8 @@ impl RtpInboundStream {
     }
 
     /// Hand off a RTX (retransmission) rtp packet to the RTP receive stream
-    pub fn receive_rtx(&mut self, packet: RtpPacket) {
-        self.queue.push_rtx(packet)
+    pub fn receive_rtx(&mut self, now: Instant, packet: RtpPacket) {
+        self.queue.push_rtx(now, packet)
     }
 
     /// Check for a RTP packet that is ready to be received
@@ -288,13 +288,10 @@ impl RtpInboundStream {
         RtpInboundStats {
             packets_received: self.queue.received,
             bytes_received: self.queue.received_bytes,
-            rtx_packets_received_in_time: self.queue.rtx_received_in_time,
-            rtx_packets_received_too_late: self.queue.rtx_received_too_late,
-            rtx_packets_received_redundant: self.queue.rtx_received_redundant,
-            rtx_bytes_received: self.queue.rtx_bytes_received,
             packets_lost: self.queue.lost,
             loss: self.packet_loss(),
             jitter: Duration::from_secs_f64(self.queue.jitter / self.queue.clock_rate as f64),
+            rtx: self.queue.rtx_stats(),
             remote: self.remote_stats,
         }
     }
