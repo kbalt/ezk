@@ -173,10 +173,17 @@ struct CandidatePair {
     state: CandidatePairState,
     component: Component,
 
-    /// Nominated by the peer
-    received_use_candidate: bool,
-    /// Nominated by us
-    nominated: bool,
+    nomination: CandidatePairNomination,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CandidatePairNomination {
+    /// Not nominated
+    None,
+    /// Sent off nominatino STUN request with use-candidiate attribute
+    Nominated,
+    /// Candidate is nominated as used
+    Selected,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -359,7 +366,7 @@ impl IceAgent {
             .find(|pair| {
                 pair.component == component
                     && pair.state == CandidatePairState::Succeeded
-                    && pair.nominated
+                    && pair.nomination == CandidatePairNomination::Selected
             })
             .map(|pair| {
                 (
@@ -555,8 +562,11 @@ impl IceAgent {
             priority,
             state: CandidatePairState::Waiting,
             component: local_candidate.component,
-            received_use_candidate,
-            nominated: false,
+            nomination: if received_use_candidate {
+                CandidatePairNomination::Selected
+            } else {
+                CandidatePairNomination::None
+            },
         });
         pairs.sort_unstable_by_key(|p| p.priority);
     }
@@ -584,7 +594,7 @@ impl IceAgent {
             }
 
             // Don't prune nominated candidates
-            if pair.nominated {
+            if pair.nomination != CandidatePairNomination::None {
                 continue;
             }
 
@@ -712,16 +722,18 @@ impl IceAgent {
 
         if pkt.source == *target || pkt.destination.ip() == *source {
             log::debug!(
-                "got success response for pair {} nominated={}",
+                "got success response for pair {} nomination={:?}",
                 DisplayPair(
                     &self.local_candidates[pair.local],
                     &self.remote_candidates[pair.remote],
                 ),
-                pair.nominated,
+                pair.nomination,
             );
 
             // This request was a nomination for this pair
-            if pair.nominated {
+            if pair.nomination == CandidatePairNomination::Nominated {
+                pair.nomination = CandidatePairNomination::Selected;
+
                 let local_candidate = &self.local_candidates[pair.local];
                 let remote_candidate = &self.remote_candidates[pair.remote];
 
@@ -751,7 +763,7 @@ impl IceAgent {
             // destination IP address and port to which the Binding request was sent, and the destination IP address and
             // port of the response MUST be equal to the source IP address and port from which the Binding request was sent.
             // If the addresses are not symmetric, the agent MUST set the candidate pair state to Failed.
-            pair.nominated = false;
+            pair.nomination = CandidatePairNomination::None;
             pair.state = CandidatePairState::Failed;
         }
 
@@ -978,7 +990,10 @@ impl IceAgent {
                 .expect("just inserted pair")
         };
 
-        pair.received_use_candidate = use_candidate;
+        if use_candidate && !self.is_controlling {
+            pair.nomination = CandidatePairNomination::Selected;
+        }
+
         log::trace!(
             "got connectivity check for pair {}",
             DisplayPair(
@@ -1079,7 +1094,7 @@ impl IceAgent {
                 &self.local_candidates[pair.local],
                 self.is_controlling,
                 self.control_tie_breaker,
-                pair.nominated,
+                pair.nomination == CandidatePairNomination::Nominated,
             );
 
             let source = self.local_candidates[pair.local].base.ip();
@@ -1132,7 +1147,7 @@ impl IceAgent {
                 );
 
                 pair.state = CandidatePairState::Failed;
-                pair.nominated = false;
+                pair.nomination = CandidatePairNomination::None;
                 continue;
             }
 
@@ -1194,7 +1209,9 @@ impl IceAgent {
         let mut rtcp_in_progress = false;
 
         for pair in &self.pairs {
-            if pair.nominated && matches!(pair.state, CandidatePairState::Succeeded) {
+            if pair.nomination == CandidatePairNomination::Selected
+                && matches!(pair.state, CandidatePairState::Succeeded)
+            {
                 match pair.component {
                     Component::Rtp => has_rtp_nomination = true,
                     Component::Rtcp => has_rtcp_nomination = true,
@@ -1297,7 +1314,7 @@ impl IceAgent {
                 )
             );
 
-            pair.nominated = true;
+            pair.nomination = CandidatePairNomination::Nominated;
 
             // Make another binding request with use-candidate as soon as possible, by pushing it to the front of the queue
             self.triggered_check_queue
@@ -1311,7 +1328,7 @@ impl IceAgent {
                 .iter_mut()
                 .filter(|p| {
                     p.component == component
-                        && p.received_use_candidate
+                        && p.nomination == CandidatePairNomination::Selected
                         && matches!(p.state, CandidatePairState::Succeeded)
                 })
                 .max_by_key(|p| p.priority);
@@ -1328,8 +1345,6 @@ impl IceAgent {
                     &self.remote_candidates[pair.remote]
                 )
             );
-
-            pair.nominated = true;
 
             self.events.push_back(IceEvent::DiscoveredAddr {
                 component,
@@ -1350,7 +1365,7 @@ impl IceAgent {
     fn component_has_nominated_valid_pair(&self, component: Component) -> bool {
         self.pairs.iter().any(|p| {
             p.component == component
-                && p.nominated
+                && p.nomination == CandidatePairNomination::Selected
                 && matches!(
                     p.state,
                     CandidatePairState::InProgress { .. } | CandidatePairState::Succeeded
