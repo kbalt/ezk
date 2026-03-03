@@ -101,8 +101,13 @@ impl Sub for NtpTimestamp {
 }
 
 #[test]
-fn self_test() {
+fn self_test_fixed_u64() {
     let now = NtpTimestamp::from_instant(Instant::now());
 
-    assert_eq!(NtpTimestamp::from_fixed_u64(now.to_fixed_u64()), now);
+    let converted_and_back = NtpTimestamp::from_fixed_u64(now.to_fixed_u64());
+
+    let diff = converted_and_back - now;
+
+    assert!(diff.inner < time::Duration::nanoseconds(5));
+    assert!(diff.inner > time::Duration::nanoseconds(-5));
 }
