@@ -146,8 +146,6 @@ impl TokioIoState {
     pub fn poll(&mut self, cx: &mut Context<'_>, session: &mut SdpSession) -> Poll<io::Result<()>> {
         let now = Instant::now();
 
-        let mut received = false;
-
         // Poll sockets
         for ((transport_id, component), socket) in self.sockets.iter_mut() {
             socket.send_pending(cx);
@@ -175,10 +173,10 @@ impl TokioIoState {
                             component: *component,
                         };
 
-                        session.receive(now, *transport_id, pkt);
+                        if rand::random_bool(0.7) {
+                            session.receive(now, *transport_id, pkt);
+                        }
                     }
-
-                    received = true;
                 }
             }
         }
@@ -192,24 +190,17 @@ impl TokioIoState {
             return Poll::Pending;
         }
 
-        let mut polled = false;
+        let now = Instant::now();
+        session.poll(now);
+        self.update_sleep(session, now, false);
 
-        // Poll sleep until it returns pending, to register the sleep with the context
-        while let Some(sleep) = &mut self.sleep
+        // Poll sleep at least once to register it with the context
+        while let Some(sleep) = self.sleep.as_mut()
             && sleep.as_mut().poll(cx).is_ready()
         {
+            let now = Instant::now();
             session.poll(now);
-
-            self.update_sleep(session, now);
-
-            polled = true;
-        }
-
-        // When nothing was received, and sleep also didn't cause a poll, poll once anyway
-        // since this migth be the first poll after handling a session event
-        if !received && !polled {
-            session.poll(now);
-            self.update_sleep(session, now);
+            self.update_sleep(session, now, false);
         }
 
         if session.has_events() {
@@ -219,20 +210,22 @@ impl TokioIoState {
         }
     }
 
-    fn update_sleep(&mut self, session: &mut SdpSession, now: Instant) {
+    fn update_sleep(&mut self, session: &mut SdpSession, now: Instant, allow_zero: bool) {
         match session.timeout(now) {
             Some(duration) => {
-                debug_assert!(
-                    duration != Duration::ZERO,
-                    "SdpSession::timeout must not return Duration::ZERO after SdpSession::poll"
-                );
+                if !allow_zero {
+                    debug_assert!(
+                        duration != Duration::ZERO,
+                        "SdpSession::timeout must not return Duration::ZERO after SdpSession::poll"
+                    );
+                }
 
-                let deadline = tokio::time::Instant::from(now + duration);
+                let deadline = (now + duration).into();
 
                 if let Some(sleep) = &mut self.sleep {
                     sleep.as_mut().reset(deadline);
                 } else {
-                    self.sleep = Some(Box::pin(sleep_until((now + duration).into())))
+                    self.sleep = Some(Box::pin(sleep_until(deadline)))
                 }
             }
             None => self.sleep = None,

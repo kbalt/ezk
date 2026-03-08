@@ -115,7 +115,6 @@ impl RtpSession {
             None
         };
 
-        // TODO: correct RTCP interval
         let stream = RtpOutboundStream::new(ssrc, clock_rate, Duration::from_secs(1), rtx);
 
         self.tx.entry(ssrc).insert_entry(stream).into_mut()
@@ -129,7 +128,6 @@ impl RtpSession {
         clock_rate: u32,
         emit_nack: bool,
     ) -> &mut RtpInboundStream {
-        // TODO: correct RTCP interval
         let stream = RtpInboundStream::new(pt, ssrc, clock_rate, Duration::from_secs(1), emit_nack);
 
         self.rx

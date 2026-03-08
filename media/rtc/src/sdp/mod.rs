@@ -1819,7 +1819,7 @@ impl SdpSession {
                                 .rx_stream(ssrc)
                                 .unwrap()
                                 .expect_original()
-                                .receive_rtx(rtp_packet);
+                                .receive_rtx(now, rtp_packet);
                         }
                     }
                 } else {
@@ -1919,8 +1919,9 @@ impl SdpSession {
             && let Some(original_ssrc) = media.streams.rx
         {
             // The SSRC matches the rtx payload type for the negotiated codec, associate to existing inbound ssrc
-            let rx_stream = rtp_session.new_rx_rtx_stream(rtp_packet.ssrc, original_ssrc);
-            rx_stream.receive_rtx(rtp_packet);
+            rtp_session
+                .new_rx_rtx_stream(rtp_packet.ssrc, original_ssrc)
+                .receive_rtx(now, rtp_packet);
         }
     }
 
