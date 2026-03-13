@@ -275,7 +275,7 @@ pub fn openh264_decoder_fmtp(api: &openh264::OpenH264API) -> H264FmtpOptions {
         packetization_mode: H264PacketizationMode::NonInterleavedMode,
         max_mbps: Some(capability.iMaxMbps as u32),
         max_fs: Some(capability.iMaxFs as u32),
-        max_cbp: Some(capability.iMaxCpb as u32),
+        max_cpb: Some(capability.iMaxCpb as u32),
         max_dpb: Some(capability.iMaxDpb as u32),
         max_br: Some(capability.iMaxBr as u32),
         redundant_pic_cap: capability.bRedPicCap,

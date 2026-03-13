@@ -39,7 +39,7 @@ pub struct H264FmtpOptions {
     /// Maximum frame size in macroblocks
     pub max_fs: Option<u32>,
     /// Maximum codec picture buffer size
-    pub max_cbp: Option<u32>,
+    pub max_cpb: Option<u32>,
     /// Maximum decoded picture buffer size in frames
     pub max_dpb: Option<u32>,
     /// Maximum video bitrate in kilobits per second
@@ -170,7 +170,7 @@ impl FromStr for H264FmtpOptions {
                 }
                 "max-mbps" => options.max_mbps = Some(parse_u32(value)?),
                 "max-fs" => options.max_fs = Some(parse_u32(value)?),
-                "max-cbp" => options.max_cbp = Some(parse_u32(value)?),
+                "max-cbp" => options.max_cpb = Some(parse_u32(value)?),
                 "max-dpb" => options.max_dpb = Some(parse_u32(value)?),
                 "max-br" => options.max_br = Some(parse_u32(value)?),
                 "redundant-pic-cap" => options.redundant_pic_cap = value == "1",
@@ -190,7 +190,7 @@ impl fmt::Display for H264FmtpOptions {
             packetization_mode,
             max_mbps,
             max_fs,
-            max_cbp,
+            max_cpb,
             max_dpb,
             max_br,
             redundant_pic_cap,
@@ -212,12 +212,12 @@ impl fmt::Display for H264FmtpOptions {
             write!(f, ";max-fs={max_fs}")?;
         }
 
-        if let Some(max_cbp) = max_cbp {
-            write!(f, ";max-cbp={max_cbp}")?;
+        if let Some(max_cpb) = max_cpb {
+            write!(f, ";max-cpb={max_cpb}")?;
         }
 
         if let Some(max_dpb) = max_dpb {
-            write!(f, ";max-dbp={max_dpb}")?;
+            write!(f, ";max-dpb={max_dpb}")?;
         }
 
         if let Some(max_br) = max_br {
@@ -240,7 +240,7 @@ fn no_panics() {
         packetization_mode: H264PacketizationMode::SingleNAL,
         max_mbps: Some(u32::MAX),
         max_fs: Some(u32::MAX),
-        max_cbp: Some(u32::MAX),
+        max_cpb: Some(u32::MAX),
         max_dpb: Some(u32::MAX),
         max_br: Some(u32::MAX),
         redundant_pic_cap: false,
@@ -265,7 +265,7 @@ fn no_divide_by_zero() {
         packetization_mode: H264PacketizationMode::SingleNAL,
         max_mbps: Some(0),
         max_fs: Some(0),
-        max_cbp: Some(0),
+        max_cpb: Some(0),
         max_dpb: Some(0),
         max_br: Some(0),
         redundant_pic_cap: false,
