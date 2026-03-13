@@ -173,9 +173,7 @@ impl TokioIoState {
                             component: *component,
                         };
 
-                        if rand::random_bool(0.7) {
-                            session.receive(now, *transport_id, pkt);
-                        }
+                        session.receive(now, *transport_id, pkt);
                     }
                 }
             }

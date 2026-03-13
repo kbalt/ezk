@@ -65,7 +65,14 @@ pub enum RxStream {
 }
 
 impl RxStream {
-    pub fn expect_original(&mut self) -> &mut RtpInboundStream {
+    pub fn expect_original(&self) -> &RtpInboundStream {
+        match self {
+            RxStream::Original(stream) => stream,
+            RxStream::Rtx(..) => panic!("expected original stream"),
+        }
+    }
+
+    pub fn expect_original_mut(&mut self) -> &mut RtpInboundStream {
         match self {
             RxStream::Original(stream) => stream,
             RxStream::Rtx(..) => panic!("expected original stream"),
@@ -132,23 +139,36 @@ impl RtpSession {
             .entry(ssrc)
             .insert_entry(RxStream::Original(stream))
             .into_mut()
-            .expect_original()
+            .expect_original_mut()
     }
 
     /// Create new inbound RTP stream from the given SSRC and parameters
     pub fn new_rx_rtx_stream(&mut self, ssrc: Ssrc, original_ssrc: Ssrc) -> &mut RtpInboundStream {
         self.rx.insert(ssrc, RxStream::Rtx(original_ssrc));
-        self.rx.get_mut(&original_ssrc).unwrap().expect_original()
+        self.rx
+            .get_mut(&original_ssrc)
+            .unwrap()
+            .expect_original_mut()
     }
 
     /// Access the RTP send stream identified by the given SSRC
-    pub fn tx_stream(&mut self, ssrc: Ssrc) -> Option<&mut RtpOutboundStream> {
+    pub fn tx_stream_mut(&mut self, ssrc: Ssrc) -> Option<&mut RtpOutboundStream> {
         self.tx.get_mut(&ssrc)
     }
 
+    /// Access the RTP send stream identified by the given SSRC
+    pub fn tx_stream(&self, ssrc: Ssrc) -> Option<&RtpOutboundStream> {
+        self.tx.get(&ssrc)
+    }
+
     /// Access the RTP receive stream identified by the remote-ssrc
-    pub fn rx_stream(&mut self, ssrc: Ssrc) -> Option<&mut RxStream> {
+    pub fn rx_stream_mut(&mut self, ssrc: Ssrc) -> Option<&mut RxStream> {
         self.rx.get_mut(&ssrc)
+    }
+
+    /// Access the RTP receive stream identified by the remote-ssrc
+    pub fn rx_stream(&self, ssrc: Ssrc) -> Option<&RxStream> {
+        self.rx.get(&ssrc)
     }
 
     /// Remove the RTP send stream identified by the given SSRC
@@ -201,7 +221,7 @@ impl RtpSession {
                 }
                 RtcpPacket::Rr(receiver_report) => {
                     for report_block in receiver_report.report_blocks() {
-                        if let Some(tx) = self.tx_stream(Ssrc(report_block.ssrc())) {
+                        if let Some(tx) = self.tx_stream_mut(Ssrc(report_block.ssrc())) {
                             tx.handle_report_block(now, report_block);
                         }
                     }
@@ -210,7 +230,7 @@ impl RtpSession {
                     // TODO: handle SDES
                 }
                 RtcpPacket::Sr(sender_report) => {
-                    if let Some(rx) = self.rx_stream(Ssrc(sender_report.ssrc())) {
+                    if let Some(rx) = self.rx_stream_mut(Ssrc(sender_report.ssrc())) {
                         match rx {
                             RxStream::Original(stream) => {
                                 stream.handle_sender_report(now, &sender_report);
@@ -227,7 +247,7 @@ impl RtpSession {
                     }
 
                     for report_block in sender_report.report_blocks() {
-                        if let Some(tx) = self.tx_stream(Ssrc(report_block.ssrc())) {
+                        if let Some(tx) = self.tx_stream_mut(Ssrc(report_block.ssrc())) {
                             tx.handle_report_block(now, report_block);
                         } else {
                             log::warn!("Unhandled report block for ssrc {}", report_block.ssrc());
@@ -236,7 +256,8 @@ impl RtpSession {
                 }
                 RtcpPacket::TransportFeedback(transport_feedback) => {
                     if let Ok(nack) = transport_feedback.parse_fci::<Nack>() {
-                        if let Some(tx) = self.tx_stream(Ssrc(transport_feedback.media_ssrc())) {
+                        if let Some(tx) = self.tx_stream_mut(Ssrc(transport_feedback.media_ssrc()))
+                        {
                             tx.handle_nack(nack.entries());
                         } else {
                             log::warn!(

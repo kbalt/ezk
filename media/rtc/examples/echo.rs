@@ -1,7 +1,4 @@
-use std::{
-    net::Ipv4Addr,
-    time::{Duration, Instant},
-};
+use std::net::Ipv4Addr;
 
 use ezk_rtc::{
     Mtu, OpenSslContext,
@@ -62,21 +59,14 @@ async fn main() {
 
     println!("SDP Answer:\n{answer}");
 
-    let base_time = Instant::now();
-
     loop {
         while let Ok(event) = io.poll_session(&mut sdp_session).await {
-            handle_event(base_time, &mut io, &mut sdp_session, event);
+            handle_event(&mut io, &mut sdp_session, event);
         }
     }
 }
 
-fn handle_event(
-    base_time: Instant,
-    io: &mut TokioIoState,
-    sdp_session: &mut SdpSession,
-    event: SdpSessionEvent,
-) {
+fn handle_event(io: &mut TokioIoState, sdp_session: &mut SdpSession, event: SdpSessionEvent) {
     match event {
         SdpSessionEvent::MediaAdded(e) => {
             println!("{e:?}");
@@ -106,26 +96,25 @@ fn handle_event(
             io.send(transport_id, component, data, source, target);
         }
         SdpSessionEvent::ReceiveRTP { media_id, packets } => {
+            let mut outbound_media = sdp_session.outbound_media(media_id).unwrap();
+
             for RtpInboundPacket {
                 received_at: _,
-                media_time: _,
+                media_time,
                 rtp_packet,
             } in packets
             {
-                let timestamp = Duration::from_secs_f64(rtp_packet.timestamp.0 as f64 / 90_000.0);
-
-                let rtp_time = base_time + timestamp;
-
-                let mut outbound_media = sdp_session.outbound_media(media_id).unwrap();
-
                 outbound_media.send_rtp(
-                    SendRtpPacket::new(rtp_time, rtp_packet.pt, rtp_packet.payload)
-                        .marker(rtp_packet.marker)
-                        .send_at(base_time),
+                    SendRtpPacket::new(media_time, rtp_packet.pt, rtp_packet.payload)
+                        .marker(rtp_packet.marker),
                 );
             }
         }
-        SdpSessionEvent::ReceivePictureLossIndication { .. } => {}
-        SdpSessionEvent::ReceiveFullIntraRefresh { .. } => {}
+        SdpSessionEvent::ReceivePictureLossIndication { .. } => {
+            println!("pli");
+        }
+        SdpSessionEvent::ReceiveFullIntraRefresh { .. } => {
+            println!("fir");
+        }
     }
 }

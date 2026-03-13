@@ -12,7 +12,7 @@ use std::{
 };
 
 const DTLS_INITIAL_TIMEOUT: Duration = Duration::from_millis(100);
-const DTLS_MAX_TIMEOUT: Duration = Duration::from_millis(500);
+const DTLS_MAX_TIMEOUT: Duration = Duration::from_millis(1000);
 
 #[derive(Debug, thiserror::Error)]
 pub enum DtlsSrtpCreateError {
@@ -109,6 +109,7 @@ impl RtpDtlsSrtpTransport {
                 to_read: VecDeque::new(),
                 current: None,
                 out: VecDeque::new(),
+                mtu: mtu.for_dtls(),
             },
         )
         .map_err(DtlsSrtpCreateError::NewSslStream)?;
@@ -189,6 +190,8 @@ impl RtpDtlsSrtpTransport {
             DtlsState::Failed => return Ok(()),
         };
 
+        log::trace!("do_handshake {}", self.stream.ssl().state_string_long());
+
         if let Err(e) = result {
             if e.code() == ErrorCode::WANT_READ {
                 // Set timeout only if it has one and it has elapsed. See comment in `poll`
@@ -245,6 +248,7 @@ struct IoQueue {
     to_read: VecDeque<Vec<u8>>,
     current: Option<Cursor<Vec<u8>>>,
     out: VecDeque<Vec<u8>>,
+    mtu: usize,
 }
 
 impl Read for IoQueue {
@@ -271,7 +275,15 @@ impl Read for IoQueue {
 
 impl Write for IoQueue {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if let Some(last) = self.out.back_mut()
+            && last.len() + buf.len() <= self.mtu
+        {
+            last.extend_from_slice(buf);
+            return Ok(buf.len());
+        }
+
         self.out.push_back(buf.to_vec());
+
         Ok(buf.len())
     }
 

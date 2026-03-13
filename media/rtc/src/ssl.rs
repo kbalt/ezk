@@ -26,7 +26,7 @@ impl OpenSslContext {
         let (cert, pkey) = make_ca_cert()?;
 
         let mut ctx = SslAcceptor::mozilla_modern(SslMethod::dtls())?;
-        ctx.set_tlsext_use_srtp("SRTP_AES128_CM_SHA1_80:SRTP_AES128_CM_SHA1_32:SRTP_AEAD_AES_128_GCM:SRTP_AEAD_AES_256_GCM")?;
+        ctx.set_tlsext_use_srtp("SRTP_AEAD_AES_256_GCM:SRTP_AEAD_AES_128_GCM:SRTP_AES128_CM_SHA1_80:SRTP_AES128_CM_SHA1_32")?;
         ctx.set_min_proto_version(Some(SslVersion::DTLS1_2))?;
         ctx.set_private_key(&pkey)?;
         ctx.set_certificate(&cert)?;

@@ -101,6 +101,7 @@ impl RtpOutboundStream {
 
         self.stats.remote = Some(RtpOutboundRemoteStats {
             timestamp: now,
+            packets_lost: report_block.cumulative_lost(),
             loss: report_block.fraction_lost() as f32 / 255.0,
             jitter: Duration::from_secs_f32(
                 report_block.interarrival_jitter() as f32 / self.queue.clock_rate,
