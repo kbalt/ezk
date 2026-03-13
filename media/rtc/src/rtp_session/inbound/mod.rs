@@ -21,7 +21,8 @@ pub struct RtpInboundStream {
     queue: InboundQueue,
     report_interval: Duration,
 
-    last_report_sent: Option<(Instant, u64)>,
+    // Timestamp of report, received packets, lost packets (at the time of the report)
+    last_report_sent: Option<(Instant, u64, u64)>,
     media_time_ref: Option<MediaTimeRef>,
 
     remote_stats: Option<RtpInboundRemoteStats>,
@@ -96,7 +97,7 @@ impl RtpInboundStream {
         let report = if self.queue.highest_sequence_number_received().is_some() {
             let report_interval = self
                 .last_report_sent
-                .and_then(|(last_report_sent, _)| {
+                .and_then(|(last_report_sent, _, _)| {
                     (last_report_sent + self.report_interval).checked_duration_since(now)
                 })
                 .unwrap_or_default();
@@ -177,7 +178,7 @@ impl RtpInboundStream {
 
         let report_interval_elapsed = self
             .last_report_sent
-            .is_none_or(|(instant, _)| now > instant + self.report_interval);
+            .is_none_or(|(instant, _, _)| now > instant + self.report_interval);
 
         let make_report = receiver_report_for_feedback || report_interval_elapsed;
 
@@ -212,13 +213,19 @@ impl RtpInboundStream {
 
         reports.add_report_block(report_block);
 
-        self.last_report_sent = Some((now, self.queue.lost));
+        self.last_report_sent = Some((now, self.queue.received, self.queue.lost));
     }
 
     fn packet_loss(&self) -> f32 {
-        let last_lost = self.last_report_sent.map(|(_, lost)| lost).unwrap_or(0);
+        let (last_received, last_lost) = self
+            .last_report_sent
+            .map(|(_, received, lost)| (received, lost))
+            .unwrap_or((0, 0));
+
+        let received_since_last_report = self.queue.received - last_received;
         let lost_since_last_report = self.queue.lost - last_lost;
-        lost_since_last_report as f32 / (self.queue.received + lost_since_last_report) as f32
+
+        lost_since_last_report as f32 / (received_since_last_report) as f32
     }
 
     pub(crate) fn handle_sender_report(&mut self, now: Instant, sender_report: &SenderReport) {
@@ -291,6 +298,7 @@ impl RtpInboundStream {
             packets_lost: self.queue.lost,
             loss: self.packet_loss(),
             jitter: Duration::from_secs_f64(self.queue.jitter / self.queue.clock_rate as f64),
+            queue_size: self.queue.queue_size,
             rtx: self.queue.rtx_stats(),
             remote: self.remote_stats,
         }

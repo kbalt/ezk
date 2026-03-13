@@ -23,6 +23,7 @@ const MAX_ENTRIES: usize = 1024;
 
 /// Maximum queue duration to prevent runaway jitter from inflating the buffer
 const MAX_QUEUE_DURATION: Duration = Duration::from_secs(4);
+const MIN_QUEUE_DURATION: Duration = Duration::from_millis(20);
 
 /// Jitter samples larger than this (in seconds) are discarded as outliers
 /// (e.g. pause/resume, SRTP rekeying, clock discontinuities)
@@ -45,7 +46,7 @@ pub(crate) struct InboundQueue {
     pub(crate) clock_rate: u32,
 
     queue: VecDeque<QueueEntry>,
-    queue_size: Duration,
+    pub(super) queue_size: Duration,
 
     /// Track the last received RTP packet
     last_rtp_received: Option<(Instant, ExtendedRtpTimestamp, ExtendedSequenceNumber)>,
@@ -133,7 +134,6 @@ struct Rtx {
 
 /// Using parts of TCP's retransmission calculation from https://datatracker.ietf.org/doc/html/rfc6298
 /// to find a round trip time by measuring the time between NACK and retransmission reception
-///
 struct RtxRtt {
     /// Smoothed round-trip time
     srtt: Duration,
@@ -241,7 +241,7 @@ impl InboundQueue {
         let recv_delta = (now - last_rtp_instant).as_secs_f64() * self.clock_rate as f64;
 
         // Sj - Si
-        let rtp_ts_delta = (packet.timestamp.0 - last_rtp_timestamp.truncated().0) as f64;
+        let rtp_ts_delta = packet.timestamp.0 as f64 - last_rtp_timestamp.truncated().0 as f64;
 
         // Discard near zero delta values
         //
@@ -261,8 +261,7 @@ impl InboundQueue {
 
         // RTP RFC proposes a gain parameter of 1/16 which doesn't adapt to jitter growing fast enough
         //
-        // Trying out 1/8 for growing jitter and 1/64 for shrinking,
-        // looks more stable and reacts faster to jumps in jitter
+        // Trying out 1/64 to avoid shrinking too fast.
         let alpha = if d > self.jitter { 16.0 } else { 64.0 };
         self.jitter += (d - self.jitter) / alpha;
 
@@ -282,7 +281,7 @@ impl InboundQueue {
             jitter_queue_req
         };
 
-        self.queue_size = queue_size.min(MAX_QUEUE_DURATION);
+        self.queue_size = queue_size.clamp(MIN_QUEUE_DURATION, MAX_QUEUE_DURATION);
     }
 
     fn push_extended(
@@ -292,23 +291,61 @@ impl InboundQueue {
         sequence_number: ExtendedSequenceNumber,
         packet: RtpPacket,
     ) -> PushResult {
-        if let Some(last_sequence_number_returned) = self.last_sequence_number_returned
-            && last_sequence_number_returned >= sequence_number
+        let entry = if let Some(last_sequence_number_returned) = self.last_sequence_number_returned
         {
-            return PushResult::Dropped;
-        }
+            if last_sequence_number_returned >= sequence_number {
+                // Packet is too late
+                return PushResult::Dropped;
+            }
 
-        // front (1 2 3 4 5 6 7 8 9) back
-        let Some(entry) = self.queue.back_mut() else {
-            // queue is empty, insert entry and return
-            self.queue.push_back(QueueEntry::Occupied {
-                received_at: Some(received_at),
-                timestamp,
-                sequence_number,
-                packet,
-            });
+            match self.queue.back_mut() {
+                Some(entry) => entry,
+                None => {
+                    // Queue is empty, but packets have been removed, so find out gap from last_sequence_number_returned and new packet
 
-            return PushResult::Added;
+                    let gap = sequence_number.0 - last_sequence_number_returned.0;
+                    let entry_seq = last_sequence_number_returned;
+
+                    // Ignore the packet if the gap is too large
+                    if gap > MAX_ENTRIES as u64 {
+                        return PushResult::Dropped;
+                    }
+
+                    for i in 1..gap {
+                        let sequence_number = ExtendedSequenceNumber(entry_seq.0 + i);
+
+                        self.queue.push_back(QueueEntry::Vacant {
+                            sequence_number,
+                            detected_at: received_at,
+                            nacked_at: None,
+                        });
+                    }
+
+                    self.queue.push_back(QueueEntry::Occupied {
+                        received_at: Some(received_at),
+                        timestamp,
+                        sequence_number,
+                        packet,
+                    });
+
+                    return PushResult::Added;
+                }
+            }
+        } else {
+            match self.queue.back_mut() {
+                Some(entry) => entry,
+                None => {
+                    // No packets have been removed from the queue yet and its empty, so first packet just push
+                    self.queue.push_back(QueueEntry::Occupied {
+                        received_at: Some(received_at),
+                        timestamp,
+                        sequence_number,
+                        packet,
+                    });
+
+                    return PushResult::Added;
+                }
+            }
         };
 
         match entry.sequence_number().cmp(&sequence_number) {
@@ -521,6 +558,7 @@ impl InboundQueue {
 
         let pop_earliest = now - self.queue_size;
 
+        // Calculate the maximum RTP timestamp which can be removed from the queue
         let max_timestamp = map_instant_to_rtp_timestamp(
             last_rtp_received_instant,
             last_rtp_received_timestamp,
@@ -528,11 +566,22 @@ impl InboundQueue {
             pop_earliest,
         )?;
 
-        let num_vacant = self.queue.iter().position(|e| match e {
+        // Find the oldest occupied entry
+        let (num_vacant, entry) = self.queue.iter().enumerate().find(|(_, e)| match e {
             QueueEntry::Vacant { .. } => false,
-            QueueEntry::Occupied { timestamp, .. } => timestamp.0 <= max_timestamp.0,
+            QueueEntry::Occupied { .. } => true,
         })?;
 
+        // Test the timestamp of the entry against the maximum timestamp and return if it is not old enough
+        let entry_timestamp = match entry {
+            QueueEntry::Vacant { .. } => unreachable!(),
+            QueueEntry::Occupied { timestamp, .. } => timestamp,
+        };
+        if entry_timestamp.0 > max_timestamp.0 {
+            return None;
+        }
+
+        // Handle all lost packets
         for _ in 0..num_vacant {
             let Some(QueueEntry::Vacant {
                 nacked_at,
@@ -582,8 +631,8 @@ impl InboundQueue {
             QueueEntry::Occupied { timestamp, .. } => Some(*timestamp),
         })?;
 
-        let delta = last_rtp_received_timestamp.0 - earliest_timestamp.0;
-        let delta = Duration::from_secs_f64(delta as f64 / self.clock_rate as f64);
+        let delta = last_rtp_received_timestamp.0 as f64 - earliest_timestamp.0 as f64;
+        let delta = Duration::from_secs_f64(delta.max(0.0) / self.clock_rate as f64);
 
         let instant = (last_rtp_received_instant - delta) + self.queue_size;
 

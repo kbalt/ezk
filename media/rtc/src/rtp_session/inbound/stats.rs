@@ -18,6 +18,11 @@ pub struct RtpInboundStats {
     /// An estimate of the statistical variance of the RTP data packet interarrival time
     pub jitter: Duration,
 
+    /// Current size of the inbound queue
+    ///
+    /// Calculated from jitter, rtt & packet loss
+    pub queue_size: Duration,
+
     /// Stats about retransmissions, None if RTX is not used
     pub rtx: Option<RtpInboundRtxStats>,
 
