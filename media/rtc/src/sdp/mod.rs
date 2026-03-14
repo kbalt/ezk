@@ -1331,6 +1331,7 @@ impl SdpSession {
                 ssrc: vec![],
                 setup: None,
                 fingerprint: vec![],
+                imageattr: vec![],
                 attributes: vec![],
             };
 
@@ -1554,6 +1555,7 @@ impl SdpSession {
             ssrc: vec![],
             setup: None,
             fingerprint: vec![],
+            imageattr: vec![],
             attributes: vec![],
         };
 

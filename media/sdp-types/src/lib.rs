@@ -19,7 +19,8 @@ mod time;
 
 pub use attributes::{
     Direction, ExtMap, Fingerprint, FingerprintAlgorithm, Fmtp, Group, IceCandidate, IceOptions,
-    IcePassword, IceUsernameFragment, InvalidCandidateParamError, MsId, Rtcp, RtcpFeedback,
+    IcePassword, IceUsernameFragment, ImageAttr, ImageAttrSampleAspectRatio, ImageAttrSet,
+    ImageAttrSets, ImageAttrXyRange, InvalidCandidateParamError, MsId, Rtcp, RtcpFeedback,
     RtcpFeedbackKind, RtcpFeedbackPt, RtpMap, Setup, SourceAttribute, SrtpCrypto, SrtpFecOrder,
     SrtpKeyingMaterial, SrtpSessionParam, SrtpSuite, Ssrc, UnknownAttribute, UntaggedAddress,
 };

@@ -2,7 +2,7 @@ use crate::connection::Connection;
 use crate::media::Media;
 use crate::{
     Direction, ExtMap, Fingerprint, Fmtp, IceCandidate, IcePassword, IceUsernameFragment,
-    MediaType, MsId, RtcpFeedback, RtpMap, Setup, SrtpCrypto, Ssrc, TransportProtocol,
+    ImageAttr, MediaType, MsId, RtcpFeedback, RtpMap, Setup, SrtpCrypto, Ssrc, TransportProtocol,
     UnknownAttribute,
 };
 use crate::{Rtcp, bandwidth::Bandwidth};
@@ -79,6 +79,9 @@ pub struct MediaDescription {
 
     /// Fingerprint attribute (a=fingerprint)
     pub fingerprint: Vec<Fingerprint>,
+
+    /// Generic Image attributes (a=imageattr)
+    pub imageattr: Vec<ImageAttr>,
 
     /// Additional attributes
     pub attributes: Vec<UnknownAttribute>,
@@ -170,6 +173,10 @@ impl fmt::Display for MediaDescription {
             write!(f, "a=fingerprint:{fingerprint}\r\n")?;
         }
 
+        for imageattr in &self.imageattr {
+            write!(f, "a=imageattr:{imageattr}\r\n")?;
+        }
+
         for attr in &self.attributes {
             write!(f, "{attr}\r\n")?;
         }
@@ -210,6 +217,7 @@ impl MediaDescription {
             ssrc: vec![],
             setup: None,
             fingerprint: vec![],
+            imageattr: vec![],
             attributes: vec![],
         }
     }

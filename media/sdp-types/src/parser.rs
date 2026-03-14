@@ -1,7 +1,7 @@
 use crate::{
     Bandwidth, Connection, Direction, ExtMap, Fingerprint, Fmtp, Group, IceCandidate, IceOptions,
-    IcePassword, IceUsernameFragment, Media, MediaDescription, MsId, Origin, Rtcp, RtcpFeedback,
-    RtpMap, SessionDescription, Setup, SrtpCrypto, Ssrc, Time, UnknownAttribute,
+    IcePassword, IceUsernameFragment, ImageAttr, Media, MediaDescription, MsId, Origin, Rtcp,
+    RtcpFeedback, RtpMap, SessionDescription, Setup, SrtpCrypto, Ssrc, Time, UnknownAttribute,
 };
 use bytesstr::BytesStr;
 use internal::verbose_error_to_owned;
@@ -119,6 +119,7 @@ impl Parser {
                     ssrc: vec![],
                     setup: self.setup,
                     fingerprint: vec![],
+                    imageattr: vec![],
                     attributes: vec![],
                 });
             }
@@ -290,6 +291,13 @@ impl Parser {
                     media_description.fingerprint.push(fingerprint);
                 } else {
                     self.fingerprint.push(fingerprint)
+                }
+            }
+            "imageattr" => {
+                let (_, imageattr) = ImageAttr::parse(value).finish()?;
+
+                if let Some(media_description) = self.media_descriptions.last_mut() {
+                    media_description.imageattr.push(imageattr);
                 }
             }
             _ => {

@@ -10,6 +10,7 @@ mod fingerprint;
 mod fmtp;
 mod group;
 mod ice;
+mod imageattr;
 mod msid;
 mod rtcp;
 mod rtcp_fb;
@@ -25,6 +26,9 @@ pub use fingerprint::{Fingerprint, FingerprintAlgorithm};
 pub use fmtp::Fmtp;
 pub use group::Group;
 pub use ice::{IceOptions, IcePassword, IceUsernameFragment};
+pub use imageattr::{
+    ImageAttr, ImageAttrSampleAspectRatio, ImageAttrSet, ImageAttrSets, ImageAttrXyRange,
+};
 pub use msid::MsId;
 pub use rtcp::Rtcp;
 pub use rtcp_fb::{RtcpFeedback, RtcpFeedbackKind, RtcpFeedbackPt};
