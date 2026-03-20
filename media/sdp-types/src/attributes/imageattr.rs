@@ -122,7 +122,10 @@ impl Param {
             map(
                 preceded(
                     tag("par="),
-                    delimited(tag("["), separated_pair(float, tag("-"), float), tag("]")),
+                    alt((
+                        delimited(tag("["), separated_pair(float, tag("-"), float), tag("]")),
+                        map(float, |ratio| (ratio, ratio)),
+                    )),
                 ),
                 |(ratio_min, ratio_max)| Param::Par {
                     ratio_min,
@@ -413,6 +416,17 @@ mod tests {
             Param::Par {
                 ratio_min: 0.5,
                 ratio_max: 0.6
+            }
+        );
+
+        // Non standard PAR should also parse
+        let (rem, v) = Param::parse("par=0.5").unwrap();
+        assert!(rem.is_empty());
+        assert_eq!(
+            v,
+            Param::Par {
+                ratio_min: 0.5,
+                ratio_max: 0.5
             }
         );
 
