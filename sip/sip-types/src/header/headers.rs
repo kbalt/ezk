@@ -147,6 +147,39 @@ impl Headers {
         }
     }
 
+    /// Returns an iterator over the raw values stored for the given header name.
+    ///
+    /// Unlike [`Headers::get`] or [`Headers::get_named`], this does not try to
+    /// decode the header into a typed representation.
+    ///
+    /// This is useful for accessing custom or extension headers, or whenever you
+    /// need the original header values as [`BytesStr`].
+    ///
+    /// If you want to iterate over all raw header name/value pairs, use
+    /// [`Headers::iter`].
+    ///
+    /// If the header is not present, the returned iterator is empty.
+    ///
+    /// ```
+    /// # use ezk_sip_types::{Headers, Name};
+    /// let mut headers = Headers::new();
+    /// let name = Name::from("My-Header");
+    ///
+    /// headers.insert(name.clone(), "value1");
+    /// headers.insert(name.clone(), "value2");
+    ///
+    /// let values: Vec<_> = headers.get_raw(&name).map(|v| v.as_str()).collect();
+    /// assert_eq!(values, vec!["value1", "value2"]);
+    /// ```
+    #[inline]
+    pub fn get_raw(&self, name: &Name) -> slice::Iter<'_, BytesStr> {
+        match self.entry(name) {
+            Some(Entry { values: OneOrMore::One(v), .. }) => slice::from_ref(v).iter(),
+            Some(Entry { values: OneOrMore::More(v), .. }) => v.iter(),
+            None => (&[] as &[BytesStr]).iter(),
+        }
+    }
+
     /// Returns a parsed header `H` and removes it from the map.
     #[inline]
     pub fn take_named<H: ConstNamed + DecodeValues>(&mut self) -> Option<H> {
@@ -661,4 +694,33 @@ mod test {
 
         assert!(iter.next().is_none());
     }
+
+    #[test]
+    fn header_get_raw() {
+        let mut headers = Headers::new();
+        headers.insert(Name::from("My-Header"), BytesStr::from_static("value1"));
+        headers.insert(Name::from("My-Header"), BytesStr::from_static("value2"));
+
+        let values: Vec<_> = headers.get_raw(&Name::from("My-Header")).collect();
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[0].as_str(), "value1");
+        assert_eq!(values[1].as_str(), "value2");
+    }
+
+    #[test]
+    fn header_get_raw_single() {
+        let mut headers = Headers::new();
+        headers.insert(Name::from("My-Header"), BytesStr::from_static("only"));
+
+        let values: Vec<_> = headers.get_raw(&Name::from("My-Header")).collect();
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0].as_str(), "only");
+    }
+
+    #[test]
+    fn header_get_raw_missing() {
+        let headers = Headers::new();
+        assert_eq!(headers.get_raw(&Name::from("My-Header")).count(), 0);
+    }
+
 }
