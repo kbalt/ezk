@@ -32,26 +32,14 @@ pub(super) enum Transport {
     Tcp,
     /// SIPS+D2T
     TlsOverTcp,
-    /// SIP+D2S
-    Sctp,
 }
 
 impl Transport {
-    pub(super) fn as_str(&self) -> &'static str {
-        match self {
-            Transport::Udp => "UDP",
-            Transport::Tcp => "TCP",
-            Transport::TlsOverTcp => "TLS",
-            Transport::Sctp => "SCTP",
-        }
-    }
-
     fn from_services(services: &[u8]) -> Option<Self> {
         match services {
             b"SIP+D2U" => Some(Self::Udp),
             b"SIP+D2T" => Some(Self::Tcp),
             b"SIPS+D2T" => Some(Self::TlsOverTcp),
-            b"SIP+D2S" => Some(Self::Sctp),
             _ => None,
         }
     }
@@ -61,7 +49,6 @@ impl Transport {
             Transport::Udp => 5060,
             Transport::Tcp => 5060,
             Transport::TlsOverTcp => 5061,
-            Transport::Sctp => 5060,
         }
     }
 }
@@ -100,6 +87,52 @@ pub(super) async fn resolve_host(
     // Neither NAPTR nor SRV entries exist - just resolve A/AAAA records
     if entries.is_empty() {
         resolve_a_records(dns_resolver, name.clone(), None, uri_port, &mut entries).await?;
+    }
+
+    if entries.is_empty() {
+        return Err(io::Error::other(format!(
+            "No DNS records for host '{name}' found"
+        )));
+    }
+
+    Ok(entries)
+}
+
+#[tracing::instrument(err, skip(dns_resolver, uri_port))]
+pub(super) async fn resolve_host_with_known_transport(
+    dns_resolver: &TokioResolver,
+    transport: Transport,
+    name: &str,
+    uri_port: u16,
+) -> io::Result<Vec<ServerEntry>> {
+    log::debug!("Resolving hostname {:?}", name);
+
+    let mut entries: Vec<ServerEntry> = vec![];
+
+    let srv_prefix = match transport {
+        Transport::Udp => "_sip._udp",
+        Transport::Tcp => "_sip._tcp",
+        Transport::TlsOverTcp => "_sips._tcp",
+    };
+
+    resolve_srv_records(
+        dns_resolver,
+        Name::from_utf8(format!("{srv_prefix}.{name}"))?,
+        Some(transport),
+        &mut entries,
+    )
+    .await?;
+
+    // Neither NAPTR nor SRV entries exist - just resolve A/AAAA records
+    if entries.is_empty() {
+        resolve_a_records(
+            dns_resolver,
+            Name::from_utf8(name)?,
+            None,
+            uri_port,
+            &mut entries,
+        )
+        .await?;
     }
 
     if entries.is_empty() {

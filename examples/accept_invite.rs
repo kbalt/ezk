@@ -4,7 +4,7 @@ use rtc::{
     OpenSslContext,
 };
 use sdp_types::{Direction, MediaType};
-use sip_core::{transport::udp::Udp, Endpoint, IncomingRequest, Layer, MayTake, Result};
+use sip_core::{Endpoint, IncomingRequest, Layer, MayTake, Result};
 use sip_types::{
     header::typed::Contact,
     uri::{NameAddr, SipUri},
@@ -92,7 +92,7 @@ async fn main() -> Result<()> {
 
     builder.add_layer(InviteAcceptLayer {});
 
-    Udp::spawn(&mut builder, "127.0.0.1:5060").await?;
+    builder.bind_udp("127.0.0.1:5060".parse().unwrap()).await?;
 
     // Build endpoint to start the SIP Stack
     let _endpoint = builder.build();

@@ -5,7 +5,7 @@ use rtc::{
 };
 use sdp_types::{Direction, MediaType};
 use sip_auth::{DigestAuthenticator, DigestCredentials, DigestUser};
-use sip_core::{transport::udp::Udp, Endpoint};
+use sip_core::Endpoint;
 use sip_ua::{
     dialog::DialogLayer, invite::InviteLayer, Call, CallEvent, MediaEvent, RegistrarConfig,
     Registration, RtcMediaBackend,
@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut builder = Endpoint::builder();
 
     // Make a UDP transport
-    Udp::spawn(&mut builder, "0.0.0.0:5060").await.unwrap();
+    builder.bind_udp("0.0.0.0:5060".parse()?).await?;
 
     // Add Dialog & INVITE capabilities
     builder.add_layer(DialogLayer::default());

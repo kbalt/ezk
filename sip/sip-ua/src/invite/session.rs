@@ -57,6 +57,26 @@ pub struct ReInviteReceived {
     pub transaction: ServerInvTsx,
 }
 
+impl ReInviteReceived {
+    /// Respond with a successful response, returns the received ACK request
+    pub async fn respond_success(
+        self,
+        invite_session: &mut InviteSession,
+        response: OutgoingResponse,
+    ) -> Result<IncomingRequest> {
+        let (ack_sender, ack_recv) = oneshot::channel();
+
+        *invite_session.inner.awaited_ack.lock() = Some(AwaitedAck {
+            cseq: self.invite.base_headers.cseq.cseq,
+            ack_sender,
+        });
+
+        let accepted = self.transaction.respond_success(response).await?;
+
+        super::receive_ack(accepted, ack_recv).await
+    }
+}
+
 pub struct ByeEvent {
     bye: IncomingRequest,
     transaction: ServerTsx,

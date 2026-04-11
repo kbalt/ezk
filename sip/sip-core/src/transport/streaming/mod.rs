@@ -1,212 +1,94 @@
-use crate::transport::managed::DropNotifier;
-use crate::transport::{Direction, Factory, ReceivedMessage, TpHandle, TpKey, Transport};
-use crate::{Endpoint, EndpointBuilder};
+use crate::Endpoint;
+use crate::transport::{
+    ReceivedMessage, TpHandle, Transport, TransportCloseReason, TransportState,
+};
 use decode::{Item, StreamingDecoder};
-use sip_types::uri::SipUri;
 use std::net::SocketAddr;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
-use std::{fmt, io};
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf, split};
-use tokio::net::ToSocketAddrs;
-use tokio::sync::{Mutex, broadcast, oneshot};
-use tokio::time::{Sleep, interval, sleep};
+use std::time::Instant;
+use std::{io, time::Duration};
+use tokio::io::WriteHalf;
+use tokio::net::TcpListener;
+use tokio::sync::watch;
+use tokio::{
+    io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadHalf, split},
+    sync::{Mutex, broadcast},
+    time::interval,
+};
 use tokio_stream::StreamExt;
 use tokio_util::codec::FramedRead;
 
 mod decode;
+#[cfg(feature = "tls-native-tls")]
+mod native_tls;
+#[cfg(feature = "tls-rustls")]
+mod rustls;
+mod tcp;
 
-/// Helper trait to implement the transport specific behavior of binding to an address
-#[async_trait::async_trait]
-pub trait StreamingListenerBuilder: Sized + Send + Sync + 'static {
-    type Transport: StreamingTransport;
-    type StreamingListener: StreamingListener<Transport = Self::Transport>;
-
-    async fn bind<A: ToSocketAddrs + Send>(
-        self,
-        addr: A,
-    ) -> io::Result<(Self::StreamingListener, SocketAddr)>;
-
-    async fn spawn<A: ToSocketAddrs + Send>(
-        self,
-        endpoint: &mut EndpointBuilder,
-        addr: A,
-    ) -> io::Result<()> {
-        let (listener, bound) = self.bind(addr).await?;
-
-        log::info!(
-            "Accepting {} connections on {}",
-            Self::Transport::NAME,
-            bound
-        );
-
-        tokio::spawn(task_accept(endpoint.subscribe(), listener));
-
-        Ok(())
-    }
-}
-
-#[async_trait::async_trait]
-pub trait StreamingFactory: Send + Sync + 'static {
-    type Transport: StreamingTransport;
-
-    async fn connect<A: ToSocketAddrs + Send>(
-        &self,
-        uri_info: &SipUri,
-        addr: SocketAddr,
-    ) -> io::Result<Self::Transport>;
-}
-
-pub trait StreamingTransport: AsyncWrite + AsyncRead + Send + Sync + 'static {
-    const NAME: &'static str;
-    const SECURE: bool;
-
-    fn matches_transport_param(name: &str) -> bool {
-        name.eq_ignore_ascii_case(Self::NAME)
-    }
-
+pub(super) trait StreamingTransport: AsyncWrite + AsyncRead + Send + Sync + 'static {
     fn local_addr(&self) -> io::Result<SocketAddr>;
-    fn peer_addr(&self) -> io::Result<SocketAddr>;
 }
 
 #[async_trait::async_trait]
-pub trait StreamingListener: Send + Sync {
+pub(super) trait StreamingListener: Send + Sync {
     type Transport: StreamingTransport;
 
     async fn accept(&mut self) -> io::Result<(Self::Transport, SocketAddr)>;
 }
 
-pub struct StreamingWrite<T> {
-    bound: SocketAddr,
-    remote: SocketAddr,
-    incoming: bool,
+#[derive(Debug)]
+pub(super) struct StreamingWrite<T> {
+    pub(super) bound: SocketAddr,
+    pub(super) remote: SocketAddr,
 
-    write_half: Arc<Mutex<WriteHalf<T>>>,
+    state: watch::Receiver<TransportState>,
+
+    write: Arc<Mutex<WriteHalf<T>>>,
+    modified: Arc<parking_lot::Mutex<Instant>>,
 }
 
-impl<T: StreamingTransport> fmt::Debug for StreamingWrite<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("StreamingWrite")
-            .field("bound", &self.bound)
-            .field("remote", &self.remote)
-            .field("incoming", &self.incoming)
-            .finish()
-    }
-}
+impl<T> Clone for StreamingWrite<T> {
+    fn clone(&self) -> Self {
+        *self.modified.lock() = Instant::now();
 
-impl<T: StreamingTransport> fmt::Display for StreamingWrite<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:bound={}:remote={}", T::NAME, self.bound, self.remote,)
-    }
-}
-
-#[async_trait::async_trait]
-impl<T> Transport for StreamingWrite<T>
-where
-    T: StreamingTransport,
-{
-    fn name(&self) -> &'static str {
-        T::NAME
-    }
-
-    fn matches_transport_param(&self, name: &str) -> bool {
-        T::matches_transport_param(name)
-    }
-
-    fn secure(&self) -> bool {
-        T::SECURE
-    }
-
-    fn reliable(&self) -> bool {
-        true
-    }
-
-    fn bound(&self) -> SocketAddr {
-        self.bound
-    }
-
-    fn sent_by(&self) -> SocketAddr {
-        self.bound
-    }
-
-    fn direction(&self) -> Direction {
-        if self.incoming {
-            Direction::Incoming(self.remote)
-        } else {
-            Direction::Outgoing(self.remote)
+        Self {
+            bound: self.bound,
+            remote: self.remote,
+            state: self.state.clone(),
+            write: self.write.clone(),
+            modified: self.modified.clone(),
         }
     }
+}
 
-    async fn send(&self, bytes: &[u8], _target: SocketAddr) -> io::Result<()> {
-        let mut socket = self.write_half.lock().await;
-        socket.write_all(bytes).await?;
-        socket.flush().await?;
-        Ok(())
+impl<T> Drop for StreamingWrite<T> {
+    fn drop(&mut self) {
+        *self.modified.lock() = Instant::now();
     }
 }
 
-#[async_trait::async_trait]
-impl<T> Factory for T
-where
-    T: StreamingFactory,
-{
-    fn name(&self) -> &'static str {
-        T::Transport::NAME
+impl<T: AsyncWrite> StreamingWrite<T> {
+    pub(super) async fn send(&self, buf: &[u8]) -> io::Result<()> {
+        self.write.lock().await.write_all(buf).await
     }
 
-    fn secure(&self) -> bool {
-        T::Transport::SECURE
+    pub(super) fn state_receiver(&self) -> watch::Receiver<TransportState> {
+        self.state.clone()
     }
 
-    fn matches_transport_param(&self, name: &str) -> bool {
-        T::Transport::matches_transport_param(name)
-    }
+    // TODO: workaround comparing connections
+    fn ptr_eq<U>(&self, rhs: &StreamingWrite<U>) -> bool {
+        let lhs = Arc::as_ptr(&self.write).cast::<()>();
+        let rhs = Arc::as_ptr(&rhs.write).cast::<()>();
 
-    async fn create(
-        &self,
-        endpoint: Endpoint,
-        uri: &SipUri,
-        addr: SocketAddr,
-    ) -> io::Result<TpHandle> {
-        log::trace!("{} trying to connect to {}", self.name(), addr);
-
-        let stream = self.connect::<SocketAddr>(uri, addr).await?;
-        let local = stream.local_addr()?;
-        let remote = stream.peer_addr()?;
-
-        let (read, write) = split(stream);
-
-        let write_half = Arc::new(Mutex::new(write));
-
-        let transport = StreamingWrite {
-            bound: local,
-            remote,
-            write_half: write_half.clone(),
-            incoming: false,
-        };
-
-        let framed = FramedRead::new(read, StreamingDecoder::default());
-
-        let (transport, notifier) = endpoint.transports().add_managed_used(transport);
-
-        tokio::spawn(receive_task(
-            endpoint.clone(),
-            framed,
-            write_half,
-            ReceiveTaskState::InUse(notifier),
-            local,
-            remote,
-            false,
-        ));
-
-        return Ok(transport);
+        lhs == rhs
     }
 }
 
 async fn task_accept<I>(mut endpoint: broadcast::Receiver<Endpoint>, mut incoming: I)
 where
     I: StreamingListener,
+    super::Connection: From<StreamingWrite<I::Transport>>,
 {
     let endpoint = match endpoint.recv().await.ok() {
         Some(endpoint) => endpoint,
@@ -226,121 +108,101 @@ where
 
                 log::trace!("Connection accepted from {remote} on {local}");
 
-                let (read, write) = split(stream);
-
-                let write_half = Arc::new(Mutex::new(write));
-
-                let transport = StreamingWrite {
-                    bound: local,
-                    remote,
-                    write_half: write_half.clone(),
-                    incoming: true,
-                };
-
-                let rx = endpoint.transports().add_managed_unused(transport);
-
-                let framed = FramedRead::new(read, StreamingDecoder::default());
-
-                tokio::spawn(receive_task(
-                    endpoint.clone(),
-                    framed,
-                    write_half,
-                    ReceiveTaskState::Unused(Box::pin(sleep(Duration::from_secs(32))), rx),
-                    local,
-                    remote,
-                    true,
-                ));
+                spawn_receive(endpoint.clone(), stream, local, remote);
             }
             Err(e) => log::error!("Error accepting connection, {e}"),
         }
     }
 }
 
-enum ReceiveTaskState {
-    InUse(DropNotifier),
-    Unused(Pin<Box<Sleep>>, oneshot::Receiver<DropNotifier>),
+pub(super) fn spawn_receive<S: StreamingTransport>(
+    endpoint: Endpoint,
+    stream: S,
+    bound: SocketAddr,
+    remote: SocketAddr,
+) -> StreamingWrite<S>
+where
+    super::Connection: From<StreamingWrite<S>>,
+{
+    let (read, write) = split(stream);
+
+    let write = Arc::new(Mutex::new(write));
+
+    let (state_tx, state_rx) = watch::channel(TransportState::Ok);
+
+    let stream = StreamingWrite {
+        bound,
+        remote,
+        state: state_rx,
+        write: write.clone(),
+        modified: Arc::new(parking_lot::Mutex::new(Instant::now())),
+    };
+
+    endpoint
+        .transports()
+        .connections
+        .lock()
+        .push(stream.clone().into());
+
+    let read = FramedRead::new(read, StreamingDecoder::default());
+
+    tokio::spawn(receive_task(
+        endpoint,
+        read,
+        stream.clone(),
+        remote,
+        state_tx,
+    ));
+
+    stream
 }
 
 async fn receive_task<T>(
     endpoint: Endpoint,
     mut framed: FramedRead<ReadHalf<T>, StreamingDecoder>,
-    write_half: Arc<Mutex<WriteHalf<T>>>,
-    mut state: ReceiveTaskState,
-    local: SocketAddr,
+    transport: StreamingWrite<T>,
     remote: SocketAddr,
-    incoming: bool,
+    state_tx: watch::Sender<TransportState>,
 ) where
     T: StreamingTransport,
+    super::Connection: From<StreamingWrite<T>>,
 {
-    let tp_key = TpKey {
-        name: T::NAME,
-        bound: local,
-        direction: if incoming {
-            Direction::Incoming(remote)
-        } else {
-            Direction::Outgoing(remote)
-        },
-    };
-
-    let _drop_guard = UnclaimedGuard {
+    let mut drop_guard = RemoveConnectionOnDrop {
         endpoint: &endpoint,
-        tp_key,
+        transport: &transport,
+        removed: false,
     };
 
     let mut keep_alive_request_interval = interval(Duration::from_secs(10));
 
     loop {
-        let item = match &mut state {
-            ReceiveTaskState::InUse(notifier) => {
-                tokio::select! {
-                    item = framed.next() => item,
-                    _ = notifier => {
-                        log::debug!("all refs to transport dropped, destroying soon if not used");
-                        let rx = endpoint.transports().set_unused(&tp_key);
-                        state = ReceiveTaskState::Unused(Box::pin(sleep(Duration::from_secs(32))), rx);
-                        continue;
-                    }
-                    _ = keep_alive_request_interval.tick() => {
-                        if let Err(e) = write_half.lock().await.write(b"\r\n\r\n").await {
-                            log::debug!("Failed to send keep alive request, {e}");
-                        }
-                        continue;
-                    }
-                }
-            }
-            ReceiveTaskState::Unused(timeout, rx) => {
-                tokio::select! {
-                    item = framed.next() => item,
-                    notifier = rx => {
-                        if let Ok(notifier) = notifier {
-                            state = ReceiveTaskState::InUse(notifier);
+        let item = tokio::select! {
+            item = framed.next() => item,
+            _ = keep_alive_request_interval.tick() => {
+                // Check if the connection is still being used
+                {
+                    // Lock connection list to avoid the connecting being cloned between testing reference count & removing it
+                    let connections = endpoint.transports().connections.lock();
 
-                            continue;
-                        } else {
-                            log::error!("failed to receive notifier");
-                            return;
-                        }
-                    }
-                    _ = keep_alive_request_interval.tick() => {
-                        if let Err(e) = write_half.lock().await.write(b"\r\n\r\n").await {
-                            log::debug!("Failed to send keep alive request, {e}");
-                        }
-                        continue;
-                    }
-                    _ = timeout => {
-                        log::debug!("dropping transport, not used anymore");
+                    if Arc::strong_count(&transport.write) == 2 && transport.modified.lock().elapsed() > Duration::from_mins(15) {
+                        log::debug!("Connection to {remote} unused for some time, removing it");
+                        let _ = state_tx.send_replace(TransportState::Closed(TransportCloseReason::Inactivity));
+                        drop_guard.trigger_locked(connections);
                         return;
                     }
                 }
+
+                if let Err(e) = transport.send(b"\r\n\r\n").await {
+                    log::debug!("Failed to send keep alive request, {e}");
+                }
+                continue;
             }
         };
-
-        let transport = endpoint.transports().set_used(&tp_key);
 
         let message = match item {
             Some(Ok(Item::DecodedMessage(item))) => item,
             Some(Ok(Item::KeepAliveRequest)) => {
-                if let Err(e) = write_half.lock().await.write(b"\r\n").await {
+                if let Err(e) = transport.send(b"\r\n").await {
                     log::debug!("Failed to respond to keep alive request, {e}");
                 }
 
@@ -351,11 +213,15 @@ async fn receive_task<T>(
                 continue;
             }
             Some(Err(e)) => {
-                log::warn!("An error occurred when reading {} stream {}", T::NAME, e);
+                log::warn!("An error occurred when reading stream {}", e);
+                let _ = state_tx.send_replace(TransportState::Closed(TransportCloseReason::Err(e)));
                 return;
             }
             None => {
-                log::debug!("Connection closed");
+                log::debug!("Connection closed by remote");
+                let _ = state_tx.send_replace(TransportState::Closed(TransportCloseReason::Err(
+                    io::Error::from(io::ErrorKind::UnexpectedEof),
+                )));
                 return;
             }
         };
@@ -363,7 +229,9 @@ async fn receive_task<T>(
         let message = ReceivedMessage::new(
             remote,
             message.buffer,
-            transport,
+            TpHandle {
+                transport: Transport::Connection(transport.clone().into()),
+            },
             message.line,
             message.headers,
             message.body,
@@ -373,13 +241,77 @@ async fn receive_task<T>(
     }
 }
 
-struct UnclaimedGuard<'e> {
+struct RemoveConnectionOnDrop<'e, T> {
     endpoint: &'e Endpoint,
-    tp_key: TpKey,
+    transport: &'e StreamingWrite<T>,
+    removed: bool,
 }
 
-impl Drop for UnclaimedGuard<'_> {
+impl<T> Drop for RemoveConnectionOnDrop<'_, T> {
     fn drop(&mut self) {
-        self.endpoint.transports().drop_transport(&self.tp_key);
+        if self.removed {
+            return;
+        }
+
+        let connections = self.endpoint.transports().connections.lock();
+
+        self.trigger_locked(connections);
     }
+}
+
+impl<'e, T> RemoveConnectionOnDrop<'e, T> {
+    fn trigger_locked(
+        &mut self,
+        mut connections: parking_lot::MutexGuard<'_, Vec<super::Connection>>,
+    ) {
+        let position = connections.iter().position(|c| match c {
+            super::Connection::Tcp(t) => t.ptr_eq(self.transport),
+            #[cfg(feature = "tls-rustls")]
+            super::Connection::Rustls(t) => t.ptr_eq(self.transport),
+            #[cfg(feature = "tls-native-tls")]
+            super::Connection::NativeTls(t) => t.ptr_eq(self.transport),
+        });
+
+        if let Some(position) = position {
+            connections.swap_remove(position);
+            self.removed = true;
+        }
+    }
+}
+
+pub(super) async fn bind_tcp(
+    endpoint: broadcast::Receiver<Endpoint>,
+    addr: SocketAddr,
+) -> io::Result<()> {
+    let listener = TcpListener::bind(addr).await?;
+    tokio::spawn(task_accept(endpoint, listener));
+    Ok(())
+}
+
+#[cfg(feature = "tls-rustls")]
+pub(super) async fn bind_rustls(
+    endpoint: broadcast::Receiver<Endpoint>,
+    addr: SocketAddr,
+    acceptor: tokio_rustls::TlsAcceptor,
+) -> io::Result<()> {
+    let listener = TcpListener::bind(addr).await?;
+    tokio::spawn(task_accept(
+        endpoint,
+        rustls::TlsAcceptStream::new(acceptor, listener),
+    ));
+    Ok(())
+}
+
+#[cfg(feature = "tls-native-tls")]
+pub(super) async fn bind_native_tls(
+    endpoint: broadcast::Receiver<Endpoint>,
+    addr: SocketAddr,
+    acceptor: tokio_native_tls::TlsAcceptor,
+) -> io::Result<()> {
+    let listener = TcpListener::bind(addr).await?;
+    tokio::spawn(task_accept(
+        endpoint,
+        native_tls::TlsAcceptStream::new(acceptor, listener),
+    ));
+    Ok(())
 }

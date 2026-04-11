@@ -130,7 +130,7 @@ impl Registration {
         let (transport, remote_addr) = endpoint.select_transport(&config.registrar).await?;
         let contact = config.override_contact.clone().unwrap_or_else(|| {
             Contact::new(NameAddr::uri(
-                SipUri::new(transport.sent_by().into()).user(config.username.clone().into()),
+                SipUri::new(transport.bound().into()).user(config.username.clone().into()),
             ))
         });
 
@@ -142,7 +142,7 @@ impl Registration {
         );
 
         let mut target_transport_info = TargetTransportInfo {
-            via_host_port: Some(transport.sent_by().into()),
+            via_host_port: Some(transport.bound().into()),
             transport: Some((transport, remote_addr)),
         };
 
