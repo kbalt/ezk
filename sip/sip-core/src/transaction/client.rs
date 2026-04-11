@@ -93,7 +93,7 @@ impl ClientTsx {
         };
 
         match self.state {
-            State::Init if !self.request.parts.transport.reliable() => {
+            State::Init if !self.request.parts.transport.is_reliable() => {
                 loop {
                     let receive = timeout(T2, registration.receive_response());
 
@@ -145,7 +145,7 @@ impl ClientTsx {
             _ => {
                 let mut registration = self.registration.take().expect("already checked");
 
-                if self.request.parts.transport.reliable() {
+                if self.request.parts.transport.is_reliable() {
                     self.state = State::Terminated;
                 } else {
                     self.state = State::Completed;

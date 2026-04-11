@@ -1,8 +1,8 @@
 use crate::transaction::{ClientInvTsx, ClientTsx, ServerInvTsx, ServerTsx, TsxKey};
 use crate::transaction::{Transactions, TsxMessage};
 use crate::transport::{
-    Direction, Factory, OutgoingParts, OutgoingRequest, OutgoingResponse, ReceivedMessage,
-    TargetTransportInfo, TpHandle, Transports, TransportsBuilder,
+    OutgoingParts, OutgoingRequest, OutgoingResponse, ReceivedMessage, TargetTransportInfo,
+    TpHandle, Transports, TransportsBuilder,
 };
 use crate::{BaseHeaders, IncomingRequest, Layer, MayTake, Request, Response, Result, StunError};
 use bytes::{Bytes, BytesMut};
@@ -110,7 +110,7 @@ impl Endpoint {
     ) -> Via {
         Via::new(
             transport.name(),
-            via_host_port.unwrap_or_else(|| transport.sent_by().into()),
+            via_host_port.unwrap_or_else(|| transport.bound().into()),
             tsx_key.branch().clone(),
         )
     }
@@ -256,30 +256,26 @@ impl Endpoint {
             let _ = request.headers.clone_into(&mut headers, Name::TIMESTAMP);
         }
 
-        let destination = match request.tp_info.transport.direction() {
-            Direction::None => {
-                let via = &request.base_headers.via[0];
+        let destination = if let Some(remote) = request.tp_info.transport.connection_remote() {
+            remote
+        } else {
+            let via = &request.base_headers.via[0];
 
-                if let Some(maddr) = via
-                    .params
-                    .get_val("maddr")
-                    .and_then(|maddr| maddr.parse::<IpAddr>().ok())
-                {
-                    // TODO maddr default port guessing (currently defaulting to 5060)
-                    SocketAddr::new(maddr, via.sent_by.port.unwrap_or(5060))
-                } else if let Some(rport) = via
-                    .params
-                    .get_val("rport")
-                    .and_then(|rport| rport.parse::<u16>().ok())
-                {
-                    SocketAddr::new(request.tp_info.source.ip(), rport)
-                } else {
-                    request.tp_info.source
-                }
-            }
-            Direction::Outgoing(remote) | Direction::Incoming(remote) => {
-                // Use the transport from the request, same remote addr
-                remote
+            if let Some(maddr) = via
+                .params
+                .get_val("maddr")
+                .and_then(|maddr| maddr.parse::<IpAddr>().ok())
+            {
+                // TODO maddr default port guessing (currently defaulting to 5060)
+                SocketAddr::new(maddr, via.sent_by.port.unwrap_or(5060))
+            } else if let Some(rport) = via
+                .params
+                .get_val("rport")
+                .and_then(|rport| rport.parse::<u16>().ok())
+            {
+                SocketAddr::new(request.tp_info.source.ip(), rport)
+            } else {
+                request.tp_info.source
             }
         };
 
@@ -478,7 +474,7 @@ impl Endpoint {
             .layer
             .iter()
             .find_map(|l| l.downcast_ref())
-            .ok_or_else(|| format!("endpoint is missing ayer {}", type_name::<L>()))
+            .ok_or_else(|| format!("endpoint is missing layer {}", type_name::<L>()))
             .unwrap()
     }
 }
@@ -559,19 +555,60 @@ impl EndpointBuilder {
         self.user_agent = Some(user_agent.into())
     }
 
-    /// Add an unmanaged transport to the endpoint which will never vanish or break (e.g. UDP)
-    pub fn add_unmanaged_transport(&mut self, transport: TpHandle) -> &mut Self {
-        self.transports.insert_unmanaged(transport);
-        self
+    /// Binds a UDP socket to the given address, which will be used to send and receive messages
+    ///
+    /// Returns a handle to the transport
+    pub async fn bind_udp(&mut self, addr: SocketAddr) -> io::Result<TpHandle> {
+        self.transports.bind_udp(self.subscribe(), addr).await
     }
 
-    /// Add a transport factory to the endpoint
-    pub fn add_transport_factory(&mut self, factory: Arc<dyn Factory>) -> &mut Self {
-        self.transports.insert_factory(factory);
-        self
+    /// Listen for TCP connections on the given address
+    pub async fn listen_tcp(&mut self, addr: SocketAddr) -> io::Result<()> {
+        self.transports.listen_tcp(self.subscribe(), addr).await
     }
 
-    /// Set a `trust-dns-resolver` DNS resolver for the endpoint to use.
+    /// Listen for TLS connections using rustls on the given address
+    #[cfg(feature = "tls-rustls")]
+    pub async fn listen_rustls(
+        &mut self,
+        addr: SocketAddr,
+        acceptor: tokio_rustls::TlsAcceptor,
+    ) -> io::Result<()> {
+        self.transports
+            .listen_rustls(self.subscribe(), addr, acceptor)
+            .await
+    }
+
+    /// Listen for TLS connections using native-tls on the given address
+    #[cfg(feature = "tls-native-tls")]
+    pub async fn listen_native_tls(
+        &mut self,
+        addr: SocketAddr,
+        acceptor: tokio_native_tls::TlsAcceptor,
+    ) -> io::Result<()> {
+        self.transports
+            .listen_native_tls(self.subscribe(), addr, acceptor)
+            .await
+    }
+
+    /// Set a local address to bind TCP sockets to before connecting to a remote.
+    pub fn set_tcp_connect_bind_address(&mut self, addr: SocketAddr) {
+        self.transports.set_tcp_connect_bind_addr(addr);
+    }
+
+    /// Use the given Rustls connector for outbound TLS connections
+    #[cfg(feature = "tls-rustls")]
+    pub fn use_rustls_connector(&mut self, connector: tokio_rustls::TlsConnector) {
+        self.transports.set_rustls_connector(connector);
+    }
+
+    /// Use the given native-tls connector for outbound TLS connections
+    #[cfg(feature = "tls-native-tls")]
+    pub fn use_native_tls_connector(&mut self, connector: tokio_native_tls::TlsConnector) {
+        self.transports.set_native_tls_connector(connector);
+    }
+
+    /// Set a `hickory_resolver` DNS resolver for the endpoint to use.
     ///
     /// Uses the system config by default.
     pub fn set_dns_resolver(&mut self, dns_resolver: hickory_resolver::TokioResolver) {

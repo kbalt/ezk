@@ -18,7 +18,12 @@ impl StunEndpointUser for StunUser {
         target: SocketAddr,
         transport: &Self::Transport,
     ) -> io::Result<()> {
-        transport.send(bytes, target).await
+        match &transport.transport {
+            super::Transport::Udp(udp_transport) => udp_transport.send_to(bytes, target).await,
+            super::Transport::Connection(..) => {
+                Err(io::Error::other("Unsupported transport for STUN"))
+            }
+        }
     }
 
     async fn receive(&self, _message: IncomingMessage<Self::Transport>) {
@@ -28,7 +33,7 @@ impl StunEndpointUser for StunUser {
 
 impl stun::TransportInfo for TpHandle {
     fn reliable(&self) -> bool {
-        self.transport.reliable()
+        self.is_reliable()
     }
 }
 
@@ -38,8 +43,9 @@ impl Transports {
         stun_server: SocketAddr,
         transport: &TpHandle,
     ) -> Result<SocketAddr, StunError> {
-        if transport.reliable() {
-            return Ok(transport.sent_by());
+        match &transport.transport {
+            super::Transport::Udp(..) => {}
+            super::Transport::Connection(connection) => return Ok(connection.bound()),
         }
 
         let tsx_id = TransactionId::random();

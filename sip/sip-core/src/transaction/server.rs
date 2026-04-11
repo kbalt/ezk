@@ -63,7 +63,7 @@ impl ServerTsx {
             .send_outgoing_response(&mut response)
             .await?;
 
-        if response.parts.transport.reliable() {
+        if response.parts.transport.is_reliable() {
             return Ok(());
         }
 

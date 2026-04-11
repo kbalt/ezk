@@ -106,6 +106,11 @@ impl Registration {
         true
     }
 
+    /// Reset the expiry timer. This will cause `wait_for_expiry` to finish immediately on the next call.
+    pub fn reset_expiry_timer(&mut self) {
+        self.register_interval.reset_immediately();
+    }
+
     /// Returns when a new REGISTER request must be sent to refresh the binding on the registrar.
     pub async fn wait_for_expiry(&mut self) {
         self.register_interval.tick().await;

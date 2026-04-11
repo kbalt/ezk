@@ -5,30 +5,8 @@ use sip_types::Headers;
 use sip_types::msg::{Line, MessageLine, PullParser};
 use sip_types::parse::Parse;
 use std::io;
-use std::str::{Utf8Error, from_utf8};
+use std::str::from_utf8;
 use tokio_util::codec::Decoder;
-
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum Error {
-    #[error(transparent)]
-    Io(io::Error),
-    #[error("receiving message too large")]
-    MessageTooLarge,
-    #[error("received message is malformed")]
-    Malformed,
-}
-
-impl From<Utf8Error> for Error {
-    fn from(_: Utf8Error) -> Self {
-        Self::Malformed
-    }
-}
-
-impl From<io::Error> for Error {
-    fn from(error: io::Error) -> Self {
-        Self::Io(error)
-    }
-}
 
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum Item {
@@ -52,7 +30,7 @@ pub(crate) struct StreamingDecoder {
 
 impl Decoder for StreamingDecoder {
     type Item = Item;
-    type Error = Error;
+    type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         // strip leading newlines
@@ -74,7 +52,7 @@ impl Decoder for StreamingDecoder {
         if src.len() > 65535 {
             src.clear();
 
-            return Err(Error::MessageTooLarge);
+            return Err(message_too_large());
         }
 
         let mut parser = PullParser::new(src, self.head_progress);
@@ -104,16 +82,13 @@ impl Decoder for StreamingDecoder {
                 .iter()
                 .any(|str| name.eq_ignore_ascii_case(str.as_bytes()))
             {
-                let value = split.next().ok_or(Error::Malformed)?;
-                let value = from_utf8(value)?;
+                let value = split.next().ok_or_else(malformed)?;
+                let value = from_utf8(value).map_err(|_| malformed())?;
 
-                content_len = value
-                    .trim()
-                    .parse::<usize>()
-                    .map_err(|_| Error::Malformed)?;
+                content_len = value.trim().parse::<usize>().map_err(|_| malformed())?;
 
                 if content_len > (u16::MAX as usize) {
-                    return Err(Error::MessageTooLarge);
+                    return Err(message_too_large());
                 }
             }
         }
@@ -148,12 +123,12 @@ impl Decoder for StreamingDecoder {
         for item in &mut parser {
             let item = item.expect("got error when input was already checked");
 
-            let line = from_utf8(item)?;
+            let line = from_utf8(item).map_err(|_| malformed())?;
 
             if message_line.is_none() {
                 match MessageLine::parse(&src_bytes)(line) {
                     Ok((_, line)) => message_line = Some(line),
-                    Err(_) => return Err(Error::Malformed),
+                    Err(_) => return Err(malformed()),
                 }
             } else {
                 match Line::parse(&src_bytes, line).finish() {
@@ -172,10 +147,18 @@ impl Decoder for StreamingDecoder {
         assert_eq!(content_len, body.len());
 
         Ok(Some(Item::DecodedMessage(DecodedMessage {
-            line: message_line.ok_or(Error::Malformed)?,
+            line: message_line.ok_or_else(malformed)?,
             headers,
             body,
             buffer: src_bytes,
         })))
     }
+}
+
+fn malformed() -> io::Error {
+    io::Error::other("receiving message is malformed")
+}
+
+fn message_too_large() -> io::Error {
+    io::Error::other("receiving message is too large")
 }
