@@ -812,35 +812,47 @@ impl IceAgent {
                 return;
             };
 
-        if let Some(Ok(error_code)) = pkt.data.attribute::<ErrorCode>() {
+        let error_code = pkt.data.attribute::<ErrorCode>().and_then(|r| r.ok());
+
+        let display_pair = DisplayPair(
+            &self.local_candidates[pair.local],
+            &self.remote_candidates[pair.remote],
+        );
+
+        if let Some(error_code) = &error_code {
             log::debug!(
-                "Candidate pair failed with code={}, reason={}",
+                "Candidate pair {display_pair} failed with code={}, reason={}",
                 error_code.number,
                 error_code.reason
             );
+        } else {
+            log::debug!("Candidate pair {display_pair} failed without error code");
+        }
 
-            // If the Binding request generates a 487 (Role Conflict) error response,
-            // and if the ICE agent included an ICE-CONTROLLED attribute in the request,
-            // the agent MUST switch to the controlling role.
-            // If the agent included an ICE-CONTROLLING attribute in the request, the agent MUST switch to the controlled role.
-            if error_code.number == 487 {
-                if pkt.data.attribute::<IceControlled>().is_some() {
-                    self.is_controlling = true;
-                } else if pkt.data.attribute::<IceControlling>().is_some() {
-                    self.is_controlling = false;
-                }
-
-                // Once the agent has switched its role, the agent MUST add the
-                // candidate pair whose check generated the 487 error response to the
-                // triggered-check queue associated with the checklist to which the pair
-                // belongs, and set the candidate pair state to Waiting.
-                pair.state = CandidatePairState::Waiting;
-                self.triggered_check_queue
-                    .push_back((pair.local, pair.remote));
-
-                // A role switch requires an agent to recompute pair priorities, since the priority values depend on the role.
-                self.recompute_pair_priorities();
+        // If the Binding request generates a 487 (Role Conflict) error response,
+        // and if the ICE agent included an ICE-CONTROLLED attribute in the request,
+        // the agent MUST switch to the controlling role.
+        // If the agent included an ICE-CONTROLLING attribute in the request, the agent MUST switch to the controlled role.
+        if error_code.is_some_and(|e| e.number == 487) {
+            if pkt.data.attribute::<IceControlled>().is_some() {
+                self.is_controlling = true;
+            } else if pkt.data.attribute::<IceControlling>().is_some() {
+                self.is_controlling = false;
             }
+
+            // Once the agent has switched its role, the agent MUST add the
+            // candidate pair whose check generated the 487 error response to the
+            // triggered-check queue associated with the checklist to which the pair
+            // belongs, and set the candidate pair state to Waiting.
+            pair.state = CandidatePairState::Waiting;
+            self.triggered_check_queue
+                .push_back((pair.local, pair.remote));
+
+            // A role switch requires an agent to recompute pair priorities, since the priority values depend on the role.
+            self.recompute_pair_priorities();
+        } else {
+            pair.state = CandidatePairState::Failed;
+            pair.nomination = CandidatePairNomination::None;
         }
     }
 
