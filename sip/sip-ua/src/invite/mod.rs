@@ -338,7 +338,7 @@ impl InviteUsage {
 }
 
 pub async fn create_ack(dialog: &Dialog, cseq_num: u32) -> Result<OutgoingRequest> {
-    let mut ack = dialog.create_request(Method::ACK);
+    let mut ack = dialog.create_request(Method::ACK, None);
 
     // Set CSeq
     ack.headers

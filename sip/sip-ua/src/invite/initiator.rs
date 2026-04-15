@@ -12,7 +12,7 @@ use sip_core::transaction::{ClientInvTsx, TsxResponse};
 use sip_core::transport::OutgoingRequest;
 use sip_core::{Endpoint, Error, Request};
 use sip_types::header::HeaderError;
-use sip_types::header::typed::{Contact, RSeq, Refresher, Supported};
+use sip_types::header::typed::{CSeq, Contact, RSeq, Refresher, Supported};
 use sip_types::uri::{NameAddr, SipUri};
 use sip_types::{Method, Name, StatusCode};
 use std::collections::HashMap;
@@ -79,7 +79,7 @@ impl InviteInitiator {
     }
 
     pub fn create_invite(&mut self) -> Request {
-        let mut request = self.dialog_builder.create_request(Method::INVITE);
+        let mut request = self.dialog_builder.create_request(Method::INVITE, None);
 
         if self.support_100rel {
             let prov_rel_str = BytesStr::from_static("100rel");
@@ -106,7 +106,16 @@ impl InviteInitiator {
     }
 
     pub async fn cancel(mut self) -> Result<(), sip_core::Error> {
-        let request = self.dialog_builder.create_request(Method::CANCEL);
+        let transaction = self
+            .transaction
+            .as_mut()
+            .expect("must send invite before calling cancel");
+
+        let invite_cseq = transaction.request().msg.headers.get_named::<CSeq>()?;
+
+        let request = self
+            .dialog_builder
+            .create_request(Method::CANCEL, Some(invite_cseq.cseq));
 
         self.dialog_builder
             .endpoint
@@ -238,6 +247,7 @@ impl InviteInitiator {
         Ok(Early {
             endpoint: self.dialog_builder.endpoint.clone(),
             dialog: Some(dialog),
+            invite_cseq: response.base_headers.cseq.cseq,
             response_rx,
             timer_config: self.timer_config,
         })
@@ -292,6 +302,8 @@ enum EarlyEvent {
 pub struct Early {
     endpoint: Endpoint,
     dialog: Option<Dialog>,
+
+    invite_cseq: u32,
 
     response_rx: mpsc::Receiver<EarlyEvent>,
 
@@ -366,7 +378,7 @@ impl Early {
     pub async fn cancel(mut self) -> Result<(), Error> {
         let dialog = self.dialog.as_mut().unwrap();
 
-        let request = dialog.create_request(Method::CANCEL);
+        let request = dialog.create_request(Method::CANCEL, Some(self.invite_cseq));
 
         let mut target_tp_info = dialog.target_tp_info.lock().await;
 

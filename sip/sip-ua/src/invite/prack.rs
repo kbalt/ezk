@@ -63,7 +63,7 @@ pub fn get_rseq(response: &TsxResponse) -> Option<RSeq> {
 }
 
 pub fn create_prack(dialog: &Dialog, response: &mut TsxResponse, rack: u32) -> Request {
-    let mut request = dialog.create_request(Method::PRACK);
+    let mut request = dialog.create_request(Method::PRACK, None);
 
     request.headers.insert_named(&RAck {
         rack,

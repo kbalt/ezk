@@ -118,7 +118,7 @@ impl InviteSession {
         let mut state = self.inner.state.lock().await;
         state.set_terminated();
 
-        let request = self.dialog.create_request(Method::BYE);
+        let request = self.dialog.create_request(Method::BYE, None);
 
         let mut target_tp_info = self.dialog.target_tp_info.lock().await;
 
@@ -195,7 +195,7 @@ impl InviteSession {
     pub async fn refresh(&mut self) -> Result<(), SessionRefreshError> {
         self.session_timer.reset();
 
-        let mut invite = self.dialog.create_request(Method::INVITE);
+        let mut invite = self.dialog.create_request(Method::INVITE, None);
         self.session_timer.populate_refresh(&mut invite);
 
         let mut target_tp_info = self.dialog.target_tp_info.lock().await;

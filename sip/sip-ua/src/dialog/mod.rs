@@ -112,13 +112,18 @@ impl Dialog {
         }
     }
 
-    pub fn create_request(&self, method: Method) -> Request {
+    pub fn create_request(&self, method: Method, cseq: Option<u32>) -> Request {
         let mut request = Request::new(method.clone(), self.peer_contact.uri.uri.clone());
 
-        let cseq = CSeq::new(
-            self.local_cseq.fetch_add(1, Ordering::Relaxed),
-            method.clone(),
-        );
+        let cseq = match cseq {
+            Some(cseq) => cseq,
+            None => {
+                let cseq = self.local_cseq.fetch_add(1, Ordering::Relaxed);
+                cseq.wrapping_add(1)
+            }
+        };
+
+        let cseq = CSeq::new(cseq, method.clone());
 
         request.headers.insert_type(Name::FROM, &self.local_fromto);
         request.headers.insert_type(Name::TO, &self.peer_fromto);

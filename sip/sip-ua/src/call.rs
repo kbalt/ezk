@@ -275,7 +275,7 @@ impl<M: MediaBackend> Call<M> {
 
         let invite_session = self.invite_session.as_mut().unwrap();
 
-        let mut refer = invite_session.dialog.create_request(Method::REFER);
+        let mut refer = invite_session.dialog.create_request(Method::REFER, None);
         refer.headers.insert_named(&ReferTo {
             uri,
             params: Params::default(),

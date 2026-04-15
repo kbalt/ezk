@@ -174,8 +174,14 @@ impl Headers {
     #[inline]
     pub fn get_raw(&self, name: &Name) -> slice::Iter<'_, BytesStr> {
         match self.entry(name) {
-            Some(Entry { values: OneOrMore::One(v), .. }) => slice::from_ref(v).iter(),
-            Some(Entry { values: OneOrMore::More(v), .. }) => v.iter(),
+            Some(Entry {
+                values: OneOrMore::One(v),
+                ..
+            }) => slice::from_ref(v).iter(),
+            Some(Entry {
+                values: OneOrMore::More(v),
+                ..
+            }) => v.iter(),
             None => (&[] as &[BytesStr]).iter(),
         }
     }
@@ -722,5 +728,4 @@ mod test {
         let headers = Headers::new();
         assert_eq!(headers.get_raw(&Name::from("My-Header")).count(), 0);
     }
-
 }

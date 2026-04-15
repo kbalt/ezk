@@ -45,15 +45,23 @@ impl ClientDialogBuilder {
         }
     }
 
-    pub fn create_request(&mut self, method: Method) -> Request {
+    pub fn create_request(&mut self, method: Method, cseq: Option<u32>) -> Request {
         let mut headers = Headers::new();
+
+        let cseq = match cseq {
+            Some(cseq) => cseq,
+            None => {
+                self.local_cseq += 1;
+                self.local_cseq
+            }
+        };
 
         headers.insert_named(&MaxForwards(70));
         headers.insert_type(Name::FROM, &self.local_fromto);
         headers.insert_type(Name::TO, &self.peer_fromto);
         headers.insert_named(&self.call_id);
         headers.insert_named(&CSeq {
-            cseq: self.local_cseq,
+            cseq,
             method: method.clone(),
         });
         headers.insert_named(&self.local_contact);
