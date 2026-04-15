@@ -16,6 +16,12 @@ pub trait Usage: Send + Sync + 'static {
     async fn receive(&self, endpoint: &Endpoint, request: MayTake<'_, IncomingRequest>);
 }
 
+/// Maximum number of out-of-order requests that can be buffered per dialog
+const MAX_BACKLOG_SIZE: usize = 32;
+
+/// Maximum CSeq gap allowed between the expected and incoming CSeq
+const MAX_CSEQ_GAP: u32 = 64;
+
 pub(super) struct DialogEntry {
     backlog: BTreeMap<u32, IncomingRequest>,
     next_peer_cseq: Option<u32>,
@@ -56,67 +62,93 @@ impl Layer for DialogLayer {
             }
         };
 
-        let (usages, requests) = {
+        #[expect(clippy::large_enum_variant)]
+        enum Outcome {
+            Handle(SlotMap<DefaultKey, Arc<dyn Usage>>, Vec<IncomingRequest>),
+            Reject(IncomingRequest),
+        }
+
+        let outcome = {
             let mut dialogs = self.dialogs.lock();
 
-            if let Some(dialog_entry) = dialogs.get_mut(&key) {
-                let request_cseq = request.base_headers.cseq.cseq;
+            let Some(dialog_entry) = dialogs.get_mut(&key) else {
+                // No matching dialog entry found
+                return;
+            };
 
-                // If no next peer cseq is set this is the first request received by the dialog.
-                //
-                // Initialize the next requested cseq with the incoming one to jump into the
-                // Ordering::Equal case which handles the message directly
-                let next_peer_cseq = dialog_entry.next_peer_cseq.get_or_insert(request_cseq);
+            let request_cseq = request.base_headers.cseq.cseq;
 
-                match request_cseq.cmp(next_peer_cseq) {
-                    Ordering::Less => {
-                        // CSeq number is lower than expected. ACK requests have the CSeq number of the initial
-                        // INVITE request they acknowledge as they are considered part of the transactions,
-                        // but on the UA level and thus have their own transaction id.
-                        // That is why we warn here if it's not an ACK request
-                        if request.line.method != Method::ACK {
-                            log::warn!("Incoming request has CSeq number lower than expected");
-                        }
+            // If no next peer cseq is set this is the first request received by the dialog.
+            //
+            // Initialize the next requested cseq with the incoming one to jump into the
+            // Ordering::Equal case which handles the message directly
+            let next_peer_cseq = dialog_entry.next_peer_cseq.get_or_insert(request_cseq);
 
-                        (dialog_entry.usages.clone(), vec![request.take()])
+            match request_cseq.cmp(next_peer_cseq) {
+                Ordering::Less => {
+                    // CSeq number is lower than expected. ACK requests have the CSeq number of the initial
+                    // INVITE request they acknowledge as they are considered part of the transactions,
+                    // but on the UA level and thus have their own transaction id.
+                    // That is why we warn here if it's not an ACK request
+                    if request.line.method != Method::ACK {
+                        log::warn!("Incoming request has CSeq number lower than expected");
                     }
-                    Ordering::Equal => {
-                        // CSeq number is correct!
-                        //
-                        // Clone the usage map to unlock the mutex while distributing the message
-                        // to the registered usages.
-                        let usages = dialog_entry.usages.clone();
 
-                        // Then create requests vector and look if the backlog has any messages
-                        // that would come after this one. If found put it in the messages vector
-                        // in the correct order and distribute it to the usages as well.
-                        let mut requests = vec![request.take()];
+                    Outcome::Handle(dialog_entry.usages.clone(), vec![request.take()])
+                }
+                Ordering::Equal => {
+                    // CSeq number is correct!
+                    //
+                    // Clone the usage map to unlock the mutex while distributing the message
+                    // to the registered usages.
+                    let usages = dialog_entry.usages.clone();
 
-                        for next_cseq in request_cseq.. {
-                            if let Some(message) = dialog_entry.backlog.remove(&next_cseq) {
-                                requests.push(message);
-                            } else {
-                                break;
-                            }
+                    // Then create requests vector and look if the backlog has any messages
+                    // that would come after this one. If found put it in the messages vector
+                    // in the correct order and distribute it to the usages as well.
+                    let mut requests = vec![request.take()];
+
+                    for next_cseq in (request_cseq + 1).. {
+                        if let Some(message) = dialog_entry.backlog.remove(&next_cseq) {
+                            requests.push(message);
+                        } else {
+                            break;
                         }
-
-                        // set the next expected cseq to the one of last message we handle + 1
-                        dialog_entry.next_peer_cseq =
-                            Some(requests.last().unwrap().base_headers.cseq.cseq + 1);
-
-                        (usages, requests)
                     }
-                    Ordering::Greater => {
-                        // If its larger than the expected one store it inside the dialog's backlog and return.
+
+                    // set the next expected cseq to the one of last message we handle + 1
+                    dialog_entry.next_peer_cseq =
+                        Some(requests.last().unwrap().base_headers.cseq.cseq + 1);
+
+                    Outcome::Handle(usages, requests)
+                }
+                Ordering::Greater => {
+                    // If its larger than the expected one store it inside the dialog's backlog and return.
+                    let gap = request_cseq.wrapping_sub(*next_peer_cseq);
+
+                    if gap > MAX_CSEQ_GAP || dialog_entry.backlog.len() >= MAX_BACKLOG_SIZE {
+                        dialog_entry.backlog.clear();
+                        log::warn!(
+                            "dialog backlog rejected message: gap={gap}, backlog_size={}",
+                            dialog_entry.backlog.len()
+                        );
+                        Outcome::Reject(request.take())
+                    } else {
                         dialog_entry.backlog.insert(request_cseq, request.take());
                         log::debug!(
                             "dialog received a message with cseq value above the expected one, saving it for later"
                         );
+
                         return;
                     }
                 }
-            } else {
-                // No matching dialog entry found
+            }
+        };
+
+        let (usages, requests) = match outcome {
+            Outcome::Handle(usages, requests) => (usages, requests),
+            Outcome::Reject(request) => {
+                self.reject_request(endpoint, request).await;
                 return;
             }
         };
@@ -150,6 +182,30 @@ impl Layer for DialogLayer {
 }
 
 impl DialogLayer {
+    async fn reject_request(&self, endpoint: &Endpoint, mut request: IncomingRequest) {
+        if request.line.method == Method::ACK {
+            return;
+        }
+
+        let response = endpoint.create_response(
+            &request,
+            StatusCode::BAD_REQUEST,
+            Some("CSeq gap too large".into()),
+        );
+
+        let result = if request.line.method == Method::INVITE {
+            let tsx = endpoint.create_server_inv_tsx(&mut request);
+            tsx.respond_failure(response).await
+        } else {
+            let tsx = endpoint.create_server_tsx(&mut request);
+            tsx.respond(response).await
+        };
+
+        if let Err(e) = result {
+            log::warn!("failed to reject request, {e:?}");
+        }
+    }
+
     async fn handle_unwanted_request(
         &self,
         endpoint: &Endpoint,
