@@ -64,6 +64,12 @@ impl DtlsSrtpPolicies {
         ssl.export_keying_material(&mut material, "EXTRACTOR-dtls_srtp", None)
             .map_err(SrtpFromSslError::ExportKeyingMaterial)?;
 
+        // Per RFC 5764 4.2, the exported keying material is laid out as:
+        //   [client_write_SRTP_master_key | server_write_SRTP_master_key | client_write_SRTP_master_salt | server_write_SRTP_master_salt]
+        //
+        // Rearrange it into per-endpoint (key | salt) pairs.
+        // The rotate_left reorders [server_key | client_salt | server_salt]
+        // into [client_salt | server_key | server_salt] so that each endpoint's key and salt are contiguous.
         let (client_key, server_key) = unsafe {
             let master_key_len = ffi::srtp_profile_get_master_key_length(profile_id) as usize;
             let master_salt_len = ffi::srtp_profile_get_master_salt_length(profile_id) as usize;

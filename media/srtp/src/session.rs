@@ -23,14 +23,13 @@ pub struct SrtpPolicy<'a> {
 }
 
 unsafe impl Send for SrtpPolicy<'_> {}
-unsafe impl Sync for SrtpPolicy<'_> {}
 
 impl<'a> SrtpPolicy<'a> {
     /// Create a new SRTP policy
     ///
     /// `rtp` - Crypto policy for RTP protection
     /// `rtcp` - Crypto policy for RTCP protection
-    /// `key` - Master key used for this policy
+    /// `key` - Master key concatenated with master salt
     /// `ssrc` - To which streams this policy applies
     pub fn new(
         rtp: CryptoPolicy,
@@ -38,15 +37,7 @@ impl<'a> SrtpPolicy<'a> {
         key: Cow<'a, [u8]>,
         ssrc: Ssrc,
     ) -> Result<Self, SrtpError> {
-        let expected_key_length = [
-            rtp.policy.cipher_key_len,
-            rtp.policy.auth_key_len,
-            rtcp.policy.cipher_key_len,
-            rtcp.policy.auth_key_len,
-        ]
-        .into_iter()
-        .max()
-        .unwrap();
+        let expected_key_length = rtp.policy.cipher_key_len.max(rtcp.policy.cipher_key_len);
 
         if expected_key_length < 0 {
             log::error!("policy key length is negative");
@@ -100,7 +91,7 @@ impl<'a> SrtpPolicy<'a> {
         self
     }
 
-    /// Wether retransmissions of packets with the same sequence number are allowed
+    /// Whether retransmissions of packets with the same sequence number are allowed
     ///
     /// > Note that such repeated transmissions must have the same RTP payload, or a severe security weakness is introduced!
     pub fn allow_repeat_tx(mut self, allow: bool) -> Self {
@@ -125,7 +116,6 @@ pub struct SrtpSession {
 }
 
 unsafe impl Send for SrtpSession {}
-unsafe impl Sync for SrtpSession {}
 
 impl SrtpSession {
     /// Create a new SRTP context and add the given streams to it
@@ -179,10 +169,12 @@ impl SrtpSession {
             SrtpError::FAIL
         })?;
 
-        assert!(
-            capacity >= len,
-            "function mut not set len outside of buf's capacity"
-        );
+        if capacity < len {
+            return Err(SrtpError::new(
+                "assertion capacity < len failed",
+                ffi::srtp_err_status_t_srtp_err_status_fail,
+            ));
+        }
 
         unsafe { buf.set_len(len) };
 
@@ -190,6 +182,8 @@ impl SrtpSession {
     }
 
     /// Protect a RTP packet into a SRTP packet
+    ///
+    /// The given buffer is modified in-place, and cleared on error to avoid invalid usage.
     pub fn protect_rtp(&mut self, buf: &mut Vec<u8>) -> Result<(), SrtpError> {
         buf.reserve(ffi::SRTP_MAX_TRAILER_LEN as usize);
 
@@ -200,6 +194,8 @@ impl SrtpSession {
     }
 
     /// Protect a RTCP packet into a SRTCP packet
+    ///
+    /// The given buffer is modified in-place, and cleared on error to avoid invalid usage.
     pub fn protect_rtcp(&mut self, buf: &mut Vec<u8>) -> Result<(), SrtpError> {
         buf.reserve(ffi::SRTP_MAX_SRTCP_TRAILER_LEN as usize);
 
@@ -210,6 +206,8 @@ impl SrtpSession {
     }
 
     /// Unprotect a received SRTP packet into a RTP packet
+    ///
+    /// The given buffer is modified in-place, and cleared on error to avoid invalid usage.
     pub fn unprotect_rtp(&mut self, buf: &mut Vec<u8>) -> Result<(), SrtpError> {
         self.process(buf, |ctx, hdr, len| unsafe {
             ff!(ffi::srtp_unprotect(ctx, hdr, len))
@@ -217,6 +215,8 @@ impl SrtpSession {
     }
 
     /// Unprotect a received SRTCP packet into a RTCP packet
+    ///
+    /// The given buffer is modified in-place, and cleared on error to avoid invalid usage.
     pub fn unprotect_rtcp(&mut self, buf: &mut Vec<u8>) -> Result<(), SrtpError> {
         self.process(buf, |ctx, hdr, len| unsafe {
             ff!(ffi::srtp_unprotect_rtcp(ctx, hdr, len))

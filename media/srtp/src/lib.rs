@@ -31,6 +31,11 @@ pub use session::{SrtpPolicy, SrtpSession, Ssrc};
 ///
 /// Should only be called once per program before [`init`].
 pub unsafe fn install_log_handler() {
+    static INSTALL: LazyLock<()> = LazyLock::new(|| {
+        // Discard status since the function can't actually fail
+        unsafe { ffi::srtp_install_log_handler(Some(on_log), ptr::null_mut()) };
+    });
+
     unsafe extern "C" fn on_log(
         level: ffi::srtp_log_level_t,
         msg: *const c_char,
@@ -53,8 +58,7 @@ pub unsafe fn install_log_handler() {
         }
     }
 
-    // Discard status since the function can't actually fail
-    unsafe { ffi::srtp_install_log_handler(Some(on_log), ptr::null_mut()) };
+    *INSTALL
 }
 
 /// Initialize libsrtp
