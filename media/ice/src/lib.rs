@@ -95,7 +95,8 @@ pub struct IceAgent {
 
     last_ta_trigger: Option<Instant>,
 
-    /// STUN Messages that are received before the remote credentials are available
+    /// STUN Messages that are received before the remote credentials are available.
+    /// Capped to prevent unbounded growth from unauthenticated traffic.
     backlog: Vec<(Instant, ReceivedPkt<Message>)>,
 
     events: VecDeque<IceEvent>,
@@ -526,7 +527,8 @@ impl IceAgent {
             }
         }
 
-        self.pairs.sort_unstable_by_key(|p| p.priority);
+        self.pairs
+            .sort_unstable_by(|a, b| b.priority.cmp(&a.priority));
 
         self.prune_pairs();
     }
@@ -568,7 +570,7 @@ impl IceAgent {
                 CandidatePairNomination::None
             },
         });
-        pairs.sort_unstable_by_key(|p| p.priority);
+        pairs.sort_unstable_by(|a, b| b.priority.cmp(&a.priority));
     }
 
     fn recompute_pair_priorities(&mut self) {
@@ -580,7 +582,8 @@ impl IceAgent {
             );
         }
 
-        self.pairs.sort_unstable_by_key(|p| p.priority);
+        self.pairs
+            .sort_unstable_by(|a, b| b.priority.cmp(&a.priority));
     }
 
     /// Prune the lowest priority pairs until `max_pairs` is reached
@@ -692,7 +695,9 @@ impl IceAgent {
 
         // Store messages later if the remote credentials aren't set yet
         let Some(remote_credentials) = &self.remote_credentials else {
-            self.backlog.push((now, pkt));
+            if self.backlog.len() < 128 {
+                self.backlog.push((now, pkt));
+            }
             return;
         };
 
@@ -786,7 +791,9 @@ impl IceAgent {
 
     fn receive_stun_error(&mut self, now: Instant, mut pkt: ReceivedPkt<Message>) {
         let Some(remote_credentials) = &self.remote_credentials else {
-            self.backlog.push((now, pkt));
+            if self.backlog.len() < 128 {
+                self.backlog.push((now, pkt));
+            }
             return;
         };
 
@@ -839,7 +846,9 @@ impl IceAgent {
 
     fn receive_stun_request(&mut self, now: Instant, mut pkt: ReceivedPkt<Message>) {
         let Some(remote_credentials) = &self.remote_credentials else {
-            self.backlog.push((now, pkt));
+            if self.backlog.len() < 128 {
+                self.backlog.push((now, pkt));
+            }
             return;
         };
 
@@ -1487,18 +1496,6 @@ struct DisplayPair<'a>(&'a Candidate, &'a Candidate);
 
 impl fmt::Display for DisplayPair<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fn fmt_candidate(f: &mut fmt::Formatter<'_>, c: &Candidate) -> fmt::Result {
-            match c.kind {
-                CandidateKind::Host => write!(f, "host({})", c.addr),
-                CandidateKind::PeerReflexive => {
-                    write!(f, "peer-reflexive(base:{}, peer:{})", c.base, c.addr)
-                }
-                CandidateKind::ServerReflexive => {
-                    write!(f, "server-reflexive(base:{}, server:{})", c.base, c.addr)
-                } // CandidateKind::Relayed => write!(f, "relayed(base:{}, relay:{})", c.base, c.addr),
-            }
-        }
-
         fmt_candidate(f, self.0)?;
         write!(f, " <-> ")?;
         fmt_candidate(f, self.1)
@@ -1509,19 +1506,19 @@ struct DisplayCandidate<'a>(&'a Candidate);
 
 impl fmt::Display for DisplayCandidate<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fn fmt_candidate(f: &mut fmt::Formatter<'_>, c: &Candidate) -> fmt::Result {
-            match c.kind {
-                CandidateKind::Host => write!(f, "host({})", c.addr),
-                CandidateKind::PeerReflexive => {
-                    write!(f, "peer-reflexive(base:{}, peer:{})", c.base, c.addr)
-                }
-                CandidateKind::ServerReflexive => {
-                    write!(f, "server-reflexive(base:{}, server:{})", c.base, c.addr)
-                } // CandidateKind::Relayed => write!(f, "relayed(base:{}, relay:{})", c.base, c.addr),
-            }
-        }
-
         fmt_candidate(f, self.0)
+    }
+}
+
+fn fmt_candidate(f: &mut fmt::Formatter<'_>, c: &Candidate) -> fmt::Result {
+    match c.kind {
+        CandidateKind::Host => write!(f, "host({})", c.addr),
+        CandidateKind::PeerReflexive => {
+            write!(f, "peer-reflexive(base:{}, peer:{})", c.base, c.addr)
+        }
+        CandidateKind::ServerReflexive => {
+            write!(f, "server-reflexive(base:{}, server:{})", c.base, c.addr)
+        } // CandidateKind::Relayed => write!(f, "relayed(base:{}, relay:{})", c.base, c.addr),
     }
 }
 
