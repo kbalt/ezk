@@ -13,10 +13,12 @@ workspace = true
 [dependencies]
 ice.workspace = true
 log.workspace = true
-rtp.workspace = true
 sdp-types.workspace = true
 stun-types.workspace = true
 srtp.workspace = true
+
+rtcp-types = "0.3"
+rtp-types = "0.1"
 
 base64 = "0.22"
 bytes = "1"

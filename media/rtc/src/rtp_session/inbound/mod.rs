@@ -1,11 +1,10 @@
-use crate::opt_min;
-
 use super::{ntp_timestamp::NtpTimestamp, report::ReportsQueue};
-use queue::InboundQueue;
-use rtp::{
-    RtpPacket, RtpTimestamp, Ssrc,
-    rtcp_types::{Fir, PayloadFeedback, Pli, ReportBlock, SenderReport, TransportFeedback},
+use crate::{
+    opt_min,
+    rtp::{RtpPacket, RtpTimestamp, Ssrc},
 };
+use queue::InboundQueue;
+use rtcp_types::{Fir, PayloadFeedback, Pli, ReportBlock, SenderReport, TransportFeedback};
 use std::time::{Duration, Instant};
 
 mod queue;

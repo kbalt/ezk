@@ -1,13 +1,13 @@
 use bytes::BufMut;
 
-pub struct RtpExtensionsWriter {
+pub(crate) struct RtpExtensionsWriter {
     buffer: Vec<u8>,
     len: usize,
     two_byte: bool,
 }
 
 impl RtpExtensionsWriter {
-    pub fn new(two_byte: bool) -> Self {
+    pub(crate) fn new(two_byte: bool) -> Self {
         Self {
             buffer: Vec::new(),
             len: 0,
@@ -15,11 +15,11 @@ impl RtpExtensionsWriter {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.buffer.is_empty()
     }
 
-    pub fn write(&mut self, id: u8, data: &[u8]) {
+    pub(crate) fn write(&mut self, id: u8, data: &[u8]) {
         if self.two_byte {
             assert!(id >= 1);
             assert!(data.len() <= 255);
@@ -47,7 +47,7 @@ impl RtpExtensionsWriter {
         self.buffer.put_slice(data);
     }
 
-    pub fn finish(mut self) -> (u16, Vec<u8>) {
+    pub(crate) fn finish(mut self) -> (u16, Vec<u8>) {
         let id = if self.two_byte { 0x0100 } else { 0xBEDE };
 
         let padding = padding_32_bit_boundry(self.len);
@@ -75,7 +75,7 @@ impl<T: Iterator, U: Iterator<Item = T::Item>> Iterator for ExtensionsIter<T, U>
     }
 }
 
-pub fn parse_extensions(profile: u16, data: &[u8]) -> impl Iterator<Item = (u8, &[u8])> {
+pub(crate) fn parse_extensions(profile: u16, data: &[u8]) -> impl Iterator<Item = (u8, &[u8])> {
     if profile == 0xBEDE {
         ExtensionsIter::OneByte(parse_onebyte(data))
     } else if (profile & 0xFFF) == 0x100 {

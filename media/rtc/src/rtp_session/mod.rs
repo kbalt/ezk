@@ -7,13 +7,11 @@
 use super::opt_min;
 use crate::{
     Mtu,
+    rtp::{RtpPacket, Ssrc},
     rtp_session::twcc::{TwccRxState, TwccTxState},
 };
 use report::ReportsQueue;
-use rtp::{
-    RtpPacket, Ssrc,
-    rtcp_types::{Compound, Fir, Nack, Packet as RtcpPacket, Pli, RtcpPacketParser, Twcc},
-};
+use rtcp_types::{Compound, Fir, Nack, Packet as RtcpPacket, Pli, RtcpPacketParser, Twcc};
 use smallvec::SmallVec;
 use ssrc_hasher::SsrcHasher;
 use std::{

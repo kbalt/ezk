@@ -3,7 +3,7 @@ use crate::{
     sdp::{Codec, DirectionBools, EstablishedTransport, EstablishedTransportId, LocalMediaId},
 };
 use bytesstr::BytesStr;
-use rtp::Ssrc;
+use crate::rtp::Ssrc;
 use sdp_types::{Direction, MediaDescription, MediaType, SessionDescription};
 use slotmap::SlotMap;
 

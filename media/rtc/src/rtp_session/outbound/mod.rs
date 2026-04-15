@@ -1,11 +1,9 @@
 use super::{ntp_timestamp::NtpTimestamp, report::ReportsQueue};
 use crate::opt_min;
+use crate::rtp::{RtpAudioLevelExt, RtpExtensions, RtpPacket, Ssrc};
 use bytes::Bytes;
 use queue::OutboundQueue;
-use rtp::{
-    RtpAudioLevelExt, RtpExtensions, RtpPacket, Ssrc,
-    rtcp_types::{ReportBlock, SenderReport},
-};
+use rtcp_types::{ReportBlock, SenderReport};
 use std::time::{Duration, Instant};
 
 mod queue;

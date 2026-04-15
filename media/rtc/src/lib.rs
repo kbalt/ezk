@@ -11,6 +11,7 @@
 
 mod mtu;
 
+pub mod rtp;
 pub mod rtp_session;
 pub mod rtp_transport;
 pub mod sdp;

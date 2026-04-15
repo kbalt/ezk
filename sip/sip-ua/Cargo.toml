@@ -19,7 +19,6 @@ sip-types.workspace = true
 sip-core.workspace = true
 sdp-types.workspace = true
 rtc = { workspace = true, optional = true }
-rtp = { workspace = true, optional = true }
 sip-auth.workspace = true
 
 tokio-util = { version = "0.7", optional = true }
@@ -38,4 +37,4 @@ bytes = "1"
 
 [features]
 default = ["rtc"]
-rtc = ["dep:rtc", "dep:rtp", "dep:tokio-util", "dep:futures-sink"]
+rtc = ["dep:rtc", "dep:tokio-util", "dep:futures-sink"]

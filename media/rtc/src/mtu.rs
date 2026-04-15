@@ -1,4 +1,4 @@
-const RTP_OVERHEAD: usize = rtp::rtp_types::RtpPacket::MIN_RTP_PACKET_LEN;
+const RTP_OVERHEAD: usize = rtp_types::RtpPacket::MIN_RTP_PACKET_LEN;
 
 // TODO: using conservative values here since I'm not entirely sure what is correct here
 const SRTP_OVERHEAD: usize = 32;

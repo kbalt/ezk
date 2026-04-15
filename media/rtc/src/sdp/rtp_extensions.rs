@@ -1,6 +1,6 @@
 use bytesstr::BytesStr;
-use rtp::RtpExtensionIds;
 use sdp_types::{Direction, ExtMap, MediaDescription, MediaType, SessionDescription};
+use crate::rtp::RtpExtensionIds;
 
 const RTP_MID_HDREXT: &str = "urn:ietf:params:rtp-hdrext:sdes:mid";
 const RTP_AUDIO_LEVEL_HDREXT: &str = "urn:ietf:params:rtp-hdrext:ssrc-audio-level";

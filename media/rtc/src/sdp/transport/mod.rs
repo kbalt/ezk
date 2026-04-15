@@ -1,6 +1,7 @@
 use super::TransportId;
 use crate::{
     Mtu, OpenSslContext,
+    rtp::RtpExtensionIds,
     rtp_transport::{
         Connectivity, DtlsSetup, DtlsSrtpCreateError, RtpDtlsSrtpTransport, RtpOrRtcp,
         RtpTransport, RtpTransportEvent, RtpTransportKind, RtpTransportPorts,
@@ -11,7 +12,6 @@ use crate::{
 use ice::{IceAgent, IceCredentials, ReceivedPkt};
 use openssl::hash::MessageDigest;
 use resolve::resolve_rtp_and_rtcp_address;
-use rtp::RtpExtensionIds;
 use sdes_srtp::{SdesSrtpNegotiationError, SdesSrtpOffer};
 use sdp_types::{
     FingerprintAlgorithm, MediaDescription, SessionDescription, Setup, TransportProtocol,

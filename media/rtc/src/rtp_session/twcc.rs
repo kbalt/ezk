@@ -1,15 +1,10 @@
+use crate::{Mtu, rtp::RtpPacket, rtp_session::ReportsQueue};
+use rtcp_types::{RtcpPacket, TransportFeedback, Twcc, TwccBuilder, TwccPacketStatus};
 use std::{
     collections::{BTreeMap, VecDeque},
     time::{Duration, Instant},
 };
-
-use rtp::{
-    RtpPacket,
-    rtcp_types::{RtcpPacket, TransportFeedback, Twcc, TwccBuilder, TwccPacketStatus},
-};
 use time::ext::InstantExt;
-
-use crate::{Mtu, rtp_session::ReportsQueue};
 
 /// Maximum size of the `sent_packets` queue
 const SENT_PACKETS_MAX_SIZE: Duration = Duration::from_secs(3);

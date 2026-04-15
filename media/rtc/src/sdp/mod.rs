@@ -9,6 +9,7 @@ use super::{
     opt_min,
     rtp_transport::{Connectivity, RtpTransport, RtpTransportEvent, RtpTransportPorts},
 };
+use crate::rtp::RtpPacket;
 use crate::{
     OpenSslContext,
     rtp_session::{
@@ -22,7 +23,7 @@ use bytes::Bytes;
 use bytesstr::BytesStr;
 use ice::{Component, IceAgent, IceCredentials, ReceivedPkt};
 use openssl::hash::MessageDigest;
-use rtp::{RtpPacket, rtcp_types::Compound};
+use rtcp_types::Compound;
 use sdp_types::{
     Connection, Fingerprint, FingerprintAlgorithm, Fmtp, Group, IceCandidate, IceOptions,
     IcePassword, IceUsernameFragment, MediaDescription, MsId, Origin, Rtcp, RtcpFeedback,

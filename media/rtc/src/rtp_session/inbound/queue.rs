@@ -1,8 +1,8 @@
-use crate::opt_min;
-use rtp::{
-    ExtendedRtpTimestamp, ExtendedSequenceNumber, RtpPacket, SequenceNumber, Ssrc,
-    rtcp_types::NackBuilder,
+use crate::{
+    opt_min,
+    rtp::{ExtendedRtpTimestamp, ExtendedSequenceNumber, RtpPacket, SequenceNumber, Ssrc},
 };
+use rtcp_types::NackBuilder;
 use std::{
     cmp::Ordering,
     collections::VecDeque,
@@ -481,8 +481,8 @@ fn map_instant_to_rtp_timestamp(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rtp::{RtpExtensions, RtpTimestamp, SequenceNumber, Ssrc};
     use bytes::Bytes;
-    use rtp::{RtpExtensions, RtpTimestamp, SequenceNumber, Ssrc};
 
     fn make_packet(seq: u16, ts: u32) -> RtpPacket {
         RtpPacket {

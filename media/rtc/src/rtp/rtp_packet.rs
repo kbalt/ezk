@@ -1,4 +1,4 @@
-use crate::{RtpExtensionsWriter, RtpTimestamp, SequenceNumber, Ssrc, parse_extensions};
+use crate::rtp::{RtpExtensionsWriter, RtpTimestamp, SequenceNumber, Ssrc, parse_extensions};
 use bytes::Bytes;
 use rtp_types::{RtpPacketBuilder, prelude::RtpPacketWriter};
 
@@ -29,7 +29,7 @@ pub struct RtpExtensionIds {
 }
 
 impl RtpPacket {
-    pub fn write_vec(&self, extension_ids: RtpExtensionIds, vec: &mut Vec<u8>) {
+    pub(crate) fn write_vec(&self, extension_ids: RtpExtensionIds, vec: &mut Vec<u8>) {
         let builder = RtpPacketBuilder::<_, Vec<u8>>::new()
             .payload_type(self.pt)
             .sequence_number(self.sequence_number.0)
@@ -49,13 +49,13 @@ impl RtpPacket {
         builder.write(&mut writer).unwrap();
     }
 
-    pub fn to_vec(&self, extension_ids: RtpExtensionIds) -> Vec<u8> {
+    pub(crate) fn to_vec(&self, extension_ids: RtpExtensionIds) -> Vec<u8> {
         let mut vec = Vec::with_capacity(1500);
         self.write_vec(extension_ids, &mut vec);
         vec
     }
 
-    pub fn parse(
+    pub(crate) fn parse(
         extension_ids: RtpExtensionIds,
         bytes: impl Into<Bytes>,
     ) -> Result<Self, rtp_types::RtpParseError> {

@@ -4,6 +4,7 @@ use bytes::Bytes;
 use bytesstr::BytesStr;
 use parking_lot::lock_api::MutexGuard;
 use parking_lot::{MappedMutexGuard, Mutex};
+use rand::RngExt;
 use sip_types::Headers;
 use sip_types::msg::{MessageLine, StatusLine};
 use std::collections::HashMap;
@@ -109,7 +110,7 @@ pub struct TsxMessage {
 
 fn generate_branch() -> BytesStr {
     use rand::distr::Alphanumeric;
-    use rand::{Rng, rng};
+    use rand::rng;
 
     consts::RFC3261_BRANCH_PREFIX
         .bytes()

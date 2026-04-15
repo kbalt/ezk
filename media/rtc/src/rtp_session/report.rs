@@ -1,11 +1,7 @@
-use crate::Mtu;
-use rtp::{
-    Ssrc,
-    rtcp_types::{
-        Bye, CompoundBuilder, PayloadFeedbackBuilder, ReceiverReport, ReportBlock,
-        ReportBlockBuilder, RtcpPacket, RtcpPacketWriter, SenderReport, SenderReportBuilder,
-        TransportFeedbackBuilder,
-    },
+use crate::{Mtu, rtp::Ssrc};
+use rtcp_types::{
+    Bye, CompoundBuilder, PayloadFeedbackBuilder, ReceiverReport, ReportBlock, ReportBlockBuilder,
+    RtcpPacket, RtcpPacketWriter, SenderReport, SenderReportBuilder, TransportFeedbackBuilder,
 };
 use std::{cmp, collections::VecDeque};
 
@@ -202,7 +198,7 @@ fn calculate_num_of_packet_type(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rtp::rtcp_types::{Compound, Packet};
+    use rtcp_types::{Compound, Packet};
 
     #[test]
     fn single_sr() {
