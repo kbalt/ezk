@@ -82,10 +82,6 @@ impl Registration {
                 self.expires = expires;
             }
         }
-
-        if self.to.tag.is_none() {
-            self.to.tag = response.base_headers.to.tag;
-        }
     }
 
     /// Handle an error response received from a registrar
