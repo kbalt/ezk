@@ -1,6 +1,6 @@
 use crate::rtp_transport::RtpSdesSrtpTransport;
 use base64::{Engine, prelude::BASE64_STANDARD};
-use rand::RngCore;
+use rand::Rng;
 use sdp_types::{
     SrtpCrypto, SrtpKeyingMaterial,
     SrtpSuite::{self, *},

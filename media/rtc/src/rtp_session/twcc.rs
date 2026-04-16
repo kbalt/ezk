@@ -41,6 +41,8 @@ enum SentPacketStatus {
 }
 
 impl TwccTxState {
+    // TODO: currently not constructed since this doesn't do anything yet
+    #[expect(unused)]
     pub(super) fn new() -> TwccTxState {
         TwccTxState {
             base_time: Instant::now(),
