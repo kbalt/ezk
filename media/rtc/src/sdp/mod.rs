@@ -12,8 +12,8 @@ use super::{
 use crate::{
     rtp::RtpPacket,
     rtp_session::{
-        ForwardRtpPacket, RtpInboundStream, RtpOutboundQueueMode, RtpOutboundStream, RtpSession,
-        RtpSessionPollEvent, RtpSessionReceiveRtcpEvent, RxStream, SendRtpPacket,
+        ForwardRtpPacket, RtpInboundStream, RtpOutboundStream, RtpSession, RtpSessionPollEvent,
+        RtpSessionReceiveRtcpEvent, RxStream, SendRtpPacket,
     },
     rtp_transport::{RtpOrRtcp, TransportConnectionState},
     sdp::{event::MediaRemoved, local_media::LocalMedia, media::MediaSsrcs},
