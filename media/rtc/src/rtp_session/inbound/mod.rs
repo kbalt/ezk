@@ -2,15 +2,19 @@ use super::{ntp_timestamp::NtpTimestamp, report::ReportsQueue};
 use crate::{
     opt_min,
     rtp::{RtpPacket, RtpTimestamp, Ssrc},
+    rtp_session::inbound::queue::Queue,
 };
-use queue::InboundQueue;
 use rtcp_types::{Fir, PayloadFeedback, Pli, ReportBlock, SenderReport, TransportFeedback};
 use std::time::{Duration, Instant};
 
 mod queue;
 mod stats;
 
-pub use stats::{RtpInboundRemoteStats, RtpInboundStats};
+pub use queue::config::{
+    RtpInboundPassthroughConfig, RtpInboundQueueMode, RtpInboundSortedQueueConfig,
+    RtpInboundStreamDynamicConfig, RtpInboundStreamSortedQueueMode,
+};
+pub use stats::{RtpInboundRemoteStats, RtpInboundRtxStats, RtpInboundStats};
 
 /// Minimum interval in which FIR/PLI requests can be sent
 const RTCP_FEEDBACK_COOLDOWN: Duration = Duration::from_millis(500);
@@ -18,7 +22,8 @@ const RTCP_FEEDBACK_COOLDOWN: Duration = Duration::from_millis(500);
 /// RTP receive stream
 pub struct RtpInboundStream {
     ssrc: Ssrc,
-    queue: InboundQueue,
+    clock_rate: u32,
+    buffer: Queue,
     report_interval: Duration,
 
     // Timestamp of report, received packets, lost packets (at the time of the report)
@@ -56,10 +61,15 @@ impl RtpInboundStream {
         clock_rate: u32,
         report_interval: Duration,
         emit_nack: bool,
+        mode: RtpInboundQueueMode,
     ) -> Self {
+        // TODO: separate emit_nack & rtx
+        let buffer = Queue::new(mode, pt, ssrc, clock_rate, emit_nack);
+
         RtpInboundStream {
             ssrc,
-            queue: InboundQueue::new(pt, ssrc, clock_rate, emit_nack),
+            clock_rate,
+            buffer,
             report_interval,
             last_report_sent: None,
             media_time_ref: None,
@@ -88,13 +98,13 @@ impl RtpInboundStream {
     }
 
     pub(crate) fn timeout(&self, now: Instant) -> Option<Duration> {
-        let mut timeout = self.queue.timeout_receive(now);
+        let mut timeout = self.buffer.timeout_receive(now);
 
         if self.emit_nack {
-            timeout = opt_min(timeout, self.queue.timeout_nack(now));
+            timeout = opt_min(timeout, self.buffer.timeout_nack(now));
         }
 
-        let report = if self.queue.highest_sequence_number_received().is_some() {
+        let report = if self.buffer.highest_sequence_number_received().is_some() {
             let report_interval = self
                 .last_report_sent
                 .and_then(|(last_report_sent, _, _)| {
@@ -102,17 +112,21 @@ impl RtpInboundStream {
                 })
                 .unwrap_or_default();
 
-            let nack_pli = self
-                .last_nack_pli
-                .map(|ts| (ts + RTCP_FEEDBACK_COOLDOWN).saturating_duration_since(now))
-                .filter(|_| self.want_nack_pli);
+            let nack_pli = self.last_nack_pli.map_or(Duration::ZERO, |ts| {
+                (ts + RTCP_FEEDBACK_COOLDOWN).saturating_duration_since(now)
+            });
 
-            let ccm_fir = self
-                .last_ccm_fir
-                .map(|ts| (ts + RTCP_FEEDBACK_COOLDOWN).saturating_duration_since(now))
-                .filter(|_| self.want_ccm_fir);
+            let ccm_fir = self.last_ccm_fir.map_or(Duration::ZERO, |ts| {
+                (ts + RTCP_FEEDBACK_COOLDOWN).saturating_duration_since(now)
+            });
 
-            opt_min(Some(report_interval), opt_min(nack_pli, ccm_fir))
+            opt_min(
+                Some(report_interval),
+                opt_min(
+                    self.want_nack_pli.then_some(nack_pli),
+                    self.want_ccm_fir.then_some(ccm_fir),
+                ),
+            )
         } else {
             None
         };
@@ -127,7 +141,7 @@ impl RtpInboundStream {
         reports: &mut ReportsQueue,
     ) {
         if self.emit_nack
-            && let Some(nack) = self.queue.poll_nack(now)
+            && let Some(nack) = self.buffer.poll_nack(now)
         {
             reports.add_transport_feedback(
                 TransportFeedback::builder_owned(nack)
@@ -186,7 +200,7 @@ impl RtpInboundStream {
             return;
         }
 
-        let Some(extended_sequence_number) = self.queue.highest_sequence_number_received() else {
+        let Some(extended_sequence_number) = self.buffer.highest_sequence_number_received() else {
             return;
         };
 
@@ -194,7 +208,7 @@ impl RtpInboundStream {
             && sr.is_sender_report
         {
             let delay = NtpTimestamp::from_instant(now) - sr.ntp_timestamp;
-            let delay = (delay.as_seconds_f64() * 65536.0) as u32;
+            let delay = (delay.as_seconds_f64() * 65536.0).clamp(0.0, u32::MAX as _) as u32;
 
             let last_sr = sr.ntp_timestamp.to_fixed_u32();
 
@@ -203,29 +217,35 @@ impl RtpInboundStream {
             (0, 0)
         };
 
+        let fraction_lost = if let Some((_, last_received, last_lost)) = self.last_report_sent {
+            let lost = (self.buffer.lost - last_lost) as f32;
+            let received = (self.buffer.received - last_received) as f32;
+
+            let total = received + lost;
+
+            if total == 0.0 { 0.0 } else { lost / total }
+        } else {
+            let lost = self.buffer.lost as f32;
+            let received = self.buffer.received as f32;
+
+            let total = received + lost;
+
+            if total == 0.0 { 0.0 } else { lost / total }
+        };
+
         let report_block = ReportBlock::builder(self.ssrc.0)
-            .fraction_lost((self.packet_loss() * 255.0) as u8)
-            .cumulative_lost(self.queue.lost as u32)
+            .fraction_lost((fraction_lost * 255.0) as u8)
+            .cumulative_lost(self.buffer.lost.min(0x7FFFFF) as u32)
             .extended_sequence_number(extended_sequence_number.0 as u32)
-            .interarrival_jitter(self.queue.jitter as u32)
+            .interarrival_jitter(
+                (self.buffer.jitter.get().as_secs_f32() * self.clock_rate as f32) as u32,
+            )
             .last_sender_report_timestamp(last_sr)
             .delay_since_last_sender_report_timestamp(delay);
 
         reports.add_report_block(report_block);
 
-        self.last_report_sent = Some((now, self.queue.received, self.queue.lost));
-    }
-
-    fn packet_loss(&self) -> f32 {
-        let (last_received, last_lost) = self
-            .last_report_sent
-            .map(|(_, received, lost)| (received, lost))
-            .unwrap_or((0, 0));
-
-        let received_since_last_report = self.queue.received - last_received;
-        let lost_since_last_report = self.queue.lost - last_lost;
-
-        lost_since_last_report as f32 / (received_since_last_report) as f32
+        self.last_report_sent = Some((now, self.buffer.received, self.buffer.lost));
     }
 
     pub(crate) fn handle_sender_report(&mut self, now: Instant, sender_report: &SenderReport) {
@@ -246,19 +266,19 @@ impl RtpInboundStream {
     ///
     /// The stream will internally keep the packet for a short time to perform reordering and deduplication.
     pub fn receive_rtp(&mut self, now: Instant, packet: RtpPacket) {
-        self.queue.push(now, packet);
+        self.buffer.push(now, packet);
     }
 
     /// Hand off a RTX (retransmission) rtp packet to the RTP receive stream
     pub fn receive_rtx(&mut self, now: Instant, packet: RtpPacket) {
-        self.queue.push_rtx(now, packet)
+        self.buffer.push_rtx(now, packet);
     }
 
     /// Check for a RTP packet that is ready to be received
     pub(crate) fn poll(&mut self, now: Instant) -> Option<RtpInboundStreamEvent> {
         let mut packets = smallvec::SmallVec::new();
 
-        while let Some((rtp_packet, received_at)) = self.queue.poll(now) {
+        while let Some((rtp_packet, received_at, delay)) = self.buffer.poll(now) {
             let media_time_ref = self.media_time_ref.get_or_insert_with(|| MediaTimeRef {
                 is_sender_report: false,
                 rtp_timestamp: rtp_packet.timestamp,
@@ -273,13 +293,14 @@ impl RtpInboundStream {
                 .wrapping_sub(media_time_ref.rtp_timestamp.0)
                 .cast_signed();
 
-            let secs_diff = diff as f64 / self.queue.clock_rate as f64;
+            let secs_diff = diff as f64 / self.clock_rate as f64;
             let media_time =
                 media_time_ref.ntp_timestamp.to_instant() + time::Duration::seconds_f64(secs_diff);
 
             packets.push(RtpInboundPacket {
                 received_at,
                 media_time,
+                delay,
                 rtp_packet,
             });
         }
@@ -293,13 +314,12 @@ impl RtpInboundStream {
 
     pub fn stats(&self) -> RtpInboundStats {
         RtpInboundStats {
-            packets_received: self.queue.received,
-            bytes_received: self.queue.received_bytes,
-            packets_lost: self.queue.lost,
-            loss: self.packet_loss(),
-            jitter: Duration::from_secs_f64(self.queue.jitter / self.queue.clock_rate as f64),
-            queue_size: self.queue.queue_size,
-            rtx: self.queue.rtx_stats(),
+            packets_received: self.buffer.received,
+            bytes_received: self.buffer.received_bytes,
+            packets_lost: self.buffer.lost,
+            loss: self.buffer.packet_loss.get(),
+            jitter: self.buffer.jitter.get(),
+            rtx: self.buffer.rtx_stats(),
             remote: self.remote_stats,
         }
     }
@@ -317,5 +337,9 @@ pub struct RtpInboundPacket {
     ///
     /// Must only be compared to other `media_time` instants.
     pub media_time: Instant,
+
+    /// Delay applied to this packet by the inbound jitter buffer
+    pub delay: Duration,
+
     pub rtp_packet: RtpPacket,
 }

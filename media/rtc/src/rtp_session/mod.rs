@@ -27,8 +27,9 @@ mod ssrc_hasher;
 mod twcc;
 
 pub use inbound::{
-    RtpInboundPacket, RtpInboundRemoteStats, RtpInboundStats, RtpInboundStream,
-    RtpInboundStreamEvent,
+    RtpInboundPacket, RtpInboundPassthroughConfig, RtpInboundQueueMode, RtpInboundRemoteStats,
+    RtpInboundRtxStats, RtpInboundSortedQueueConfig, RtpInboundStats, RtpInboundStream,
+    RtpInboundStreamDynamicConfig, RtpInboundStreamEvent, RtpInboundStreamSortedQueueMode,
 };
 pub use outbound::{
     RtpOutboundRemoteStats, RtpOutboundStats, RtpOutboundStream, RtpOutboundStreamEvent,
@@ -132,8 +133,16 @@ impl RtpSession {
         ssrc: Ssrc,
         clock_rate: u32,
         emit_nack: bool,
+        mode: RtpInboundQueueMode,
     ) -> &mut RtpInboundStream {
-        let stream = RtpInboundStream::new(pt, ssrc, clock_rate, Duration::from_secs(1), emit_nack);
+        let stream = RtpInboundStream::new(
+            pt,
+            ssrc,
+            clock_rate,
+            Duration::from_secs(1),
+            emit_nack,
+            mode,
+        );
 
         self.rx
             .entry(ssrc)
