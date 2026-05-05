@@ -2,7 +2,9 @@ use std::net::Ipv4Addr;
 
 use ezk_rtc::{
     Mtu, OpenSslContext,
-    rtp_session::{RtpInboundPacket, SendRtpPacket},
+    rtp_session::{
+        RtpInboundPacket, RtpInboundPassthroughConfig, RtpInboundQueueMode, SendRtpPacket,
+    },
     sdp::{
         BundlePolicy, Codec, Codecs, LocalMediaId, RtcpMuxPolicy, SdpSession, SdpSessionConfig,
         SdpSessionEvent, TransportType,
@@ -20,7 +22,7 @@ pub(crate) fn make_session(config: SdpSessionConfig) -> (LocalMediaId, SdpSessio
 
     let audio = session
         .add_local_media(
-            Codecs::new(MediaType::Video).with_codec(Codec::VP8.with_rtx()),
+            Codecs::new(MediaType::Video).with_codec(Codec::AV1.with_rtx()),
             Direction::SendRecv,
         )
         .unwrap();
@@ -39,6 +41,9 @@ async fn main() {
         rtcp_mux_policy: RtcpMuxPolicy::Require,
         bundle_policy: BundlePolicy::MaxBundle,
         mtu: Mtu::new(1400),
+        inbound_stream_mode: RtpInboundQueueMode::Passthrough(
+            RtpInboundPassthroughConfig::default(),
+        ),
     });
 
     let mut io = TokioIoState::new_with_local_ips().unwrap();
@@ -101,20 +106,26 @@ fn handle_event(io: &mut TokioIoState, sdp_session: &mut SdpSession, event: SdpS
             for RtpInboundPacket {
                 received_at: _,
                 media_time,
+                delay,
                 rtp_packet,
             } in packets
             {
+                println!("Delay: {delay:?}");
                 outbound_media.send_rtp(
                     SendRtpPacket::new(media_time, rtp_packet.pt, rtp_packet.payload)
                         .marker(rtp_packet.marker),
                 );
             }
         }
-        SdpSessionEvent::ReceivePictureLossIndication { .. } => {
-            println!("pli");
+        SdpSessionEvent::ReceivePictureLossIndication { media_id, .. } => {
+            let mut outbound_media = sdp_session.inbound_media(media_id).unwrap();
+
+            outbound_media.send_pli();
         }
-        SdpSessionEvent::ReceiveFullIntraRefresh { .. } => {
-            println!("fir");
+        SdpSessionEvent::ReceiveFullIntraRefresh { media_id, .. } => {
+            let mut outbound_media = sdp_session.inbound_media(media_id).unwrap();
+
+            outbound_media.send_fir();
         }
     }
 }

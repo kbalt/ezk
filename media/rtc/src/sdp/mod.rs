@@ -1007,6 +1007,7 @@ impl SdpSession {
 
             for (instant, rtp_or_rtcp) in early_received_rtp_or_rtcp {
                 Self::handle_received_rtp_or_rtcp(
+                    &self.config,
                     &mut self.events,
                     &mut self.media,
                     id,
@@ -1258,7 +1259,7 @@ impl SdpSession {
                         clock_rate: codec.clock_rate,
                         params: None,
                     });
-                    
+
                     fmtp.push(Fmtp {
                         format: rtx_pt,
                         params: format!("apt={pt}").into(),
@@ -1784,6 +1785,7 @@ impl SdpSession {
 
             if let Some(rtp_or_rtcp) = transport.transport.receive(now, pkt) {
                 Self::handle_received_rtp_or_rtcp(
+                    &self.config,
                     &mut self.events,
                     &mut self.media,
                     transport_id,
@@ -1803,6 +1805,7 @@ impl SdpSession {
     }
 
     fn handle_received_rtp_or_rtcp(
+        config: &SdpSessionConfig,
         events: &mut VecDeque<SdpSessionEvent>,
         media: &mut [Media],
         transport_id: EstablishedTransportId,
@@ -1828,6 +1831,7 @@ impl SdpSession {
                     }
                 } else {
                     Self::handle_new_ssrc(
+                        config,
                         media,
                         &mut transport.rtp_session,
                         now,
@@ -1874,6 +1878,7 @@ impl SdpSession {
     }
 
     fn handle_new_ssrc(
+        config: &SdpSessionConfig,
         media: &mut [Media],
         rtp_session: &mut RtpSession,
         now: Instant,
@@ -1913,6 +1918,7 @@ impl SdpSession {
                 media.codec.clock_rate,
                 // Emit NACK feedback if RTX is setup for this media
                 media.rtx_pt.is_some() && media.accepts_nack,
+                config.inbound_stream_mode.clone(),
             );
 
             media.ssrcs.rx = Some(rtp_packet.ssrc);
