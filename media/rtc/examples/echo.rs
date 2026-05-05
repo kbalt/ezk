@@ -3,7 +3,8 @@ use std::net::Ipv4Addr;
 use ezk_rtc::{
     Mtu, OpenSslContext,
     rtp_session::{
-        RtpInboundPacket, RtpInboundPassthroughConfig, RtpInboundQueueMode, SendRtpPacket,
+        RtpInboundPacket, RtpInboundPassthroughConfig, RtpInboundQueueMode, RtpOutboundQueueMode,
+        SendRtpPacket,
     },
     sdp::{
         BundlePolicy, Codec, Codecs, LocalMediaId, RtcpMuxPolicy, SdpSession, SdpSessionConfig,
@@ -44,6 +45,7 @@ async fn main() {
         inbound_stream_mode: RtpInboundQueueMode::Passthrough(
             RtpInboundPassthroughConfig::default(),
         ),
+        outbound_stream_mode: RtpOutboundQueueMode::Forward,
     });
 
     let mut io = TokioIoState::new_with_local_ips().unwrap();
