@@ -12,8 +12,8 @@ use super::{
 use crate::{
     rtp::RtpPacket,
     rtp_session::{
-        RtpInboundStream, RtpOutboundStream, RtpSession, RtpSessionPollEvent,
-        RtpSessionReceiveRtcpEvent, RxStream, SendRtpPacket,
+        ForwardRtpPacket, RtpInboundStream, RtpOutboundQueueMode, RtpOutboundStream, RtpSession,
+        RtpSessionPollEvent, RtpSessionReceiveRtcpEvent, RxStream, SendRtpPacket,
     },
     rtp_transport::{RtpOrRtcp, TransportConnectionState},
     sdp::{event::MediaRemoved, local_media::LocalMedia, media::MediaSsrcs},
@@ -2005,9 +2005,11 @@ impl SdpSession {
                     .filter(|_| media.accepts_nack)
                     .map(|rtx_pt| rtx_pt.local);
 
-                let stream = transport
-                    .rtp_session
-                    .new_tx_stream(media.codec.clock_rate, rtx_pt);
+                let stream = transport.rtp_session.new_tx_stream(
+                    self.config.outbound_stream_mode.clone(),
+                    media.codec.clock_rate,
+                    rtx_pt,
+                );
 
                 media.ssrcs.tx = Some(stream.ssrc());
 
@@ -2158,6 +2160,7 @@ impl OutboundMedia<'_> {
         self.media
     }
 
+    /// Send a RTP packet through this stream.
     pub fn send_rtp(&mut self, packet: SendRtpPacket) {
         let packet = match &self.media.mid {
             Some(e) => packet.with_mid(AsRef::<Bytes>::as_ref(e).clone()),
@@ -2165,6 +2168,15 @@ impl OutboundMedia<'_> {
         };
 
         self.stream.send_rtp(packet);
+    }
+
+    /// Forward a pre-built RTP packet through this stream.
+    pub fn forward_rtp(&mut self, mut packet: ForwardRtpPacket) {
+        if let Some(e) = &self.media.mid {
+            packet.extensions.mid = Some(AsRef::<Bytes>::as_ref(e).clone());
+        }
+
+        self.stream.forward_rtp(packet);
     }
 }
 

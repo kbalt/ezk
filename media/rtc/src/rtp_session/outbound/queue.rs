@@ -1,6 +1,6 @@
-use crate::rtp_session::outbound::RtpOutboundStreamEvent;
+use crate::rtp_session::{RtpOutboundQueueMode, outbound::RtpOutboundStreamEvent};
 
-use super::SendRtpPacket;
+use super::{ForwardRtpPacket, SendRtpPacket};
 use crate::rtp::{
     ExtendedRtpTimestamp, ExtendedSequenceNumber, RtpExtensions, RtpPacket, RtpTimestamp, Ssrc,
 };
@@ -21,13 +21,18 @@ pub(crate) struct OutboundQueue {
     /// Ever increasing counter used as tie breaker for packets in the queue
     num_packets: u64,
     /// Outbound packet queue. Sorted by packet send time.
-    queue: BTreeMap<QueueKey, QueueEntry>,
+    queue: Queue,
 
     /// Sequence number of the next packet to be sent
     current_sequence_number: ExtendedSequenceNumber,
 
     /// Retransmission state
     rtx: Option<Rtx>,
+}
+
+enum Queue {
+    Generate(BTreeMap<QueueKey, QueueEntry>),
+    Forward(VecDeque<RtpPacket>),
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -65,13 +70,21 @@ struct Rtx {
 }
 
 impl OutboundQueue {
-    pub(crate) fn new(ssrc: Ssrc, clock_rate: u32, rtx: Option<(u8, Ssrc)>) -> Self {
+    pub(crate) fn new(
+        mode: RtpOutboundQueueMode,
+        ssrc: Ssrc,
+        clock_rate: u32,
+        rtx: Option<(u8, Ssrc)>,
+    ) -> Self {
         OutboundQueue {
             ssrc,
             clock_rate: clock_rate as f32,
             first_rtp_timestamp: None,
             num_packets: 0,
-            queue: BTreeMap::new(),
+            queue: match mode {
+                RtpOutboundQueueMode::Generate => Queue::Generate(BTreeMap::new()),
+                RtpOutboundQueueMode::Forward => Queue::Forward(VecDeque::new()),
+            },
             current_sequence_number: ExtendedSequenceNumber(rand::random_range(0xF..0x7FF)),
             rtx: rtx.map(|(pt, ssrc)| Rtx {
                 ssrc,
@@ -123,10 +136,14 @@ impl OutboundQueue {
             .expect("just set the first_rtp_timestamp")
             .truncated();
 
+        let Queue::Generate(queue) = &mut self.queue else {
+            panic!("Called push on forward queue");
+        };
+
         let tie_breaker = self.num_packets;
         self.num_packets += 1;
 
-        self.queue.insert(
+        queue.insert(
             QueueKey {
                 send_at,
                 tie_breaker,
@@ -139,6 +156,32 @@ impl OutboundQueue {
                 payload,
             },
         );
+    }
+
+    pub(crate) fn push_forward(
+        &mut self,
+        ForwardRtpPacket {
+            sequence_number,
+            timestamp,
+            pt,
+            marker,
+            extensions,
+            payload,
+        }: ForwardRtpPacket,
+    ) {
+        let Queue::Forward(queue) = &mut self.queue else {
+            panic!("Called push_forward on generate queue");
+        };
+
+        queue.push_back(RtpPacket {
+            pt,
+            sequence_number,
+            ssrc: self.ssrc,
+            timestamp,
+            marker,
+            extensions,
+            payload,
+        });
     }
 
     pub(crate) fn poll(&mut self, now: Instant) -> Option<RtpOutboundStreamEvent> {
@@ -163,47 +206,55 @@ impl OutboundQueue {
             });
         }
 
-        // Deque outbound packets
-        let (&QueueKey { send_at, .. }, _) = self.queue.first_key_value()?;
+        match &mut self.queue {
+            Queue::Generate(queue) => {
+                // Deque outbound packets
+                let (&QueueKey { send_at, .. }, _) = queue.first_key_value()?;
 
-        if now < send_at {
-            return None;
-        }
+                if now < send_at {
+                    return None;
+                }
 
-        let QueueEntry {
-            pt,
-            timestamp,
-            marker,
-            extensions,
-            payload,
-        } = self.queue.pop_first()?.1;
+                let QueueEntry {
+                    pt,
+                    timestamp,
+                    marker,
+                    extensions,
+                    payload,
+                } = queue.pop_first()?.1;
 
-        let rtp_packet = RtpPacket {
-            pt,
-            sequence_number: self.current_sequence_number.increase_one(),
-            ssrc: self.ssrc,
-            timestamp,
-            marker,
-            extensions,
-            payload,
-        };
+                let rtp_packet = RtpPacket {
+                    pt,
+                    sequence_number: self.current_sequence_number.increase_one(),
+                    ssrc: self.ssrc,
+                    timestamp,
+                    marker,
+                    extensions,
+                    payload,
+                };
 
-        // Store packet in sent_packets if configured
-        if let Some(rtx) = &mut self.rtx {
-            rtx.sent_packets.push_back((rtp_packet.clone(), now, 0));
+                // Store packet in sent_packets if configured
+                if let Some(rtx) = &mut self.rtx {
+                    rtx.sent_packets.push_back((rtp_packet.clone(), now, 0));
 
-            // Remove old packets
-            while let Some((_, sent_at, _)) = rtx.sent_packets.front()
-                && now.saturating_duration_since(*sent_at) > rtx.sent_packets_max_size
-            {
-                rtx.sent_packets.pop_front();
+                    // Remove old packets
+                    while let Some((_, sent_at, _)) = rtx.sent_packets.front()
+                        && now.saturating_duration_since(*sent_at) > rtx.sent_packets_max_size
+                    {
+                        rtx.sent_packets.pop_front();
+                    }
+                }
+
+                Some(RtpOutboundStreamEvent::SendRtpPacket {
+                    rtp_packet,
+                    is_rtx: false,
+                })
             }
+            Queue::Forward(queue) => Some(RtpOutboundStreamEvent::SendRtpPacket {
+                rtp_packet: queue.pop_front()?,
+                is_rtx: false,
+            }),
         }
-
-        Some(RtpOutboundStreamEvent::SendRtpPacket {
-            rtp_packet,
-            is_rtx: false,
-        })
     }
 
     pub(crate) fn timeout(&self, now: Instant) -> Option<Duration> {
@@ -213,15 +264,25 @@ impl OutboundQueue {
             return Some(Duration::ZERO);
         }
 
-        let timeout = self
-            .queue
-            .first_key_value()?
-            .0
-            .send_at
-            .checked_duration_since(now)
-            .unwrap_or_default();
+        match &self.queue {
+            Queue::Generate(queue) => {
+                let timeout = queue
+                    .first_key_value()?
+                    .0
+                    .send_at
+                    .checked_duration_since(now)
+                    .unwrap_or_default();
 
-        Some(timeout)
+                Some(timeout)
+            }
+            Queue::Forward(queue) => {
+                if queue.is_empty() {
+                    None
+                } else {
+                    Some(Duration::ZERO)
+                }
+            }
+        }
     }
 
     pub(crate) fn handle_nack(&mut self, entries: impl Iterator<Item = u16>) {
@@ -258,7 +319,7 @@ mod tests {
     #[test]
     fn sequence_rollover() {
         for i in 0..65535 {
-            let mut queue = OutboundQueue::new(Ssrc(0), 1000, None);
+            let mut queue = OutboundQueue::new(RtpOutboundQueueMode::Generate, Ssrc(0), 1000, None);
             queue.current_sequence_number = ExtendedSequenceNumber((i << 16) | (65535 - 6));
 
             let now = Instant::now();
@@ -286,7 +347,7 @@ mod tests {
     fn it_reorders() {
         let now = Instant::now();
 
-        let mut queue = OutboundQueue::new(Ssrc(0), 1000, None);
+        let mut queue = OutboundQueue::new(RtpOutboundQueueMode::Generate, Ssrc(0), 1000, None);
         queue.first_rtp_timestamp = Some((now, ExtendedRtpTimestamp(1000)));
 
         queue.push(packet(now, 2));
@@ -337,7 +398,7 @@ mod tests {
     fn preserve_insertion_order_on_equal_instant() {
         let now = Instant::now();
 
-        let mut queue = OutboundQueue::new(Ssrc(0), 1000, None);
+        let mut queue = OutboundQueue::new(RtpOutboundQueueMode::Generate, Ssrc(0), 1000, None);
         queue.first_rtp_timestamp = Some((now, ExtendedRtpTimestamp(1000)));
 
         queue.push(packet(now, 1));
