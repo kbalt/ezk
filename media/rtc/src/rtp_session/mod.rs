@@ -32,8 +32,8 @@ pub use inbound::{
     RtpInboundStreamDynamicConfig, RtpInboundStreamEvent, RtpInboundStreamSortedQueueMode,
 };
 pub use outbound::{
-    RtpOutboundRemoteStats, RtpOutboundStats, RtpOutboundStream, RtpOutboundStreamEvent,
-    SendRtpPacket,
+    ForwardRtpPacket, RtpOutboundQueueMode, RtpOutboundRemoteStats, RtpOutboundStats,
+    RtpOutboundStream, RtpOutboundStreamEvent, SendRtpPacket,
 };
 
 /// Contains multiple RTP send/receive streams.
@@ -107,7 +107,12 @@ impl RtpSession {
     }
 
     /// Create a new outbound RTP stream with the given parameters
-    pub fn new_tx_stream(&mut self, clock_rate: u32, rtx_pt: Option<u8>) -> &mut RtpOutboundStream {
+    pub fn new_tx_stream(
+        &mut self,
+        mode: RtpOutboundQueueMode,
+        clock_rate: u32,
+        rtx_pt: Option<u8>,
+    ) -> &mut RtpOutboundStream {
         let ssrc = self.next_tx_ssrc;
 
         // Generate the next outbound SSRC, making sure to avoid collision
@@ -121,7 +126,7 @@ impl RtpSession {
             None
         };
 
-        let stream = RtpOutboundStream::new(ssrc, clock_rate, Duration::from_secs(1), rtx);
+        let stream = RtpOutboundStream::new(mode, ssrc, clock_rate, Duration::from_secs(1), rtx);
 
         self.tx.entry(ssrc).insert_entry(stream).into_mut()
     }
