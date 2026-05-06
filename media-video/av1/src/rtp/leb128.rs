@@ -15,10 +15,22 @@ pub(super) fn expected_size(v: u32) -> usize {
 }
 
 pub(super) fn read_leb128(bytes: &[u8]) -> Option<(usize, u32)> {
-    let mut value = 0;
+    let mut value: u32 = 0;
 
     for (i, leb128_byte) in bytes.iter().take(8).enumerate() {
-        value |= (u32::from(*leb128_byte) & 0x7F) << (i * 7);
+        let part = *leb128_byte & 0x7F;
+
+        if i == 4 && part > 0x0F {
+            // Setting any of the high 4 bits at byte index 4 would shift past bit 31.
+            return None;
+        }
+        if i >= 5 && part != 0 {
+            return None;
+        }
+
+        if i < 5 {
+            value |= u32::from(part) << (i * 7);
+        }
 
         if leb128_byte & 0x80 == 0 {
             return Some((i + 1, value));
@@ -53,4 +65,27 @@ fn write_and_parse_the_world() {
     for i in (0..u32::MAX).step_by(100) {
         write_and_parse(i);
     }
+}
+
+#[test]
+fn read_rejects_overflow_in_byte_4() {
+    // 5 bytes where the last byte has its 5th bit set -> would shift past bit 31.
+    let bytes = [0x80, 0x80, 0x80, 0x80, 0x10];
+    assert!(read_leb128(&bytes).is_none());
+}
+
+#[test]
+fn read_rejects_nonzero_high_bytes() {
+    // 6+ bytes with non-zero data must overflow u32.
+    let bytes = [0x80, 0x80, 0x80, 0x80, 0x80, 0x01];
+    assert!(read_leb128(&bytes).is_none());
+}
+
+#[test]
+fn read_accepts_padded_zero_bytes() {
+    // Spec permits trailing zero continuation bytes up to 8 total.
+    let bytes = [0x81, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00];
+    let (consumed, value) = read_leb128(&bytes).unwrap();
+    assert_eq!(consumed, 8);
+    assert_eq!(value, 1);
 }

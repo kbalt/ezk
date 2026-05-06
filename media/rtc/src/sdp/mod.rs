@@ -9,6 +9,7 @@ use super::{
     opt_min,
     rtp_transport::{Connectivity, RtpTransport, RtpTransportEvent, RtpTransportPorts},
 };
+use crate::rtp::RtpPacket;
 use crate::{
     rtp::RtpPacket,
     rtp_session::{
@@ -19,7 +20,6 @@ use crate::{
     sdp::{event::MediaRemoved, local_media::LocalMedia, media::MediaSsrcs},
     ssl::DtlsContext,
 };
-use crate::{rtp::RtpPacket, sdp};
 use bytes::Bytes;
 use bytesstr::BytesStr;
 use ice::{Component, IceAgent, IceCredentials, ReceivedPkt};
