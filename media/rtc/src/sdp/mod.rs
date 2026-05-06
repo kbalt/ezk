@@ -9,7 +9,6 @@ use super::{
     opt_min,
     rtp_transport::{Connectivity, RtpTransport, RtpTransportEvent, RtpTransportPorts},
 };
-use crate::rtp::RtpPacket;
 use crate::{
     OpenSslContext,
     rtp_session::{
@@ -19,6 +18,7 @@ use crate::{
     rtp_transport::{RtpOrRtcp, TransportConnectionState},
     sdp::{event::MediaRemoved, local_media::LocalMedia, media::MediaSsrcs},
 };
+use crate::{rtp::RtpPacket, sdp};
 use bytes::Bytes;
 use bytesstr::BytesStr;
 use ice::{Component, IceAgent, IceCredentials, ReceivedPkt};
@@ -153,7 +153,7 @@ pub struct SdpAnswerState(Vec<SdpResponseEntry>);
 enum SdpResponseEntry {
     Active(MediaId),
     Rejected {
-        media_type: MediaType,
+        mline: sdp_types::Media,
         mid: Option<BytesStr>,
     },
 }
@@ -542,7 +542,7 @@ impl SdpSession {
             let Some((local_media_id, chosen_codec)) = chosen_media else {
                 // no local media found for this
                 response.push(SdpResponseEntry::Rejected {
-                    media_type: remote_media_desc.media.media_type,
+                    mline: remote_media_desc.media.clone(),
                     mid: remote_media_desc.mid.clone(),
                 });
 
@@ -1118,8 +1118,10 @@ impl SdpSession {
 
                     media_descriptions.push(self.media_description_for_active(media, None));
                 }
-                SdpResponseEntry::Rejected { media_type, mid } => {
-                    let mut desc = MediaDescription::rejected(media_type);
+                SdpResponseEntry::Rejected { mline, mid } => {
+                    let mut desc = MediaDescription::rejected(mline.media_type);
+                    desc.media = mline;
+                    desc.media.port = 0;
                     desc.mid = mid;
                     media_descriptions.push(desc);
                 }
@@ -1330,7 +1332,7 @@ impl SdpSession {
                 ice_end_of_candidates: false,
                 crypto: vec![],
                 extmap: vec![],
-                extmap_allow_mixed: false,
+                extmap_allow_mixed: true,
                 ssrc: vec![],
                 setup: None,
                 fingerprint: vec![],
@@ -1554,7 +1556,7 @@ impl SdpSession {
             ice_end_of_candidates: false,
             crypto: vec![],
             extmap: vec![],
-            extmap_allow_mixed: false,
+            extmap_allow_mixed: true,
             ssrc: vec![],
             setup: None,
             fingerprint: vec![],

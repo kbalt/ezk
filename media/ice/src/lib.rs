@@ -569,7 +569,7 @@ impl IceAgent {
                 CandidatePairNomination::None
             },
         });
-        
+
         pairs.sort_unstable_by_key(|b| Reverse(b.priority));
     }
 

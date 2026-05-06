@@ -13,6 +13,7 @@ const MAX_GAP_SIZE: u64 = 1000;
 
 /// Tracks not-received packets
 pub(super) struct PacketGaps {
+    // Gaps sorted by sequence number
     gaps: VecDeque<Gap>,
     highest_received: Option<ExtendedSequenceNumber>,
 }
@@ -32,11 +33,10 @@ impl PacketGaps {
         }
     }
 
-    /// Returns true if the given sequence number is currently tracked as a missing gap.
     pub(super) fn contains(&self, sequence_number: ExtendedSequenceNumber) -> bool {
         self.gaps
-            .iter()
-            .any(|g| g.sequence_number == sequence_number)
+            .binary_search_by(|g| g.sequence_number.cmp(&sequence_number))
+            .is_ok()
     }
 
     pub(super) fn report_received(
@@ -51,10 +51,9 @@ impl PacketGaps {
 
         match sequence_number.cmp(&highest_received) {
             Ordering::Less => {
-                if let Some(pos) = self
+                if let Ok(pos) = self
                     .gaps
-                    .iter()
-                    .position(|g| g.sequence_number == sequence_number)
+                    .binary_search_by(|g| g.sequence_number.cmp(&sequence_number))
                 {
                     self.gaps.remove(pos);
                 }
@@ -95,10 +94,9 @@ impl PacketGaps {
         sequence_number: ExtendedSequenceNumber,
         received_at: Instant,
     ) -> (bool, Option<Duration>) {
-        let Some(pos) = self
+        let Ok(pos) = self
             .gaps
-            .iter()
-            .position(|g| g.sequence_number == sequence_number)
+            .binary_search_by(|g| g.sequence_number.cmp(&sequence_number))
         else {
             return (false, None);
         };
@@ -199,12 +197,7 @@ impl PacketGaps {
     ) -> u64 {
         let mut count = 0;
 
-        while let Some(gap) = self.gaps.front() {
-            if gap.sequence_number >= seq {
-                break;
-            }
-
-            let gap = self.gaps.pop_front().unwrap();
+        while let Some(gap) = self.gaps.pop_front_if(|gap| gap.sequence_number < seq) {
             on_drain(gap.sequence_number, gap.nacked_at);
             count += 1;
         }
@@ -216,16 +209,10 @@ impl PacketGaps {
     pub(super) fn drain_lost(&mut self, max_nack_attempts: u32) -> u64 {
         let mut lost = 0;
 
-        while let Some(gap) = self.gaps.front() {
-            let exceeded = gap
-                .nacked_at
-                .is_some_and(|(_, count)| count >= max_nack_attempts);
-
-            if !exceeded {
-                break;
-            }
-
-            self.gaps.pop_front();
+        while let Some(_gap) = self.gaps.pop_front_if(|gap| {
+            gap.nacked_at
+                .is_some_and(|(_, count)| count >= max_nack_attempts)
+        }) {
             lost += 1;
         }
 

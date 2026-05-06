@@ -3,8 +3,8 @@ use std::net::Ipv4Addr;
 use ezk_rtc::{
     Mtu, OpenSslContext,
     rtp_session::{
-        RtpInboundPacket, RtpInboundPassthroughConfig, RtpInboundQueueMode, RtpOutboundQueueMode,
-        SendRtpPacket,
+        ForwardRtpPacket, RtpInboundPacket, RtpInboundPassthroughConfig, RtpInboundQueueMode,
+        RtpOutboundQueueMode,
     },
     sdp::{
         BundlePolicy, Codec, Codecs, LocalMediaId, RtcpMuxPolicy, SdpSession, SdpSessionConfig,
@@ -21,9 +21,11 @@ pub(crate) fn make_session(config: SdpSessionConfig) -> (LocalMediaId, SdpSessio
         config,
     );
 
+    let fmtp = "profile-level-id=42E020;level-asymmetry-allowed=1;packetization-mode=1;max-mbps=216000;max-fs=5120;max-cpb=20000;max-dpb=20480;max-br=20000";
+
     let audio = session
         .add_local_media(
-            Codecs::new(MediaType::Video).with_codec(Codec::AV1.with_rtx()),
+            Codecs::new(MediaType::Video).with_codec(Codec::H264.with_rtx().with_fmtp(fmtp.into())),
             Direction::SendRecv,
         )
         .unwrap();
@@ -50,7 +52,7 @@ async fn main() {
 
     let mut io = TokioIoState::new_with_local_ips().unwrap();
 
-    sdp_session.add_media(local_media_id, Direction::SendOnly, None, None);
+    sdp_session.add_media(local_media_id, Direction::SendRecv, None, None);
 
     io.handle_transport_changes(&mut sdp_session).await.unwrap();
 
@@ -107,16 +109,12 @@ fn handle_event(io: &mut TokioIoState, sdp_session: &mut SdpSession, event: SdpS
 
             for RtpInboundPacket {
                 received_at: _,
-                media_time,
-                delay,
+                media_time: _,
+                delay: _,
                 rtp_packet,
             } in packets
             {
-                println!("Delay: {delay:?}");
-                outbound_media.send_rtp(
-                    SendRtpPacket::new(media_time, rtp_packet.pt, rtp_packet.payload)
-                        .marker(rtp_packet.marker),
-                );
+                outbound_media.forward_rtp(ForwardRtpPacket::from_rtp_packet(&rtp_packet));
             }
         }
         SdpSessionEvent::ReceivePictureLossIndication { media_id, .. } => {
