@@ -284,7 +284,7 @@ impl TwccRxState {
         TwccRxState {
             base_time: Instant::now() - Duration::from_millis(64),
             last_report_sent: Instant::now(),
-            report_interval: Duration::from_millis(500),
+            report_interval: Duration::from_millis(100),
             received_packet_times: VecDeque::new(),
             last_reported_sequence: None,
             feedback_packet_count: 0,
@@ -336,7 +336,7 @@ impl TwccRxState {
             while !status_list.is_empty() {
                 let twcc_builder = TwccBuilder::new(
                     base_seq,
-                    (first_ts_millis / 64) as u32,
+                    (first_ts_millis / 64) as u32 & 0x00FF_FFFF,
                     self.feedback_packet_count,
                     status_list,
                     Some(mtu.for_rtcp_packets() - TransportFeedback::MIN_PACKET_LEN),

@@ -246,12 +246,20 @@ pub struct ForwardRtpPacket {
 
 impl ForwardRtpPacket {
     pub fn from_rtp_packet(packet: &RtpPacket) -> ForwardRtpPacket {
+        let extensions = RtpExtensions {
+            // Do not keep mid as it will almost always be wrong
+            mid: None,
+            audio_level: packet.extensions.audio_level,
+            // Do not keep twcc sequence number, it is set per outbound transport and never correct to forward
+            twcc_sequence_number: None,
+        };
+
         ForwardRtpPacket {
             sequence_number: packet.sequence_number,
             timestamp: packet.timestamp,
             pt: packet.pt,
             marker: packet.marker,
-            extensions: packet.extensions.clone(),
+            extensions,
             payload: packet.payload.clone(),
         }
     }
