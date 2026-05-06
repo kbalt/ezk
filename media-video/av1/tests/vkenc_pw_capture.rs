@@ -245,7 +245,9 @@ async fn vk_encode_dma_inner() {
 
             ivf::write_ivf_frame(&mut file, (ts - epoch).as_millis() as _, &buf);
 
-            let packets = AV1Payloader::new().payload(buf.clone().into(), 1000);
+            let packets = AV1Payloader::new()
+                .payload(buf.clone().into(), 1000)
+                .unwrap();
 
             for packet in packets {
                 for depayloaded in depayloader.depayload(&packet).unwrap() {
@@ -260,7 +262,9 @@ async fn vk_encode_dma_inner() {
         println!("buf: {}", buf.len());
 
         ivf::write_ivf_frame(&mut file, (ts - epoch).as_millis() as _, &buf);
-        let packets = AV1Payloader::new().payload(buf.clone().into(), 1000);
+        let packets = AV1Payloader::new()
+            .payload(buf.clone().into(), 1000)
+            .unwrap();
         for packet in packets {
             for depayloaded in depayloader.depayload(&packet).unwrap() {
                 assert!(depayloaded.len() == buf.len());
