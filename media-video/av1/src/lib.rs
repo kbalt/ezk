@@ -4,7 +4,7 @@ pub mod encoder;
 
 mod rtp;
 
-pub use rtp::{AV1DePayloader, AV1Payloader};
+pub use rtp::{AV1DePayloader, AV1DePayloadError, AV1PayloadError, AV1Payloader};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AV1Profile {
