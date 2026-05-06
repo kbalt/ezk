@@ -42,7 +42,7 @@ pub(crate) struct Queue {
     /// Clock rate of the media received, used convert the RTP timestamp to wall time
     pub(crate) clock_rate: u32,
 
-    /// Sorted (by sequence number) queue of received packets awaiting delivery.
+    /// Sorted (by sequence number) queue of received packets
     queue: VecDeque<QueueEntry>,
 
     /// Tracks missing sequence numbers and their NACK state.
@@ -109,7 +109,7 @@ impl Queue {
     pub(crate) fn push(&mut self, now: Instant, packet: RtpPacket) {
         let payload_size = packet.payload.len();
 
-        // Update jitter and find extended timestamp / sequence number
+        // Update jitter and find extended timestamp & sequence number
         let (timestamp, sequence_number) = match self.last_rtp_received {
             Some((last_rtp_instant, last_rtp_timestamp, last_sequence_number)) => {
                 let timestamp = last_rtp_timestamp.guess_extended(packet.timestamp);
@@ -171,7 +171,6 @@ impl Queue {
             self.last_rtp_received = Some((now, timestamp, sequence_number));
         }
 
-        // Update gap tracking (also resolves filled gaps).
         self.gaps.report_received(sequence_number, now);
 
         self.insert_sorted(QueueEntry {
@@ -185,13 +184,12 @@ impl Queue {
         self.received_bytes += payload_size as u64;
         self.packet_loss.record_received();
 
-        // Enforce a hard cap on stored received packets.
         if self.queue.len() > MAX_ENTRIES {
             let dropped = self.queue.pop_front().expect("queue is non-empty");
-            // Treat as if the packet had been delivered for the purpose of late-arrival rejection.
+
             self.last_sequence_number_returned = Some(dropped.sequence_number);
-            // Drop any gaps that came before the new front of the queue.
             self.gaps.drain_below(dropped.sequence_number, |_, _| {});
+
             self.dropped += 1;
         }
     }
@@ -312,7 +310,7 @@ impl Queue {
 
                 let entry_seq = entry.sequence_number;
 
-                // Retire any gaps before this packet — they are now considered lost.
+                // Remove all gaps before this packets
                 let rtx = &mut self.rtx;
                 let lost = self.gaps.drain_below(entry_seq, |seq, nacked_at| {
                     if let Some(rtx) = rtx.as_mut()
@@ -335,7 +333,6 @@ impl Queue {
     pub(crate) fn timeout_receive(&self, now: Instant) -> Option<Duration> {
         match &self.config {
             RtpInboundQueueMode::Passthrough(_config) => {
-                // Passthrough delivers immediately; if anything is pending, wake up immediately.
                 if self.queue.is_empty() {
                     None
                 } else {

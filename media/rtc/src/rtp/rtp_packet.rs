@@ -124,7 +124,7 @@ impl RtpExtensions {
         ids: RtpExtensionIds,
         packet_builder: RtpPacketBuilder<&'b [u8], Vec<u8>>,
     ) -> RtpPacketBuilder<&'b [u8], Vec<u8>> {
-        let mut writer = RtpExtensionsWriter::new(true);
+        let mut writer = RtpExtensionsWriter::new(false);
 
         if let Some((mid_id, mid)) = ids.mid.zip(self.mid.as_ref()) {
             writer.write(mid_id, mid);
@@ -154,14 +154,14 @@ pub struct RtpAudioLevelExt(u8);
 
 impl RtpAudioLevelExt {
     /// - `level` in the range of -127 to 0 dBov
-    /// - `has_voice_activiy` indicates whether the audio packet contains voice activity
-    pub fn new(has_voice_activiy: bool, level: i8) -> Self {
+    /// - `has_voice_activity` indicates whether the audio packet contains voice activity
+    pub fn new(has_voice_activity: bool, level: i8) -> Self {
         let level = level.clamp(-127, 0);
 
-        RtpAudioLevelExt(((has_voice_activiy as u8) << 7) | (level.cast_unsigned() & 0x7F))
+        RtpAudioLevelExt(((has_voice_activity as u8) << 7) | (level.cast_unsigned() & 0x7F))
     }
 
-    pub fn has_voice_activiy(self) -> bool {
+    pub fn has_voice_activity(self) -> bool {
         (self.0 & 0x80) != 0
     }
 
