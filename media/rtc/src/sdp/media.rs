@@ -1,9 +1,9 @@
+use crate::rtp::Ssrc;
 use crate::{
     rtp_transport::Connectivity,
     sdp::{Codec, DirectionBools, EstablishedTransport, EstablishedTransportId, LocalMediaId},
 };
 use bytesstr::BytesStr;
-use crate::rtp::Ssrc;
 use sdp_types::{Direction, MediaDescription, MediaType, SessionDescription};
 use slotmap::SlotMap;
 
@@ -30,7 +30,7 @@ pub struct Media {
     /// media id attribute used in SDP and RTP. Only set if the peer supports it.
     pub(super) mid: Option<BytesStr>,
     pub(super) direction: DirectionBools,
-    pub(super) streams: MediaStreams,
+    pub(super) ssrcs: MediaSsrcs,
 
     /// transport used by the media. May be shared with others if transport bundling is used
     pub(super) transport_id: EstablishedTransportId,
@@ -103,6 +103,11 @@ impl Media {
         self.accepts_ccm_fir
     }
 
+    /// SSRCs of the media stream
+    pub fn ssrcs(&self) -> &MediaSsrcs {
+        &self.ssrcs
+    }
+
     /// Check if the media matches a media section in SDP
     pub(super) fn matches(
         &self,
@@ -152,9 +157,9 @@ impl Media {
 }
 
 #[derive(Default)]
-pub(super) struct MediaStreams {
-    pub(super) tx: Option<Ssrc>,
-    pub(super) rx: Option<Ssrc>,
+pub struct MediaSsrcs {
+    pub tx: Option<Ssrc>,
+    pub rx: Option<Ssrc>,
 }
 
 /// Identifies a single media stream.

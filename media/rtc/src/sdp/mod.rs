@@ -13,11 +13,11 @@ use crate::rtp::RtpPacket;
 use crate::{
     OpenSslContext,
     rtp_session::{
-        RtpInboundStream, RtpOutboundStream, RtpSession, RtpSessionPollEvent,
+        ForwardRtpPacket, RtpInboundStream, RtpOutboundStream, RtpSession, RtpSessionPollEvent,
         RtpSessionReceiveRtcpEvent, RxStream, SendRtpPacket,
     },
     rtp_transport::{RtpOrRtcp, TransportConnectionState},
-    sdp::{event::MediaRemoved, local_media::LocalMedia, media::MediaStreams},
+    sdp::{event::MediaRemoved, local_media::LocalMedia, media::MediaSsrcs},
 };
 use bytes::Bytes;
 use bytesstr::BytesStr;
@@ -153,7 +153,7 @@ pub struct SdpAnswerState(Vec<SdpResponseEntry>);
 enum SdpResponseEntry {
     Active(MediaId),
     Rejected {
-        media_type: MediaType,
+        mline: sdp_types::Media,
         mid: Option<BytesStr>,
     },
 }
@@ -542,7 +542,7 @@ impl SdpSession {
             let Some((local_media_id, chosen_codec)) = chosen_media else {
                 // no local media found for this
                 response.push(SdpResponseEntry::Rejected {
-                    media_type: remote_media_desc.media.media_type,
+                    mline: remote_media_desc.media.clone(),
                     mid: remote_media_desc.mid.clone(),
                 });
 
@@ -603,7 +603,7 @@ impl SdpSession {
                 use_avpf: is_avpf(&remote_media_desc.media.proto),
                 mid: remote_media_desc.mid.clone(),
                 direction: chosen_codec.direction,
-                streams: MediaStreams::default(),
+                ssrcs: MediaSsrcs::default(),
                 transport_id,
                 codec_pt: chosen_codec.pt,
                 codec: chosen_codec.codec,
@@ -938,7 +938,7 @@ impl SdpSession {
                     stream_id,
                     track_id,
                     direction: chosen_codec.direction,
-                    streams: MediaStreams::default(),
+                    ssrcs: MediaSsrcs::default(),
                     transport_id,
                     codec_pt: chosen_codec.pt,
                     codec: chosen_codec.codec,
@@ -974,13 +974,13 @@ impl SdpSession {
             if let PendingChange::RemoveMedia(media_id) = change {
                 self.media.retain(|m| {
                     if m.id == media_id {
-                        if let Some(ssrc) = m.streams.tx {
+                        if let Some(ssrc) = m.ssrcs.tx {
                             self.transports[m.transport_id]
                                 .rtp_session
                                 .remove_tx_stream(ssrc);
                         }
 
-                        if let Some(ssrc) = m.streams.rx {
+                        if let Some(ssrc) = m.ssrcs.rx {
                             self.transports[m.transport_id]
                                 .rtp_session
                                 .remove_rx_stream(ssrc);
@@ -1007,6 +1007,7 @@ impl SdpSession {
 
             for (instant, rtp_or_rtcp) in early_received_rtp_or_rtcp {
                 Self::handle_received_rtp_or_rtcp(
+                    &self.config,
                     &mut self.events,
                     &mut self.media,
                     id,
@@ -1117,8 +1118,10 @@ impl SdpSession {
 
                     media_descriptions.push(self.media_description_for_active(media, None));
                 }
-                SdpResponseEntry::Rejected { media_type, mid } => {
-                    let mut desc = MediaDescription::rejected(media_type);
+                SdpResponseEntry::Rejected { mline, mid } => {
+                    let mut desc = MediaDescription::rejected(mline.media_type);
+                    desc.media = mline;
+                    desc.media.port = 0;
                     desc.mid = mid;
                     media_descriptions.push(desc);
                 }
@@ -1258,18 +1261,19 @@ impl SdpSession {
                         clock_rate: codec.clock_rate,
                         params: None,
                     });
+
                     fmtp.push(Fmtp {
                         format: rtx_pt,
                         params: format!("apt={pt}").into(),
                     });
-                }
 
-                if self.config.offer_avpf && local_media.codecs.media_type == MediaType::Video {
                     rtcp_fb.push(RtcpFeedback {
                         pt: RtcpFeedbackPt::Pt(pt),
                         kind: RtcpFeedbackKind::Nack,
                     });
+                }
 
+                if self.config.offer_avpf && local_media.codecs.media_type == MediaType::Video {
                     rtcp_fb.push(RtcpFeedback {
                         pt: RtcpFeedbackPt::Pt(pt),
                         kind: RtcpFeedbackKind::NackPli,
@@ -1328,7 +1332,7 @@ impl SdpSession {
                 ice_end_of_candidates: false,
                 crypto: vec![],
                 extmap: vec![],
-                extmap_allow_mixed: false,
+                extmap_allow_mixed: true,
                 ssrc: vec![],
                 setup: None,
                 fingerprint: vec![],
@@ -1552,7 +1556,7 @@ impl SdpSession {
             ice_end_of_candidates: false,
             crypto: vec![],
             extmap: vec![],
-            extmap_allow_mixed: false,
+            extmap_allow_mixed: true,
             ssrc: vec![],
             setup: None,
             fingerprint: vec![],
@@ -1661,7 +1665,7 @@ impl SdpSession {
                     RtpSessionPollEvent::ReceiveRtp(packets) => {
                         let ssrc = packets[0].rtp_packet.ssrc;
 
-                        let media = self.media.iter().find(|m| m.streams.rx == Some(ssrc));
+                        let media = self.media.iter().find(|m| m.ssrcs.rx == Some(ssrc));
 
                         if let Some(media) = media {
                             self.events.push_back(SdpSessionEvent::ReceiveRTP {
@@ -1783,6 +1787,7 @@ impl SdpSession {
 
             if let Some(rtp_or_rtcp) = transport.transport.receive(now, pkt) {
                 Self::handle_received_rtp_or_rtcp(
+                    &self.config,
                     &mut self.events,
                     &mut self.media,
                     transport_id,
@@ -1802,6 +1807,7 @@ impl SdpSession {
     }
 
     fn handle_received_rtp_or_rtcp(
+        config: &SdpSessionConfig,
         events: &mut VecDeque<SdpSessionEvent>,
         media: &mut [Media],
         transport_id: EstablishedTransportId,
@@ -1811,7 +1817,7 @@ impl SdpSession {
     ) {
         match rtp_or_rtcp {
             RtpOrRtcp::Rtp(rtp_packet) => {
-                if let Some(rx_stream) = transport.rtp_session.rx_stream(rtp_packet.ssrc) {
+                if let Some(rx_stream) = transport.rtp_session.rx_stream_mut(rtp_packet.ssrc) {
                     match rx_stream {
                         RxStream::Original(stream) => stream.receive_rtp(now, rtp_packet),
                         RxStream::Rtx(ssrc) => {
@@ -1819,14 +1825,15 @@ impl SdpSession {
 
                             transport
                                 .rtp_session
-                                .rx_stream(ssrc)
+                                .rx_stream_mut(ssrc)
                                 .unwrap()
-                                .expect_original()
-                                .receive_rtx(rtp_packet);
+                                .expect_original_mut()
+                                .receive_rtx(now, rtp_packet);
                         }
                     }
                 } else {
                     Self::handle_new_ssrc(
+                        config,
                         media,
                         &mut transport.rtp_session,
                         now,
@@ -1847,7 +1854,7 @@ impl SdpSession {
                 for event in transport.rtp_session.receive_rtcp(now, compound) {
                     match event {
                         RtpSessionReceiveRtcpEvent::NackPliReceived(ssrc) => {
-                            let Some(media) = media.iter().find(|m| m.streams.tx == Some(ssrc))
+                            let Some(media) = media.iter().find(|m| m.ssrcs.tx == Some(ssrc))
                             else {
                                 continue;
                             };
@@ -1857,7 +1864,7 @@ impl SdpSession {
                             });
                         }
                         RtpSessionReceiveRtcpEvent::CcmFirReceived(ssrc) => {
-                            let Some(media) = media.iter().find(|m| m.streams.tx == Some(ssrc))
+                            let Some(media) = media.iter().find(|m| m.ssrcs.tx == Some(ssrc))
                             else {
                                 continue;
                             };
@@ -1873,6 +1880,7 @@ impl SdpSession {
     }
 
     fn handle_new_ssrc(
+        config: &SdpSessionConfig,
         media: &mut [Media],
         rtp_session: &mut RtpSession,
         now: Instant,
@@ -1912,18 +1920,20 @@ impl SdpSession {
                 media.codec.clock_rate,
                 // Emit NACK feedback if RTX is setup for this media
                 media.rtx_pt.is_some() && media.accepts_nack,
+                config.inbound_stream_mode.clone(),
             );
 
-            media.streams.rx = Some(rtp_packet.ssrc);
+            media.ssrcs.rx = Some(rtp_packet.ssrc);
 
             rx_stream.receive_rtp(now, rtp_packet);
         } else if let Some(rtx_pt) = media.rtx_pt
             && rtx_pt.remote == rtp_packet.pt
-            && let Some(original_ssrc) = media.streams.rx
+            && let Some(original_ssrc) = media.ssrcs.rx
         {
             // The SSRC matches the rtx payload type for the negotiated codec, associate to existing inbound ssrc
-            let rx_stream = rtp_session.new_rx_rtx_stream(rtp_packet.ssrc, original_ssrc);
-            rx_stream.receive_rtx(rtp_packet);
+            rtp_session
+                .new_rx_rtx_stream(rtp_packet.ssrc, original_ssrc)
+                .receive_rtx(now, rtp_packet);
         }
     }
 
@@ -1993,8 +2003,8 @@ impl SdpSession {
 
         let transport = &mut self.transports[media.transport_id];
 
-        let stream = match media.streams.tx {
-            Some(ssrc) => transport.rtp_session.tx_stream(ssrc)?,
+        let stream = match media.ssrcs.tx {
+            Some(ssrc) => transport.rtp_session.tx_stream_mut(ssrc)?,
             None => {
                 // Only include RTX if NACK feedback is accepted by the peer
                 let rtx_pt = media
@@ -2002,11 +2012,13 @@ impl SdpSession {
                     .filter(|_| media.accepts_nack)
                     .map(|rtx_pt| rtx_pt.local);
 
-                let stream = transport
-                    .rtp_session
-                    .new_tx_stream(media.codec.clock_rate, rtx_pt);
+                let stream = transport.rtp_session.new_tx_stream(
+                    self.config.outbound_stream_mode.clone(),
+                    media.codec.clock_rate,
+                    rtx_pt,
+                );
 
-                media.streams.tx = Some(stream.ssrc());
+                media.ssrcs.tx = Some(stream.ssrc());
 
                 stream
             }
@@ -2029,8 +2041,8 @@ impl SdpSession {
         let transport = &mut self.transports[media.transport_id];
         let stream = transport
             .rtp_session
-            .rx_stream(media.streams.rx?)?
-            .expect_original();
+            .rx_stream_mut(media.ssrcs.rx?)?
+            .expect_original_mut();
 
         Some(InboundMedia { media, stream })
     }
@@ -2155,6 +2167,7 @@ impl OutboundMedia<'_> {
         self.media
     }
 
+    /// Send a RTP packet through this stream.
     pub fn send_rtp(&mut self, packet: SendRtpPacket) {
         let packet = match &self.media.mid {
             Some(e) => packet.with_mid(AsRef::<Bytes>::as_ref(e).clone()),
@@ -2162,6 +2175,15 @@ impl OutboundMedia<'_> {
         };
 
         self.stream.send_rtp(packet);
+    }
+
+    /// Forward a pre-built RTP packet through this stream.
+    pub fn forward_rtp(&mut self, mut packet: ForwardRtpPacket) {
+        if let Some(e) = &self.media.mid {
+            packet.extensions.mid = Some(AsRef::<Bytes>::as_ref(e).clone());
+        }
+
+        self.stream.forward_rtp(packet);
     }
 }
 

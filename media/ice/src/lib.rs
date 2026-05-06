@@ -7,7 +7,7 @@ use rand::distr::{Alphanumeric, SampleString};
 use sdp_types::{IceCandidate, UntaggedAddress};
 use slotmap::{SlotMap, new_key_type};
 use std::{
-    cmp::{max, min},
+    cmp::{Reverse, max, min},
     collections::VecDeque,
     hash::{DefaultHasher, Hash, Hasher},
     mem::take,
@@ -527,8 +527,7 @@ impl IceAgent {
             }
         }
 
-        self.pairs
-            .sort_unstable_by(|a, b| b.priority.cmp(&a.priority));
+        self.pairs.sort_unstable_by_key(|b| Reverse(b.priority));
 
         self.prune_pairs();
     }
@@ -570,7 +569,8 @@ impl IceAgent {
                 CandidatePairNomination::None
             },
         });
-        pairs.sort_unstable_by(|a, b| b.priority.cmp(&a.priority));
+
+        pairs.sort_unstable_by_key(|b| Reverse(b.priority));
     }
 
     fn recompute_pair_priorities(&mut self) {
@@ -582,8 +582,7 @@ impl IceAgent {
             );
         }
 
-        self.pairs
-            .sort_unstable_by(|a, b| b.priority.cmp(&a.priority));
+        self.pairs.sort_unstable_by_key(|b| Reverse(b.priority));
     }
 
     /// Prune the lowest priority pairs until `max_pairs` is reached
