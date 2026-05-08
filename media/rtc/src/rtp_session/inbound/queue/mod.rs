@@ -243,6 +243,7 @@ impl Queue {
         if gap_exists {
             let payload_size = recovered.payload.len();
             rtx.record_in_time(payload_size);
+            self.packet_loss.record_lost(1);
 
             self.insert_sorted(QueueEntry {
                 received_at: None,
