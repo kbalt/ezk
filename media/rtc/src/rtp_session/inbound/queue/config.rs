@@ -205,9 +205,11 @@ impl RtpInboundSortedQueueConfig {
                 let mut delay = Duration::from_secs_f64(jitter.get().as_secs_f64() * 2.5);
 
                 if let Some(rtx_rtt) = rtx.and_then(RtxState::rtx_rtt) {
-                    delay = delay.max(
-                        rtx_rtt.nack_resend_delay() * self.max_nack_attempts(packet_loss, rtx),
-                    );
+                    let max_nack_attempts = self.max_nack_attempts(packet_loss, rtx);
+
+                    let nack_delay = rtx_rtt.nack_resend_delay() * max_nack_attempts;
+
+                    delay = delay.max(nack_delay * 2);
                 }
 
                 delay.clamp(config.min, config.max)
