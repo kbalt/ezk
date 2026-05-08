@@ -459,7 +459,9 @@ impl Image {
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
                     format: wgpu::TextureFormat::Rgba8Unorm,
-                    usage: wgpu::TextureUses::UNKNOWN,
+                    usage: wgpu::TextureUses::RESOURCE
+                        | wgpu::TextureUses::STORAGE_READ_ONLY
+                        | wgpu::TextureUses::COPY_DST,
                     memory_flags: wgpu::hal::MemoryFlags::empty(),
                     view_formats: vec![],
                 },
