@@ -5,7 +5,7 @@ pub(crate) struct PacketLoss {
 }
 
 impl PacketLoss {
-    const ALPHA: f32 = 0.1;
+    const ALPHA: f32 = 0.01;
 
     pub(super) fn record_received(&mut self) {
         self.record(0.0);
