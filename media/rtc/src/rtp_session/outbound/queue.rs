@@ -206,7 +206,7 @@ impl OutboundQueue {
             });
         }
 
-        match &mut self.queue {
+        let rtp_packet = match &mut self.queue {
             Queue::Generate(queue) => {
                 // Deque outbound packets
                 let (&QueueKey { send_at, .. }, _) = queue.first_key_value()?;
@@ -223,7 +223,7 @@ impl OutboundQueue {
                     payload,
                 } = queue.pop_first()?.1;
 
-                let rtp_packet = RtpPacket {
+                RtpPacket {
                     pt,
                     sequence_number: self.current_sequence_number.increase_one(),
                     ssrc: self.ssrc,
@@ -231,30 +231,27 @@ impl OutboundQueue {
                     marker,
                     extensions,
                     payload,
-                };
-
-                // Store packet in sent_packets if configured
-                if let Some(rtx) = &mut self.rtx {
-                    rtx.sent_packets.push_back((rtp_packet.clone(), now, 0));
-
-                    // Remove old packets
-                    while let Some((_, sent_at, _)) = rtx.sent_packets.front()
-                        && now.saturating_duration_since(*sent_at) > rtx.sent_packets_max_size
-                    {
-                        rtx.sent_packets.pop_front();
-                    }
                 }
-
-                Some(RtpOutboundStreamEvent::SendRtpPacket {
-                    rtp_packet,
-                    is_rtx: false,
-                })
             }
-            Queue::Forward(queue) => Some(RtpOutboundStreamEvent::SendRtpPacket {
-                rtp_packet: queue.pop_front()?,
-                is_rtx: false,
-            }),
+            Queue::Forward(queue) => queue.pop_front()?,
+        };
+
+        // Store packet in sent_packets if configured
+        if let Some(rtx) = &mut self.rtx {
+            rtx.sent_packets.push_back((rtp_packet.clone(), now, 0));
+
+            // Remove old packets
+            while let Some((_, sent_at, _)) = rtx.sent_packets.front()
+                && now.saturating_duration_since(*sent_at) > rtx.sent_packets_max_size
+            {
+                rtx.sent_packets.pop_front();
+            }
         }
+
+        Some(RtpOutboundStreamEvent::SendRtpPacket {
+            rtp_packet,
+            is_rtx: false,
+        })
     }
 
     pub(crate) fn timeout(&self, now: Instant) -> Option<Duration> {
