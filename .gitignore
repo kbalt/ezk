@@ -2,3 +2,8 @@
 **/*.rs.bk
 .idea
 Cargo.lock
+.vscode
+*.h264
+*.png
+*.html
+*.ivf

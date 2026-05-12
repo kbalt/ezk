@@ -1,4 +1,4 @@
-use crate::PacketizationMode;
+use crate::H264PacketizationMode;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use std::{iter::from_fn, mem::take};
 
@@ -26,13 +26,13 @@ const FUA_START_BIT: u8 = 1 << 7;
 
 /// Convert H.264 NAL unit as received from encoders or found in media formats to RTP payload format
 pub struct H264Payloader {
-    mode: PacketizationMode,
+    mode: H264PacketizationMode,
     sps: Option<Bytes>,
     pps: Option<Bytes>,
 }
 
 impl H264Payloader {
-    pub fn new(mode: PacketizationMode) -> Self {
+    pub fn new(mode: H264PacketizationMode) -> Self {
         Self {
             mode,
             sps: None,
@@ -45,7 +45,7 @@ impl H264Payloader {
             return vec![];
         }
 
-        if self.mode == PacketizationMode::SingleNAL {
+        if self.mode == H264PacketizationMode::SingleNAL {
             return nal_units(bytes).collect();
         }
 
@@ -121,15 +121,15 @@ impl H264Payloader {
         nal_unit.advance(1);
 
         let chunk_size = max_size - FUA_HEADER_LEN;
-        let chunks = nal_unit.len() / chunk_size;
-        for (i, chunk) in nal_unit[..].chunks(chunk_size).enumerate() {
+        let mut chunks = nal_unit[..].chunks(chunk_size).enumerate().peekable();
+        while let Some((i, chunk)) = chunks.next() {
             let mut fua = Vec::with_capacity(chunk.len() + FUA_HEADER_LEN);
 
             fua.push(NAL_UNIT_FU_A | nal_unit_ref_idc);
 
             if i == 0 {
                 fua.push(nal_unit_type | FUA_START_BIT)
-            } else if i == chunks - 1 {
+            } else if chunks.peek().is_none() {
                 fua.push(nal_unit_type | FUA_END_BIT)
             } else {
                 fua.push(nal_unit_type);
@@ -223,6 +223,10 @@ impl H264DePayloader {
         Self { format, fua: None }
     }
 
+    pub fn reset(&mut self) {
+        self.fua = None;
+    }
+
     pub fn depayload(
         &mut self,
         packet: &[u8],
@@ -276,11 +280,17 @@ impl H264DePayloader {
 
                 let fua = self.fua.get_or_insert_with(BytesMut::new);
 
+                let b1 = packet[1];
+
+                // Check if this is the first FU-A package
+                if b1 & FUA_START_BIT != 0 {
+                    fua.clear();
+                }
+
                 // Append the received package to the FU-A buffer
                 fua.extend_from_slice(&packet[FUA_HEADER_LEN..]);
 
                 // Check if this is the last FU-A package
-                let b1 = packet[1];
                 if b1 & FUA_END_BIT == 0 {
                     return Ok(());
                 }
@@ -328,7 +338,7 @@ mod test {
             &[0x1c, 0x40, 0x13, 0x14, 0x15],
         ];
 
-        let mut pck = H264Payloader::new(PacketizationMode::NonInterleavedMode);
+        let mut pck = H264Payloader::new(H264PacketizationMode::NonInterleavedMode);
 
         // Positive MTU, empty payload
         let result = pck.payload(empty, 1);
@@ -494,7 +504,7 @@ mod test {
 
     #[test]
     fn test_h264_packetizer_payload_sps_and_pps_handling() {
-        let mut pck = H264Payloader::new(PacketizationMode::NonInterleavedMode);
+        let mut pck = H264Payloader::new(H264PacketizationMode::NonInterleavedMode);
         let expected: Vec<&[u8]> = vec![
             &[
                 0x78, 0x00, 0x03, 0x07, 0x00, 0x01, 0x00, 0x03, 0x08, 0x02, 0x03,

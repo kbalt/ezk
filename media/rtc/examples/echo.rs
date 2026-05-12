@@ -1,11 +1,11 @@
-use std::{
-    net::Ipv4Addr,
-    time::{Duration, Instant},
-};
+use std::net::Ipv4Addr;
 
 use ezk_rtc::{
     Mtu, OpenSslContext,
-    rtp_session::{RtpInboundPacket, SendRtpPacket},
+    rtp_session::{
+        ForwardRtpPacket, RtpInboundPacket, RtpInboundPassthroughConfig, RtpInboundQueueMode,
+        RtpOutboundQueueMode,
+    },
     sdp::{
         BundlePolicy, Codec, Codecs, LocalMediaId, RtcpMuxPolicy, SdpSession, SdpSessionConfig,
         SdpSessionEvent, TransportType,
@@ -21,9 +21,11 @@ pub(crate) fn make_session(config: SdpSessionConfig) -> (LocalMediaId, SdpSessio
         config,
     );
 
+    let fmtp = "profile-level-id=42E020;level-asymmetry-allowed=1;packetization-mode=1;max-mbps=216000;max-fs=5120;max-cpb=20000;max-dpb=20480;max-br=20000";
+
     let audio = session
         .add_local_media(
-            Codecs::new(MediaType::Video).with_codec(Codec::VP8.with_rtx()),
+            Codecs::new(MediaType::Video).with_codec(Codec::H264.with_rtx().with_fmtp(fmtp.into())),
             Direction::SendRecv,
         )
         .unwrap();
@@ -42,11 +44,15 @@ async fn main() {
         rtcp_mux_policy: RtcpMuxPolicy::Require,
         bundle_policy: BundlePolicy::MaxBundle,
         mtu: Mtu::new(1400),
+        inbound_stream_mode: RtpInboundQueueMode::Passthrough(
+            RtpInboundPassthroughConfig::default(),
+        ),
+        outbound_stream_mode: RtpOutboundQueueMode::Forward,
     });
 
     let mut io = TokioIoState::new_with_local_ips().unwrap();
 
-    sdp_session.add_media(local_media_id, Direction::SendOnly, None, None);
+    sdp_session.add_media(local_media_id, Direction::SendRecv, None, None);
 
     io.handle_transport_changes(&mut sdp_session).await.unwrap();
 
@@ -62,21 +68,14 @@ async fn main() {
 
     println!("SDP Answer:\n{answer}");
 
-    let base_time = Instant::now();
-
     loop {
         while let Ok(event) = io.poll_session(&mut sdp_session).await {
-            handle_event(base_time, &mut io, &mut sdp_session, event);
+            handle_event(&mut io, &mut sdp_session, event);
         }
     }
 }
 
-fn handle_event(
-    base_time: Instant,
-    io: &mut TokioIoState,
-    sdp_session: &mut SdpSession,
-    event: SdpSessionEvent,
-) {
+fn handle_event(io: &mut TokioIoState, sdp_session: &mut SdpSession, event: SdpSessionEvent) {
     match event {
         SdpSessionEvent::MediaAdded(e) => {
             println!("{e:?}");
@@ -106,26 +105,27 @@ fn handle_event(
             io.send(transport_id, component, data, source, target);
         }
         SdpSessionEvent::ReceiveRTP { media_id, packets } => {
+            let mut outbound_media = sdp_session.outbound_media(media_id).unwrap();
+
             for RtpInboundPacket {
                 received_at: _,
                 media_time: _,
+                delay: _,
                 rtp_packet,
             } in packets
             {
-                let timestamp = Duration::from_secs_f64(rtp_packet.timestamp.0 as f64 / 90_000.0);
-
-                let rtp_time = base_time + timestamp;
-
-                let mut outbound_media = sdp_session.outbound_media(media_id).unwrap();
-
-                outbound_media.send_rtp(
-                    SendRtpPacket::new(rtp_time, rtp_packet.pt, rtp_packet.payload)
-                        .marker(rtp_packet.marker)
-                        .send_at(base_time),
-                );
+                outbound_media.forward_rtp(ForwardRtpPacket::from_rtp_packet(&rtp_packet));
             }
         }
-        SdpSessionEvent::ReceivePictureLossIndication { .. } => {}
-        SdpSessionEvent::ReceiveFullIntraRefresh { .. } => {}
+        SdpSessionEvent::ReceivePictureLossIndication { media_id, .. } => {
+            let mut outbound_media = sdp_session.inbound_media(media_id).unwrap();
+
+            outbound_media.send_pli();
+        }
+        SdpSessionEvent::ReceiveFullIntraRefresh { media_id, .. } => {
+            let mut outbound_media = sdp_session.inbound_media(media_id).unwrap();
+
+            outbound_media.send_fir();
+        }
     }
 }

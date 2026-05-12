@@ -1,0 +1,36 @@
+[package]
+name = "ezk-h264"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["openh264", "libva", "vulkan"]
+
+openh264 = ["dep:openh264", "dep:openh264-sys2"]
+libva = ["dep:libva"]
+vulkan = ["dep:vulkan"]
+
+[dependencies]
+bitstream-io = "4"
+bytes = "1.10.0"
+ezk-image = { workspace = true, features = ["NV12", "I420"] }
+log = "0.4"
+openh264 = { version = "0.9", optional = true }
+openh264-sys2 = { version = "0.9", optional = true }
+thiserror = "2.0.11"
+vulkan = { workspace = true, optional = true }
+smallvec = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libva = { workspace = true, optional = true }
+
+[dev-dependencies]
+env_logger = "0.11"
+capture.workspace = true
+tokio = { version = "1", features = ["sync", "macros", "rt"] }

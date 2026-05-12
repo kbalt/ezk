@@ -18,20 +18,29 @@ pub struct RtpInboundStats {
     /// An estimate of the statistical variance of the RTP data packet interarrival time
     pub jitter: Duration,
 
-    /// Total RTX packets received in time
-    pub rtx_packets_received_in_time: u64,
-
-    /// Total RTX packets received too late
-    pub rtx_packets_received_too_late: u64,
-
-    /// Total RTX packets received redudant as the original packet was received
-    pub rtx_packets_received_redundant: u64,
-
-    /// Total RTX payload bytes received
-    pub rtx_bytes_received: u64,
+    /// Stats about retransmissions, None if RTX is not used
+    pub rtx: Option<RtpInboundRtxStats>,
 
     /// Stats that are dependent on the remote sending a sender report
     pub remote: Option<RtpInboundRemoteStats>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RtpInboundRtxStats {
+    /// Total RTX packets received in time
+    pub packets_received_in_time: u64,
+
+    /// Total RTX packets received too late
+    pub packets_received_too_late: u64,
+
+    /// Total RTX packets received redudant as the original packet was received
+    pub packets_received_redundant: u64,
+
+    /// Total RTX payload bytes received
+    pub bytes_received: u64,
+
+    /// RTT derived from time between nacking a packet and receiving a retransmission for it
+    pub rtt: Option<Duration>,
 }
 
 /// Statistics about the inbound RTP stream which rely on the peer sending a RTCP sender report

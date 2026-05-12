@@ -1,4 +1,7 @@
-use crate::Mtu;
+use crate::{
+    Mtu,
+    rtp_session::{RtpInboundQueueMode, RtpOutboundQueueMode},
+};
 use sdp_types::TransportProtocol;
 
 #[derive(Debug, Default, Clone)]
@@ -15,6 +18,10 @@ pub struct SdpSessionConfig {
     pub bundle_policy: BundlePolicy,
     /// Maximum allowed UDP payload size
     pub mtu: Mtu,
+    /// Configuration for inbound RTP streams
+    pub inbound_stream_mode: RtpInboundQueueMode,
+    /// Configuration for outbound RTP streams
+    pub outbound_stream_mode: RtpOutboundQueueMode,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

@@ -25,6 +25,9 @@ pub struct RtpOutboundRemoteStats {
     /// When these stats were calculated
     pub timestamp: Instant,
 
+    /// Total packets lost
+    pub packets_lost: u32,
+
     /// Packet loss percentage ranging from 0 to 1.0
     pub loss: f32,
 

@@ -162,7 +162,7 @@ impl RtpTransport {
             RtpTransportKind::Unencrypted => {}
             RtpTransportKind::SdesSrtp(..) => {}
             RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) => {
-                timeout = opt_min(timeout, rtp_dtls_srtp_transport.timeout());
+                timeout = opt_min(timeout, rtp_dtls_srtp_transport.timeout(now));
             }
         }
 
@@ -217,11 +217,11 @@ impl RtpTransport {
         };
 
         if let RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) = &mut self.kind {
-            if let Err(e) = rtp_dtls_srtp_transport.handshake() {
+            if let Err(e) = rtp_dtls_srtp_transport.poll(now) {
                 log::warn!("DTLS handshake failed: {e:?}");
             }
 
-            if let Some(data) = rtp_dtls_srtp_transport.pop_to_send() {
+            while let Some(data) = rtp_dtls_srtp_transport.pop_to_send() {
                 self.events.push_back(RtpTransportEvent::SendData {
                     component: Component::Rtp,
                     data,
@@ -380,8 +380,7 @@ impl RtpTransport {
                     return None;
                 };
 
-                rtp_dtls_srtp_transport.receive(pkt.data.clone());
-                if let Err(e) = rtp_dtls_srtp_transport.handshake() {
+                if let Err(e) = rtp_dtls_srtp_transport.receive(now, pkt.data.clone()) {
                     log::warn!("DTLS handshake failed: {e:?}");
                 }
 
