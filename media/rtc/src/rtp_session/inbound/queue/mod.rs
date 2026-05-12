@@ -141,6 +141,7 @@ impl Queue {
                 if let Some(last_returned) = self.last_sequence_number_returned
                     && sequence_number <= last_returned
                 {
+                    
                     // Packet too late
                     false
                 } else if let Some((_, _, last_seq)) = self.last_rtp_received {
@@ -234,27 +235,38 @@ impl Queue {
         let sequence_number = last_rtp_received_sequence_number.guess_extended(original_seq_short);
         let timestamp = last_rtp_received_timestamp.guess_extended(recovered.timestamp);
 
+        if let RtpInboundQueueMode::SortedQueue(..) = &self.config
+            && let Some(last_sequence_number_returned) = self.last_sequence_number_returned
+            && last_sequence_number_returned >= sequence_number
+        {
+            rtx.record_too_late(sequence_number, now);
+            return;
+        }
+
         let (gap_exists, rtx_rtt) = self.gaps.report_rtx_received(sequence_number, now);
 
         if let Some(rtx_rtt) = rtx_rtt {
             rtx.update_rtt(rtx_rtt);
         }
 
-        if gap_exists {
-            let payload_size = recovered.payload.len();
-            rtx.record_in_time(payload_size);
-            self.packet_loss.record_lost(1);
-
-            self.insert_sorted(QueueEntry {
-                received_at: None,
-                timestamp,
-                sequence_number,
-                packet: recovered,
-            });
-        } else {
-            rtx.record_too_late(sequence_number, now);
+        if !gap_exists {
             rtx.record_redundant();
+            return;
         }
+
+        let payload_size = recovered.payload.len();
+
+        rtx.record_in_time(payload_size);
+
+        // Record packet as lost, since the original packet was never received, but the gap was removed via RTX
+        self.packet_loss.record_lost(1);
+
+        self.insert_sorted(QueueEntry {
+            received_at: None,
+            timestamp,
+            sequence_number,
+            packet: recovered,
+        });
     }
 
     /// Returns a list of sequence numbers to NACK
@@ -285,6 +297,7 @@ impl Queue {
                 Some((entry.packet, entry.received_at, Duration::ZERO))
             }
             RtpInboundQueueMode::SortedQueue(config) => {
+
                 let (last_rtp_received_instant, last_rtp_received_timestamp, _) =
                     self.last_rtp_received?;
 
@@ -301,30 +314,24 @@ impl Queue {
                     pop_earliest,
                 )?;
 
-                // Front of the queue is always the oldest received packet (queue is sorted).
-                let entry = self.queue.front()?;
-
-                // Test the timestamp of the entry against the maximum timestamp and return if it is not old enough
-                if entry.timestamp.0 > max_timestamp.0 {
-                    return None;
-                }
-
-                let entry_seq = entry.sequence_number;
+                let entry = self
+                    .queue
+                    .pop_front_if(|entry| entry.timestamp.0 <= max_timestamp.0)?;
 
                 // Remove all gaps before this packets
-                let rtx = &mut self.rtx;
-                let lost = self.gaps.drain_below(entry_seq, |seq, nacked_at| {
-                    if let Some(rtx) = rtx.as_mut()
-                        && let Some((nacked_at, num_nacks)) = nacked_at
-                    {
-                        rtx.note_lost_nacked(seq, nacked_at, num_nacks);
-                    }
-                });
+                let lost = self
+                    .gaps
+                    .drain_below(entry.sequence_number, |seq, nacked_at| {
+                        if let Some(rtx) = &mut self.rtx
+                            && let Some((nacked_at, num_nacks)) = nacked_at
+                        {
+                            rtx.note_lost_nacked(seq, nacked_at, num_nacks);
+                        }
+                    });
 
                 self.lost += lost;
                 self.packet_loss.record_lost(lost);
 
-                let entry = self.queue.pop_front().expect("front exists");
                 self.last_sequence_number_returned = Some(entry.sequence_number);
                 Some((entry.packet, entry.received_at, queue_size))
             }
@@ -506,11 +513,7 @@ mod tests {
     #[test]
     fn sequence_rollover() {
         let mut jb = make_queue();
-        let queue_size = RtpInboundSortedQueueConfig::default().target_delay(
-            &jb.jitter,
-            &jb.packet_loss,
-            jb.rtx.as_ref(),
-        );
+        let queue_size = Duration::from_millis(100);
 
         let now = Instant::now();
 
