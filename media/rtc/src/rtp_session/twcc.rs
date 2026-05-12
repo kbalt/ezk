@@ -294,8 +294,12 @@ impl TwccRxState {
     /// RTP packets are expected to be received deduplicated and reordered with the the original reception timestamp
     pub(super) fn receive_packet(&mut self, received_at: Instant, packet: &RtpPacket) {
         if let Some(sequence_number) = packet.extensions.twcc_sequence_number {
+            let index = self
+                .received_packet_times
+                .partition_point(|(seq, _)| *seq < sequence_number);
+
             self.received_packet_times
-                .push_back((sequence_number, received_at));
+                .insert(index, (sequence_number, received_at));
         }
     }
 
@@ -398,4 +402,5 @@ impl TwccRxState {
 
         status_list
     }
+
 }
