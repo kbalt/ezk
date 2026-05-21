@@ -402,5 +402,4 @@ impl TwccRxState {
 
         status_list
     }
-
 }

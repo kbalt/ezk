@@ -141,7 +141,6 @@ impl Queue {
                 if let Some(last_returned) = self.last_sequence_number_returned
                     && sequence_number <= last_returned
                 {
-                    
                     // Packet too late
                     false
                 } else if let Some((_, _, last_seq)) = self.last_rtp_received {
@@ -297,7 +296,6 @@ impl Queue {
                 Some((entry.packet, entry.received_at, Duration::ZERO))
             }
             RtpInboundQueueMode::SortedQueue(config) => {
-
                 let (last_rtp_received_instant, last_rtp_received_timestamp, _) =
                     self.last_rtp_received?;
 

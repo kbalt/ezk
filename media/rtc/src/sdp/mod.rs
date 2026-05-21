@@ -851,7 +851,11 @@ impl SdpSession {
                         });
 
                         // Update any other offered media using the bundled transport
-                        for offered_change in &mut self.offered_changes {
+                        for offered_change in self
+                            .offered_changes
+                            .iter_mut()
+                            .chain(self.pending_changes.iter_mut())
+                        {
                             if let PendingChange::AddMedia(offered_media) = offered_change {
                                 let offered_id = AnyTransportId::Offered(offered_id);
                                 let established_id = AnyTransportId::Established(established_id);
