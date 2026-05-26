@@ -38,7 +38,7 @@ parking_lot = "0.12"
 rand = "0.10"
 bytesstr = "1"
 downcast-rs = "2"
-hickory-resolver = "0.25.0"
+hickory-resolver = "0.26.0"
 multimap = "0.10"
 
 tokio-rustls = { workspace = true, optional = true }

@@ -310,7 +310,9 @@ impl Transports {
         match host {
             Host::IP6(ip) => Ok(vec![ServerEntry::from((*ip, port))]),
             Host::IP4(ip) => Ok(vec![ServerEntry::from((*ip, port))]),
-            Host::Name(name) => resolver::resolve_host(&self.dns_resolver, name, port).await,
+            Host::Name(name) => resolver::resolve_host(&self.dns_resolver, name, port)
+                .await
+                .map_err(io::Error::other),
         }
     }
 
@@ -461,15 +463,14 @@ impl Transports {
         match host {
             Host::IP6(ip) => Ok(vec![ServerEntry::from((*ip, port))]),
             Host::IP4(ip) => Ok(vec![ServerEntry::from((*ip, port))]),
-            Host::Name(name) => {
-                resolver::resolve_host_with_known_transport(
-                    &self.dns_resolver,
-                    transport,
-                    name,
-                    port,
-                )
-                .await
-            }
+            Host::Name(name) => resolver::resolve_host_with_known_transport(
+                &self.dns_resolver,
+                transport,
+                name,
+                port,
+            )
+            .await
+            .map_err(io::Error::other),
         }
     }
 
@@ -806,6 +807,7 @@ impl TransportsBuilder {
             hickory_resolver::TokioResolver::builder_tokio()
                 .expect("Failed to create default system DNS resolver")
                 .build()
+                .expect("Failed to build default system DNS resolver")
         });
 
         Transports {

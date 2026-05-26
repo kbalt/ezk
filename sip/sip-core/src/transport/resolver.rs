@@ -1,9 +1,12 @@
-use hickory_resolver::ResolveError;
-use hickory_resolver::proto::rr::rdata::{NAPTR, SRV};
-use hickory_resolver::proto::rr::{RData, RecordType};
-use hickory_resolver::{Name, TokioResolver};
+use hickory_resolver::{
+    TokioResolver,
+    net::{DnsError, NetError},
+    proto::rr::{
+        Name, RData, RecordType,
+        rdata::{NAPTR, SRV},
+    },
+};
 use multimap::MultiMap;
-use std::io;
 use std::net::{IpAddr, SocketAddr};
 
 #[derive(Debug, Clone, Copy)]
@@ -58,7 +61,7 @@ pub(super) async fn resolve_host(
     dns_resolver: &TokioResolver,
     name: &str,
     uri_port: u16,
-) -> io::Result<Vec<ServerEntry>> {
+) -> Result<Vec<ServerEntry>, NetError> {
     log::debug!("Resolving hostname {:?}", name);
 
     let name = Name::from_utf8(name)?;
@@ -90,7 +93,7 @@ pub(super) async fn resolve_host(
     }
 
     if entries.is_empty() {
-        return Err(io::Error::other(format!(
+        return Err(NetError::Msg(format!(
             "No DNS records for host '{name}' found"
         )));
     }
@@ -104,7 +107,7 @@ pub(super) async fn resolve_host_with_known_transport(
     transport: Transport,
     name: &str,
     uri_port: u16,
-) -> io::Result<Vec<ServerEntry>> {
+) -> Result<Vec<ServerEntry>, NetError> {
     log::debug!("Resolving hostname {:?}", name);
 
     let mut entries: Vec<ServerEntry> = vec![];
@@ -136,7 +139,7 @@ pub(super) async fn resolve_host_with_known_transport(
     }
 
     if entries.is_empty() {
-        return Err(io::Error::other(format!(
+        return Err(NetError::Msg(format!(
             "No DNS records for host '{name}' found"
         )));
     }
@@ -148,7 +151,7 @@ async fn resolve_naptr_records(
     dns_resolver: &TokioResolver,
     name: Name,
     entries: &mut Vec<ServerEntry>,
-) -> Result<(), ResolveError> {
+) -> Result<(), NetError> {
     log::debug!("Resolving NAPTR records for \"{name}\"");
 
     // Fetch records
@@ -161,8 +164,9 @@ async fn resolve_naptr_records(
 
     // Order records by 'order' field
     let mut naptr_records: Vec<&NAPTR> = lookup
-        .record_iter()
-        .filter_map(|record| match record.data() {
+        .answers()
+        .iter()
+        .filter_map(|record| match &record.data {
             RData::NAPTR(naptr) => Some(naptr),
             record_data => {
                 log::warn!("Got unexpected DNS record from NAPTR request, {record_data:?}");
@@ -170,26 +174,26 @@ async fn resolve_naptr_records(
             }
         })
         .collect();
-    naptr_records.sort_unstable_by_key(|naptr| naptr.order());
+    naptr_records.sort_unstable_by_key(|naptr| naptr.order);
 
     log::debug!("Got {} NAPTR records for \"{name}\"", naptr_records.len());
 
     // Go through all NAPTR records and resolve them recursivly into `ServerEntry`s
     for record in naptr_records {
-        let Some(transport) = Transport::from_services(record.services()) else {
+        let Some(transport) = Transport::from_services(&record.services) else {
             log::warn!(
                 "Got unknown services field '{}' in NAPTR record",
-                String::from_utf8_lossy(record.services())
+                String::from_utf8_lossy(&record.services)
             );
 
             continue;
         };
 
-        match record.flags() {
+        match &*record.flags {
             b"s" => {
                 resolve_srv_records(
                     dns_resolver,
-                    record.replacement().clone(),
+                    record.replacement.clone(),
                     Some(transport),
                     entries,
                 )
@@ -198,7 +202,7 @@ async fn resolve_naptr_records(
             b"a" => {
                 resolve_a_records(
                     dns_resolver,
-                    record.replacement().clone(),
+                    record.replacement.clone(),
                     Some(transport),
                     transport.default_port(),
                     entries,
@@ -228,7 +232,7 @@ async fn resolve_srv_records(
     name: Name,
     transport: Option<Transport>,
     entries: &mut Vec<ServerEntry>,
-) -> Result<(), ResolveError> {
+) -> Result<(), NetError> {
     log::debug!("Resolving SRV records for \"{name}\"");
 
     let Some(lookup) = filter_no_records(dns_resolver.lookup(name.clone(), RecordType::SRV).await)?
@@ -239,29 +243,31 @@ async fn resolve_srv_records(
 
     // Order SRV records by priority
     let mut srv_records: Vec<&SRV> = lookup
-        .record_iter()
-        .filter_map(|record| match record.data() {
+        .answers()
+        .iter()
+        .filter_map(|record| match &record.data {
             RData::SRV(srv) => Some(srv),
             _ => None,
         })
         .collect();
-    srv_records.sort_unstable_by_key(|srv| srv.priority());
+    srv_records.sort_unstable_by_key(|srv| srv.priority);
 
     log::debug!("Got {} SRV records for \"{name}\"", srv_records.len());
 
     // Often we also get some A/AAAA records for the highest priority, so map them
     let ip_records: MultiMap<&Name, IpAddr> = lookup
-        .record_iter()
-        .filter_map(|record| match record.data() {
-            RData::A(a) => Some((record.name(), IpAddr::from(a.0))),
-            RData::AAAA(aaaa) => Some((record.name(), IpAddr::from(aaaa.0))),
+        .answers()
+        .iter()
+        .filter_map(|record| match record.data {
+            RData::A(a) => Some((&record.name, IpAddr::from(a.0))),
+            RData::AAAA(aaaa) => Some((&record.name, IpAddr::from(aaaa.0))),
             _ => None,
         })
         .collect();
 
     for record in srv_records {
-        let target = record.target();
-        let port = record.port();
+        let target = &record.target;
+        let port = record.port;
 
         if let Some(ips) = ip_records.get_vec(target) {
             entries.extend(ips.iter().map(|ip| ServerEntry {
@@ -282,7 +288,7 @@ async fn resolve_a_records(
     transport: Option<Transport>,
     port: u16,
     entries: &mut Vec<ServerEntry>,
-) -> Result<(), ResolveError> {
+) -> Result<(), NetError> {
     log::debug!("Resolving A/AAAA records for \"{name}\"");
 
     let Some(lookup) = filter_no_records(dns_resolver.lookup_ip(name.clone()).await)? else {
@@ -292,7 +298,7 @@ async fn resolve_a_records(
 
     log::debug!(
         "Got {} A/AAAA records for \"{name}\"",
-        lookup.as_lookup().records().len()
+        lookup.as_lookup().answers().len()
     );
 
     entries.extend(lookup.iter().map(|ip| ServerEntry {
@@ -304,10 +310,10 @@ async fn resolve_a_records(
 }
 
 /// Filter out errors where no records for a given name weren't found and instead return an Ok(None)
-fn filter_no_records<T>(e: Result<T, ResolveError>) -> Result<Option<T>, ResolveError> {
+fn filter_no_records<T>(e: Result<T, NetError>) -> Result<Option<T>, NetError> {
     match e {
         Ok(t) => Ok(Some(t)),
-        Err(e) if e.proto().is_some_and(|p| p.is_no_records_found()) => Ok(None),
+        Err(NetError::Dns(DnsError::NoRecordsFound(..))) => Ok(None),
         Err(e) => Err(e),
     }
 }
