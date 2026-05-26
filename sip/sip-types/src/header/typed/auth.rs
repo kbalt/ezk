@@ -182,12 +182,7 @@ impl Print for DigestChallenge {
             f.write_str(", stale=true")?;
         }
 
-        if !matches!(
-            self.algorithm,
-            Algorithm::AlgorithmValue(AlgorithmValue::MD5)
-        ) {
-            write!(f, ", algorithm={}", self.algorithm)?;
-        }
+        write!(f, ", algorithm={}", self.algorithm)?;
 
         let mut qop_iter = self.qop.iter();
 
@@ -418,12 +413,7 @@ impl Print for DigestResponse {
             self.username, self.realm, self.nonce, self.uri, self.response
         )?;
 
-        if !matches!(
-            self.algorithm,
-            Algorithm::AlgorithmValue(AlgorithmValue::MD5)
-        ) {
-            write!(f, ", algorithm={}", self.algorithm)?;
-        }
+        write!(f, ", algorithm={}", self.algorithm)?;
 
         if let Some(opaque) = &self.opaque {
             write!(f, r#", opaque="{opaque}""#)?;
@@ -702,7 +692,7 @@ mod test {
             other: vec![],
         });
 
-        let expected = r#"Digest realm="example.com", nonce="abc123""#;
+        let expected = r#"Digest realm="example.com", nonce="abc123", algorithm=MD5"#;
 
         assert_eq!(expected, challenge.default_print_ctx().to_string());
     }
@@ -1170,7 +1160,7 @@ mod test {
             other: vec![],
         });
 
-        let expected = r#"Digest username="alice", realm="example.com", nonce="abc123", uri="sip:bob@example.com", response="00000000000000000000000000000000""#;
+        let expected = r#"Digest username="alice", realm="example.com", nonce="abc123", uri="sip:bob@example.com", response="00000000000000000000000000000000", algorithm=MD5"#;
 
         assert_eq!(expected, digest.default_print_ctx().to_string());
     }
