@@ -172,9 +172,10 @@ impl PhysicalDevice {
         }
     }
 
-    pub unsafe fn to_wgpu(&self, instance: &wgpu::Instance) -> anyhow::Result<wgpu::Adapter> {
+    pub async unsafe fn to_wgpu(&self, instance: &wgpu::Instance) -> anyhow::Result<wgpu::Adapter> {
         instance
             .enumerate_adapters(wgpu::Backends::VULKAN)
+            .await
             .into_iter()
             .find(|a| {
                 let raw = a

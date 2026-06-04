@@ -5,6 +5,7 @@ use std::{
     os::fd::{AsRawFd, OwnedFd},
     sync::{Arc, Mutex},
 };
+use wgpu::hal::vulkan::TextureMemory;
 
 #[derive(Debug, Clone)]
 pub struct Image {
@@ -466,6 +467,7 @@ impl Image {
                     view_formats: vec![],
                 },
                 Some(Box::new(|| drop(this))),
+                TextureMemory::External,
             );
 
         let mut usage = wgpu::TextureUsages::empty();
