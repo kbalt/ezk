@@ -153,6 +153,7 @@ impl Device {
             let device = vk_adapter
                 .open_with_callback(
                     adapter.features(),
+                    &wgpu::Limits::defaults(),
                     &wgpu::MemoryHints::default(),
                     Some(Box::new(|args| {
                         // Add all desired extensions
