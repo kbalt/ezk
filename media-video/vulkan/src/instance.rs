@@ -39,19 +39,19 @@ impl fmt::Debug for Instance {
 impl Instance {
     pub const INSTANCE_VERSION: u32 = vk::make_api_version(0, 1, 3, 316);
 
-    pub unsafe fn from_wgpu(wgpu: wgpu::Instance) -> Instance {
-        let vk_instance = wgpu.as_hal::<wgpu::hal::vulkan::Api>().unwrap();
+    pub unsafe fn from_wgpu(wgpu: wgpu::Instance) -> Option<Instance> {
+        let vk_instance = wgpu.as_hal::<wgpu::hal::vulkan::Api>()?;
 
         let stable_entry = vk_instance.shared_instance().entry().clone();
         let stable_instance = vk_instance.shared_instance().raw_instance().clone();
 
-        let entry = ash::Entry::load().unwrap();
+        let entry = ash::Entry::load().ok()?;
         let instance = ash::vk::Instance::from_raw(stable_instance.handle().as_raw());
         let instance = ash::Instance::load(entry.static_fn(), instance);
 
         let video_queue_instance = video_queue::Instance::load(&entry, &instance);
 
-        Instance {
+        Some(Instance {
             inner: Arc::new(Inner {
                 _entry: entry,
                 _stable_entry: Some(stable_entry),
@@ -60,7 +60,7 @@ impl Instance {
                 wgpu: Some(wgpu),
                 debug_messenger: None,
             }),
-        }
+        })
     }
 
     pub fn create(
@@ -137,10 +137,6 @@ impl Instance {
                     _entry: entry,
                     _stable_entry: None,
                     instance,
-                    // enabled_extensions: instance_extensions
-                    //     .into_iter()
-                    //     .map(|c| CStr::from_ptr(c))
-                    //     .collect(),
                     video_queue_instance,
                     wgpu: None,
                     debug_messenger,
@@ -148,29 +144,6 @@ impl Instance {
             })
         }
     }
-
-    // pub fn to_wgpu(&self) -> Result<wgpu::Instance, wgpu::hal::InstanceError> {
-    //     let this = self.clone();
-
-    //     unsafe {
-    //         let hal_instance = wgpu::hal::vulkan::Instance::from_raw(
-    //             self.inner._entry.clone(),
-    //             self.inner.instance.clone(),
-    //             INSTANCE_API_VERSION,
-    //             0,
-    //             None,
-    //             self.inner.enabled_extensions.clone(),
-    //             wgpu::InstanceFlags::default(),
-    //             Default::default(),
-    //             false,
-    //             Some(Box::new(|| drop(this))),
-    //         )?;
-
-    //         Ok(wgpu::Instance::from_hal::<wgpu::hal::vulkan::Api>(
-    //             hal_instance,
-    //         ))
-    //     }
-    // }
 
     pub fn ash(&self) -> &ash::Instance {
         &self.inner.instance
