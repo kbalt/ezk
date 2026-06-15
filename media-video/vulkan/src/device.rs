@@ -215,7 +215,8 @@ impl Device {
 
             let vk_physical_device = vk_device.raw_physical_device();
 
-            let instance = Instance::from_wgpu(instance.clone());
+            let instance = Instance::from_wgpu(instance.clone())
+                .context("Failed to create instance form wgpu")?;
 
             let vk_device = ash::Device::load(
                 instance.ash().fp_v1_0(),
@@ -274,25 +275,26 @@ impl Device {
         // Set up queues
         let queue_family_properties = physical_device.queue_family_properties();
 
+        let graphics_queue_flags =
+            vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE | vk::QueueFlags::TRANSFER;
+
+        let encode_queue_flags = vk::QueueFlags::VIDEO_ENCODE_KHR;
+
         let graphics_queue_family_index = queue_family_properties
             .iter()
-            .position(|properties| {
-                properties.queue_flags.contains(
-                    vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE | vk::QueueFlags::TRANSFER,
-                )
-            })
-            .unwrap() as u32;
+            .position(|properties| properties.queue_flags.contains(graphics_queue_flags))
+            .ok_or(VulkanError::MissingQueue(graphics_queue_flags))?
+            as u32;
 
         let encode_queue_family_index = queue_family_properties
             .iter()
             .enumerate()
             .position(|(i, properties)| {
                 i as u32 != graphics_queue_family_index
-                    && properties
-                        .queue_flags
-                        .contains(vk::QueueFlags::VIDEO_ENCODE_KHR)
+                    && properties.queue_flags.contains(encode_queue_flags)
             })
-            .unwrap() as u32;
+            .ok_or(VulkanError::MissingQueue(encode_queue_flags))?
+            as u32;
 
         // Set up extensions
         let props = unsafe {
@@ -406,29 +408,20 @@ impl Device {
         })
     }
 
+    pub fn is_same_as(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
     pub(crate) fn find_memory_type(
         &self,
         memory_type_bits: u32,
-        properties: vk::MemoryPropertyFlags,
+        property_flags: vk::MemoryPropertyFlags,
     ) -> Result<u32, VulkanError> {
-        for (i, memory_type) in self
-            .inner
-            .physical_device_memory_properties
-            .memory_types
-            .iter()
-            .enumerate()
-        {
-            let type_supported = (memory_type_bits & (1 << i)) != 0;
-            let has_properties = memory_type.property_flags.contains(properties);
-            if type_supported && has_properties {
-                return Ok(i as u32);
-            }
-        }
-
-        Err(VulkanError::CannotFindMemoryType {
+        find_memory_type(
+            self.inner.physical_device_memory_properties,
             memory_type_bits,
-            properties,
-        })
+            property_flags,
+        )
     }
 
     pub fn instance(&self) -> &Instance {
@@ -470,6 +463,55 @@ impl Device {
     pub fn enabled_extensions(&self) -> &DeviceVideoExtensions {
         &self.inner.device_extensions
     }
+}
+
+pub(crate) fn find_memory_type(
+    properties: vk::PhysicalDeviceMemoryProperties,
+    memory_type_bits: u32,
+    property_flags: vk::MemoryPropertyFlags,
+) -> Result<u32, VulkanError> {
+    for (i, memory_type) in properties
+        .memory_types
+        .iter()
+        .enumerate()
+        .take(properties.memory_type_count as usize)
+    {
+        let type_supported = (memory_type_bits & (1 << i)) != 0;
+        let has_properties = memory_type.property_flags.contains(property_flags);
+        if type_supported && has_properties {
+            return Ok(i as u32);
+        }
+    }
+
+    Err(VulkanError::CannotFindMemoryType {
+        memory_type_bits,
+        properties: property_flags,
+    })
+}
+
+pub(crate) fn find_memory_type_stable(
+    properties: ash_stable::vk::PhysicalDeviceMemoryProperties,
+    memory_type_bits: u32,
+    property_flags: ash_stable::vk::MemoryPropertyFlags,
+) -> Result<u32, VulkanError> {
+    for (i, memory_type) in properties
+        .memory_types
+        .iter()
+        .enumerate()
+        .take(properties.memory_type_count as usize)
+    {
+        let type_supported = (memory_type_bits & (1 << i)) != 0;
+        let has_properties = memory_type.property_flags.contains(property_flags);
+
+        if type_supported && has_properties {
+            return Ok(i as u32);
+        }
+    }
+
+    Err(VulkanError::CannotFindMemoryType {
+        memory_type_bits,
+        properties: vk::MemoryPropertyFlags::from_raw(property_flags.as_raw()),
+    })
 }
 
 impl Drop for Inner {

@@ -9,6 +9,8 @@ pub enum VulkanError {
         result: vk::Result,
     },
 
+    MissingQueue(vk::QueueFlags),
+
     MissingExtension(&'static str),
 
     CannotFindMemoryType {
@@ -44,6 +46,10 @@ impl fmt::Display for VulkanError {
                     "Vulkan call failed with result={result}, backtrace={backtrace}"
                 )
             }
+            VulkanError::MissingQueue(flags) => write!(
+                f,
+                "Physical device is missing a queue with the required flags {flags:?}"
+            ),
             VulkanError::MissingExtension(extension) => {
                 write!(f, "Missing required extensions {extension}")
             }
