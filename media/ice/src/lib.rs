@@ -528,7 +528,7 @@ impl IceAgent {
         }
 
         self.pairs
-            .sort_unstable_by(|a, b| b.priority.cmp(&a.priority));
+            .sort_unstable_by_key(|b| std::cmp::Reverse(b.priority));
 
         self.prune_pairs();
     }
@@ -570,7 +570,7 @@ impl IceAgent {
                 CandidatePairNomination::None
             },
         });
-        pairs.sort_unstable_by(|a, b| b.priority.cmp(&a.priority));
+        pairs.sort_unstable_by_key(|b| std::cmp::Reverse(b.priority));
     }
 
     fn recompute_pair_priorities(&mut self) {
@@ -583,7 +583,7 @@ impl IceAgent {
         }
 
         self.pairs
-            .sort_unstable_by(|a, b| b.priority.cmp(&a.priority));
+            .sort_unstable_by_key(|b| std::cmp::Reverse(b.priority));
     }
 
     /// Prune the lowest priority pairs until `max_pairs` is reached
