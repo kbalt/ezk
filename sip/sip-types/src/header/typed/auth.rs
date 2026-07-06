@@ -422,7 +422,7 @@ impl Print for DigestResponse {
         if let Some(qop_response) = &self.qop_response {
             write!(
                 f,
-                r#", qop="{}", cnonce="{}", nc={:08X}"#,
+                r#", qop={}, cnonce="{}", nc={:08X}"#,
                 qop_response.qop, qop_response.cnonce, qop_response.nc
             )?;
         }
@@ -1238,7 +1238,7 @@ mod test {
             }],
         });
 
-        let expected = r#"Digest username="alice", realm="example.com", nonce="abc123", uri="sip:bob@example.com", response="00000000000000000000000000000000", algorithm=SHA-256, opaque="opaque_value", qop="auth", cnonce="def456", nc=00000001, another-field="some_extension""#;
+        let expected = r#"Digest username="alice", realm="example.com", nonce="abc123", uri="sip:bob@example.com", response="00000000000000000000000000000000", algorithm=SHA-256, opaque="opaque_value", qop=auth, cnonce="def456", nc=00000001, another-field="some_extension""#;
 
         assert_eq!(expected, digest.default_print_ctx().to_string());
     }
