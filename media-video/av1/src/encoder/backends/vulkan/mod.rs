@@ -338,9 +338,16 @@ impl VkAV1Encoder {
             ref_order_hint
         };
 
+        const PRIMARY_REF_NONE: u8 = 7;
+        let primary_ref_frame = ref_frame_idx
+            .iter()
+            .position(|&idx| idx >= 0)
+            .map_or(PRIMARY_REF_NONE, |name| name as u8);
+
         log::trace!("\treference_name_slot_indices {reference_name_slot_indices:?}");
         log::trace!("\tref_frame_idx {ref_frame_idx:?}");
         log::trace!("\tref_order_hint {ref_order_hint:?}");
+        log::trace!("\tprimary_ref_frame {primary_ref_frame}");
 
         let loop_restoration = vk::native::StdVideoAV1LoopRestoration {
             FrameRestorationType: [vk::native::StdVideoAV1FrameRestorationType_STD_VIDEO_AV1_FRAME_RESTORATION_TYPE_SGRPROJ; 3],
@@ -403,7 +410,7 @@ impl VkAV1Encoder {
             frame_presentation_time: 0,
             current_frame_id: frame_info.current_frame_id,
             order_hint: frame_info.order_hint,
-            primary_ref_frame: 7,
+            primary_ref_frame,
             refresh_frame_flags: if frame_info.is_key { 0xFF } else { 1 << setup_dpb_slot.index },
             coded_denom: 0,
             render_width_minus_1: (self.encoder.current_extent().width - 1) as u16,
