@@ -1,9 +1,8 @@
 use crate::{Device, VulkanError};
 use ash::vk::{self, TaggedStructure};
-use std::{
-    os::fd::{AsRawFd, OwnedFd},
-    sync::Arc,
-};
+#[cfg(fd)]
+use std::os::fd::{AsRawFd, OwnedFd};
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct Semaphore {
@@ -53,6 +52,7 @@ impl Semaphore {
         }
     }
 
+    #[cfg(fd)]
     pub unsafe fn import_timeline_fd(device: &Device, fd: OwnedFd) -> Result<Self, VulkanError> {
         if !device.enabled_extensions().timeline_semaphore {
             return Err(VulkanError::MissingExtension("timeline_semaphore"));

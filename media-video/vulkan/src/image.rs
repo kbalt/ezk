@@ -1,10 +1,9 @@
 use crate::{Device, RecordingCommandBuffer, VulkanError, device::find_memory_type_stable};
 use ash::vk::{self, Handle, TaggedStructure};
 use smallvec::{SmallVec, smallvec};
-use std::{
-    os::fd::{AsRawFd, FromRawFd, OwnedFd},
-    sync::{Arc, Mutex},
-};
+#[cfg(fd)]
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::sync::{Arc, Mutex};
 use wgpu::hal::vulkan::TextureMemory;
 
 #[derive(Debug, Clone)]
@@ -31,6 +30,7 @@ struct State {
     last_stage: vk::PipelineStageFlags2,
 }
 
+#[cfg(fd)]
 #[derive(Debug)]
 pub struct DrmPlane {
     pub fd: OwnedFd,
@@ -76,6 +76,7 @@ impl Image {
         })
     }
 
+    #[cfg(fd)]
     pub unsafe fn create_dma_exportable(
         device: &Device,
         create_info: vk::ImageCreateInfo<'_>,
@@ -137,6 +138,7 @@ impl Image {
         })
     }
 
+    #[cfg(fd)]
     #[allow(clippy::too_many_arguments)]
     pub unsafe fn import_dma_fd(
         device: &Device,
@@ -270,6 +272,7 @@ impl Image {
         })
     }
 
+    #[cfg(fd)]
     #[allow(clippy::too_many_arguments)]
     pub unsafe fn import_planar_dma_fd(
         device: &Device,
@@ -519,6 +522,7 @@ impl Image {
     /// - This image must have been created with DRM format modifier tiling (`VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT`)
     ///   and its memory must have been allocated with `VkExportMemoryAllocateInfo` including `VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT`.
     /// - This image must be in `R8G8B8A8_UNORM` format, with one mip level, one array layer, a sample count of 1, be 2D, and have a single non-disjoint memory plane.
+    #[cfg(fd)]
     pub unsafe fn to_rgba8_wgpu_texture_foreign(
         &self,
         target_device: &wgpu::Device,
@@ -740,6 +744,7 @@ impl Image {
         )
     }
 
+    #[cfg(fd)]
     unsafe fn export_as_dma_fd(&self) -> Result<(OwnedFd, u64), VulkanError> {
         let mut modifier_props = vk::ImageDrmFormatModifierPropertiesEXT::default();
         ash::ext::image_drm_format_modifier::Device::load(
