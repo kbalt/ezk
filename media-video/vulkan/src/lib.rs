@@ -34,7 +34,9 @@ pub use descriptor_set::{DescriptorSet, DescriptorSetLayout};
 pub use device::Device;
 pub use error::VulkanError;
 pub use fence::Fence;
-pub use image::{DrmPlane, Image, ImageMemoryBarrier};
+#[cfg(fd)]
+pub use image::DrmPlane;
+pub use image::{Image, ImageMemoryBarrier};
 pub use image_view::ImageView;
 pub use instance::Instance;
 pub use physical_device::PhysicalDevice;

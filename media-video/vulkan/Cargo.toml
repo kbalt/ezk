@@ -21,5 +21,8 @@ anyhow = "1"
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
 
+[build-dependencies]
+cfg_aliases = " 0.2"
+
 [lints]
 workspace = true
