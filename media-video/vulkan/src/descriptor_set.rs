@@ -3,7 +3,7 @@ use ash::vk;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
-pub(crate) struct DescriptorSetLayout {
+pub struct DescriptorSetLayout {
     inner: Arc<DescriptorSetLayoutInner>,
 }
 
@@ -14,7 +14,7 @@ struct DescriptorSetLayoutInner {
 }
 
 impl DescriptorSetLayout {
-    pub(crate) fn create(
+    pub unsafe fn create(
         device: &Device,
         bindings: &[vk::DescriptorSetLayoutBinding<'_>],
     ) -> Result<DescriptorSetLayout, VulkanError> {
@@ -54,7 +54,7 @@ impl Drop for DescriptorSetLayoutInner {
 }
 
 #[derive(Debug)]
-pub(crate) struct DescriptorSet {
+pub struct DescriptorSet {
     _inner: Arc<DescriptorSetInner>,
     descriptor_set: vk::DescriptorSet,
 }

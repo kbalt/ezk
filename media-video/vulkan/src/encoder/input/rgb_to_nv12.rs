@@ -3,11 +3,6 @@ use crate::{
     RecordingCommandBuffer, Sampler, ShaderModule, VulkanError, image::ImageMemoryBarrier,
 };
 use ash::vk::{self};
-use naga::{
-    back::spv,
-    front::wgsl,
-    valid::{Capabilities, ShaderStages, SubgroupOperationSet, ValidationFlags, Validator},
-};
 use std::{
     slice,
     sync::{Arc, OnceLock},
@@ -15,40 +10,6 @@ use std::{
 
 static SHADER: &str = include_str!("rgb_to_nv12.wgsl");
 static COMPILED: OnceLock<Vec<u32>> = OnceLock::new();
-
-fn compile_shader(source: &str) -> Vec<u32> {
-    let module = match wgsl::parse_str(source) {
-        Ok(module) => module,
-        Err(e) => {
-            panic!("{}", e.emit_to_string(source))
-        }
-    };
-
-    let module_info = match Validator::new(ValidationFlags::all(), Capabilities::all())
-        .subgroup_stages(ShaderStages::COMPUTE)
-        .subgroup_operations(SubgroupOperationSet::all())
-        .validate(&module)
-    {
-        Ok(module_info) => module_info,
-        Err(e) => {
-            panic!("{}", e.emit_to_string(source));
-        }
-    };
-
-    let mut spv = Vec::new();
-
-    if let Err(e) = spv::Writer::new(&spv::Options::default()).unwrap().write(
-        &module,
-        &module_info,
-        None,
-        &None,
-        &mut spv,
-    ) {
-        panic!("{e}")
-    }
-
-    spv
-}
 
 #[derive(Debug, Clone, Copy)]
 pub enum Primaries {
@@ -94,7 +55,7 @@ impl RgbToNV12Converter {
         max_extent: vk::Extent2D,
         num: u32,
     ) -> Result<Vec<RgbToNV12Converter>, VulkanError> {
-        let spv = COMPILED.get_or_init(|| compile_shader(SHADER));
+        let spv = COMPILED.get_or_init(|| ShaderModule::compile_wgsl(SHADER));
 
         let compute_shader_module = ShaderModule::from_spv(device, spv)?;
 
@@ -137,7 +98,7 @@ impl RgbToNV12Converter {
                 .stage_flags(vk::ShaderStageFlags::COMPUTE),
         ];
 
-        let descriptor_set_layout = DescriptorSetLayout::create(device, &bindings)?;
+        let descriptor_set_layout = unsafe { DescriptorSetLayout::create(device, &bindings)? };
         let pipeline_layout = PipelineLayout::create(device, &descriptor_set_layout)?;
 
         let mut compute_pipelines = Pipeline::create(

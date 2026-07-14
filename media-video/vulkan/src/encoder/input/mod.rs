@@ -38,6 +38,8 @@ pub struct VulkanImageInput {
 
     pub acquire: Option<InputSync>,
     pub release: Option<InputSync>,
+
+    pub texture_is_win32_keyedmutex: bool,
 }
 
 #[derive(Debug)]

@@ -1,3 +1,5 @@
+#![cfg(target_family = "unix")]
+
 use capture::wayland::{
     BitFlag, CapturedFrameBuffer, PersistMode, PipewireOptions, PixelFormat, RgbaSwizzle,
     ScreenCaptureOptions, SourceType,

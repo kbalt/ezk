@@ -1,3 +1,4 @@
+#[cfg(target_family = "unix")]
 use std::os::fd::{AsRawFd, OwnedFd};
 
 use crate::{Device, VulkanError};
@@ -23,6 +24,7 @@ impl Semaphore {
         }
     }
 
+    #[cfg(target_family = "unix")]
     pub unsafe fn import_timeline_fd(device: &Device, fd: OwnedFd) -> Result<Self, VulkanError> {
         let mut type_create_info =
             vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);

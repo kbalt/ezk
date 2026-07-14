@@ -51,6 +51,7 @@ pub struct DeviceVideoExtensions {
     pub video_decode_h265: bool,
     pub external_memory_fd: bool,
     pub external_memory_dma_buf: bool,
+    pub external_memory_win32: bool,
     pub image_drm_format_modifier: bool,
     pub timeline_semaphore: bool,
     pub external_semaphore_fd: bool,
@@ -101,6 +102,11 @@ impl Device {
                 external_memory_dma_buf: add2(
                     &props,
                     ash::ext::external_memory_dma_buf::NAME,
+                    &mut extensions,
+                ),
+                external_memory_win32: add2(
+                    &props,
+                    ash::khr::external_memory_win32::NAME,
                     &mut extensions,
                 ),
                 image_drm_format_modifier: add2(
@@ -292,6 +298,11 @@ impl Device {
             external_memory_dma_buf: add(
                 &props,
                 ash::ext::external_memory_dma_buf::NAME,
+                &mut extensions,
+            ),
+            external_memory_win32: add(
+                &props,
+                ash::khr::external_memory_win32::NAME,
                 &mut extensions,
             ),
             image_drm_format_modifier: add(

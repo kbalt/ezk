@@ -1,10 +1,11 @@
 use crate::{Device, RecordingCommandBuffer, VulkanError};
 use ash::vk;
 use smallvec::SmallVec;
-use std::{
-    os::fd::{AsRawFd, OwnedFd},
-    sync::{Arc, Mutex},
-};
+#[cfg(target_family = "unix")]
+use std::os::fd::{AsRawFd, OwnedFd};
+use std::sync::{Arc, Mutex};
+#[cfg(target_family = "windows")]
+use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 
 #[derive(Debug, Clone)]
 pub struct Image {
@@ -29,7 +30,7 @@ struct State {
 }
 
 impl Image {
-    pub(crate) unsafe fn create(
+    pub unsafe fn create(
         device: &Device,
         create_info: &vk::ImageCreateInfo<'_>,
     ) -> Result<Self, VulkanError> {
@@ -65,6 +66,7 @@ impl Image {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[cfg(target_family = "unix")]
     pub unsafe fn import_dma_fd_rgba(
         device: &Device,
         fd: OwnedFd,
@@ -89,6 +91,7 @@ impl Image {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[cfg(target_family = "unix")]
     pub(crate) unsafe fn import_dma_fd(
         device: &Device,
         fd: OwnedFd,
@@ -176,6 +179,105 @@ impl Image {
                 return Err(e.into());
             }
         }
+
+        Ok(Self {
+            inner: Arc::new(Inner {
+                device: device.clone(),
+                image,
+                memory,
+                extent,
+                state: Mutex::new(smallvec::smallvec![State {
+                    current_layout: vk::ImageLayout::UNDEFINED,
+                    last_access: vk::AccessFlags2::NONE,
+                    last_stage: vk::PipelineStageFlags2::NONE,
+                }]),
+            }),
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[cfg(target_family = "windows")]
+    pub unsafe fn import_d3d11_rgba(
+        device: &Device,
+        texture: &ID3D11Texture2D,
+        width: u32,
+        height: u32,
+        usage: vk::ImageUsageFlags,
+    ) -> Result<Image, VulkanError> {
+        use windows::{
+            Win32::Graphics::Dxgi::{
+                DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE, IDXGIResource1,
+            },
+            core::Interface,
+        };
+
+        let mut external_memory_image_info = vk::ExternalMemoryImageCreateInfo::default()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::D3D11_TEXTURE);
+
+        let extent = vk::Extent3D {
+            width,
+            height,
+            depth: 1,
+        };
+
+        let image_create_info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(vk::Format::B8G8R8A8_UNORM)
+            .extent(extent)
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(usage)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .push_next(&mut external_memory_image_info);
+
+        // Create the image
+        let image = unsafe { device.ash().create_image(&image_create_info, None)? };
+
+        // Bind external D3D11Texture2D
+        let memory_requirements = unsafe { device.ash().get_image_memory_requirements(image) };
+
+        let mut dedicated = vk::MemoryDedicatedAllocateInfo::default().image(image);
+
+        let texture = texture.cast::<IDXGIResource1>().unwrap();
+        let handle = texture
+            .CreateSharedHandle(
+                None,
+                DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
+                None,
+            )
+            .unwrap();
+
+        let mut memory_win32_handle_properties = vk::MemoryWin32HandlePropertiesKHR::default();
+        ash::khr::external_memory_win32::Device::new(device.instance().ash(), device.ash())
+            .get_memory_win32_handle_properties(
+                vk::ExternalMemoryHandleTypeFlags::D3D11_TEXTURE,
+                handle.0,
+                &mut memory_win32_handle_properties,
+            )?;
+
+        let mut import_handle_info = vk::ImportMemoryWin32HandleInfoKHR::default()
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::D3D11_TEXTURE)
+            .handle(handle.0);
+
+        let memory_type_index = device.find_memory_type(
+            memory_requirements.memory_type_bits & memory_win32_handle_properties.memory_type_bits,
+            vk::MemoryPropertyFlags::empty(),
+        )?;
+
+        let allocate_info = vk::MemoryAllocateInfo::default()
+            .allocation_size(memory_requirements.size)
+            .memory_type_index(memory_type_index)
+            .push_next(&mut import_handle_info)
+            .push_next(&mut dedicated);
+
+        // Create vulkan memory using the D3D11 HANDLE
+        let memory = unsafe { device.ash().allocate_memory(&allocate_info, None)? };
+
+        // Finally bind the image memory
+        unsafe { device.ash().bind_image_memory(image, memory, 0)? };
 
         Ok(Self {
             inner: Arc::new(Inner {

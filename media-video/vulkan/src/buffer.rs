@@ -8,7 +8,7 @@ use ash::vk;
 use crate::{Device, VulkanError};
 
 #[derive(Debug)]
-pub(crate) struct Buffer<T = u8> {
+pub struct Buffer<T = u8> {
     device: Device,
     buffer: vk::Buffer,
     memory: vk::DeviceMemory,
@@ -17,7 +17,7 @@ pub(crate) struct Buffer<T = u8> {
 }
 
 impl<T> Buffer<T> {
-    pub(crate) unsafe fn create(
+    pub unsafe fn create(
         device: &Device,
         create_info: &vk::BufferCreateInfo<'_>,
     ) -> Result<Self, VulkanError> {

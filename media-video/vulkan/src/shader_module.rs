@@ -2,9 +2,10 @@ use std::sync::Arc;
 
 use crate::{Device, VulkanError};
 use ash::vk;
+use naga::{back::spv, front::wgsl, valid::{Capabilities, ShaderStages, SubgroupOperationSet, ValidationFlags, Validator}};
 
 #[derive(Debug, Clone)]
-pub(crate) struct ShaderModule {
+pub struct ShaderModule {
     inner: Arc<Inner>,
 }
 
@@ -15,7 +16,7 @@ struct Inner {
 }
 
 impl ShaderModule {
-    pub(crate) fn from_spv(device: &Device, spv: &[u32]) -> Result<Self, VulkanError> {
+    pub fn from_spv(device: &Device, spv: &[u32]) -> Result<Self, VulkanError> {
         unsafe {
             let create_info = vk::ShaderModuleCreateInfo::default().code(spv);
 
@@ -28,6 +29,40 @@ impl ShaderModule {
                 }),
             })
         }
+    }
+
+    pub fn compile_wgsl(source: &str) -> Vec<u32> {
+        let module = match wgsl::parse_str(source) {
+            Ok(module) => module,
+            Err(e) => {
+                panic!("{}", e.emit_to_string(source))
+            }
+        };
+
+        let module_info = match Validator::new(ValidationFlags::all(), Capabilities::all())
+            .subgroup_stages(ShaderStages::COMPUTE)
+            .subgroup_operations(SubgroupOperationSet::all())
+            .validate(&module)
+        {
+            Ok(module_info) => module_info,
+            Err(e) => {
+                panic!("{}", e.emit_to_string(source));
+            }
+        };
+
+        let mut spv = Vec::new();
+
+        if let Err(e) = spv::Writer::new(&spv::Options::default()).unwrap().write(
+            &module,
+            &module_info,
+            None,
+            &None,
+            &mut spv,
+        ) {
+            panic!("{e}")
+        }
+
+        spv
     }
 
     pub(crate) unsafe fn shader_module(&self) -> vk::ShaderModule {
