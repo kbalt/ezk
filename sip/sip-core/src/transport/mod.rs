@@ -385,7 +385,12 @@ impl Transports {
         for server in &servers {
             match server.transport {
                 Some(resolver::Transport::Udp) | None => {
-                    if let Some(udp) = self.udp_sockets.lock().first() {
+                    let udp_sockets = self.udp_sockets.lock();
+
+                    if let Some(udp) = udp_sockets
+                        .iter()
+                        .find(|s| s.bound.is_ipv4() == server.address.is_ipv4())
+                    {
                         return Ok((
                             TpHandle {
                                 transport: Transport::Udp(udp.clone()),
