@@ -1,6 +1,6 @@
 [package]
 name = "ezk-sip-core"
-version = "0.9.1"
+version = "0.9.2"
 description = "SIP core crate providing abstrations over transport and transactions"
 categories = ["network-programming", "multimedia"]
 keywords = ["sip"]
@@ -22,13 +22,7 @@ stun.workspace = true
 
 tracing = "0.1"
 bytes = "1"
-tokio = { version = "1", features = [
-  "net",
-  "rt-multi-thread",
-  "sync",
-  "macros",
-  "io-util",
-] }
+tokio = { version = "1", features = ["net", "rt-multi-thread", "sync", "macros", "io-util"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 tokio-stream = "0.1"
 async-trait = "0.1"
