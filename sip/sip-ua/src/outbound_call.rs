@@ -104,7 +104,7 @@ impl<M: MediaBackend> OutboundCall<M> {
                     }
                     Response::Failure(tsx_response) => {
                         // Authorize requests if possible
-                        if tsx_response.line.code != StatusCode::UNAUTHORIZED {
+                        if !is_authentication_challenge(tsx_response.line.code) {
                             return Err(MakeCallError::Failed(tsx_response.line));
                         }
 
@@ -390,4 +390,25 @@ fn extract_sdp(tsx_response: &TsxResponse) -> Option<SessionDescription> {
     }
 
     None
+}
+
+fn is_authentication_challenge(code: StatusCode) -> bool {
+    matches!(
+        code,
+        StatusCode::UNAUTHORIZED | StatusCode::PROXY_AUTHENTICATION_REQUIRED
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_authentication_challenges() {
+        assert!(is_authentication_challenge(StatusCode::UNAUTHORIZED));
+        assert!(is_authentication_challenge(
+            StatusCode::PROXY_AUTHENTICATION_REQUIRED
+        ));
+        assert!(!is_authentication_challenge(StatusCode::FORBIDDEN));
+    }
 }

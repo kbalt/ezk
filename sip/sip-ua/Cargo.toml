@@ -35,6 +35,9 @@ thiserror = "2"
 slotmap = "1"
 bytes = "1"
 
+[dev-dependencies]
+md5 = "0.7"
+
 [features]
 default = ["rtc"]
 rtc = ["dep:rtc", "dep:tokio-util", "dep:futures-sink"]
