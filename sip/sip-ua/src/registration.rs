@@ -300,9 +300,10 @@ async fn keep_alive_task<A: ClientAuthenticator>(
         {
             inner.is_registered.send_replace(false);
             log::warn!("REGISTER request to refresh binding failed: {e}");
-        } else {
-            inner.is_registered.send_replace(true);
+            return;
         }
+
+        inner.is_registered.send_replace(true);
     }
 
     // Remove binding
@@ -338,7 +339,7 @@ async fn register<A: ClientAuthenticator>(
             .send_request(request, target_transport_info)
             .await?;
 
-        let response = transaction.receive_final().await.unwrap();
+        let response = transaction.receive_final().await?;
 
         let response_code = response.line.code;
 
