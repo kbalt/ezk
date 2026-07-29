@@ -9,7 +9,7 @@ use sdp_types::SessionDescription;
 use sip_auth::ClientAuthenticator;
 use sip_core::{Endpoint, Request, transaction::TsxResponse};
 use sip_types::{
-    StatusCode,
+    Headers, StatusCode,
     header::typed::{Contact, ContentType},
     msg::StatusLine,
     uri::{NameAddr, SipUri},
@@ -301,6 +301,11 @@ pub struct UnacknowledgedCall<M> {
 }
 
 impl<M: MediaBackend> UnacknowledgedCall<M> {
+    /// Headers from the selected successful final INVITE response that established the dialog.
+    pub fn final_response_headers(&self) -> &Headers {
+        &self.final_response.headers
+    }
+
     /// Terminate the completed call
     pub async fn terminate(mut self) -> Result<(), sip_core::Error> {
         self.session.terminate().await?;
