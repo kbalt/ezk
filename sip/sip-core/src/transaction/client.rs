@@ -72,6 +72,28 @@ impl ClientTsx {
         })
     }
 
+    pub(crate) async fn send_with_transaction_key(
+        endpoint: Endpoint,
+        mut request: OutgoingRequest,
+        tsx_key: TsxKey,
+    ) -> Result<Self> {
+        let registration = TsxRegistration::create(endpoint, tsx_key);
+
+        registration
+            .endpoint
+            .send_outgoing_request(&mut request)
+            .await?;
+
+        let timeout = Instant::now() + T1 * 64;
+
+        Ok(Self {
+            registration: Some(registration),
+            request,
+            timeout,
+            state: State::Init,
+        })
+    }
+
     /// Returns the request the transaction was created from
     pub fn request(&self) -> &OutgoingRequest {
         &self.request
