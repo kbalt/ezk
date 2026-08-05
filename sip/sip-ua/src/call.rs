@@ -139,11 +139,13 @@ impl<M: MediaBackend> Call<M> {
                 self.handle_reinvite(event).await?;
             }
             InviteSessionEvent::Bye(event) => {
+                self.terminated = true;
                 invite_session.handle_bye(event).await?;
 
                 self.backlog.push_back(CallEvent::Terminated);
             }
             InviteSessionEvent::Terminated => {
+                self.terminated = true;
                 self.backlog.push_back(CallEvent::Terminated);
             }
         }
@@ -304,8 +306,8 @@ impl<M: MediaBackend> Call<M> {
 
     /// Terminate the call
     pub async fn terminate(mut self) -> Result<(), sip_core::Error> {
-        self.invite_session.as_mut().unwrap().terminate().await?;
         self.terminated = true;
+        self.invite_session.as_mut().unwrap().terminate().await?;
         Ok(())
     }
 }
