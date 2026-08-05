@@ -17,7 +17,7 @@ impl RtpExtensionIdsExt for RtpExtensionIds {
     fn offer(media_type: MediaType) -> Self {
         RtpExtensionIds {
             mid: Some(1),
-            audio_level: Some(2).filter(|_| media_type == MediaType::Audio),
+            audio_level: (media_type == MediaType::Audio).then_some(2),
             twcc_sequence_number: Some(3),
         }
     }

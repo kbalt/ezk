@@ -413,7 +413,7 @@ impl DigestAuthenticator {
                 let ha2 = hash(
                     format!(
                         "{}:{}:{}",
-                        &request_parts.line.method,
+                        request_parts.line.method,
                         uri,
                         hash(request_parts.body)
                     )
@@ -440,7 +440,7 @@ impl DigestAuthenticator {
 
                 (response, Some(qop_response))
             } else if challenge.qop.contains(&QopOption::Auth) {
-                let a2 = format!("{}:{}", &request_parts.line.method, uri);
+                let a2 = format!("{}:{}", request_parts.line.method, uri);
                 let ha2 = hash(a2.as_bytes());
 
                 let nc = 1;
@@ -466,7 +466,7 @@ impl DigestAuthenticator {
                 return Err(DigestError::UnsupportedQop);
             }
         } else {
-            let a2 = format!("{}:{}", &request_parts.line.method, uri);
+            let a2 = format!("{}:{}", request_parts.line.method, uri);
 
             (
                 hash(format!("{}:{}:{}", ha1, challenge.nonce, hash(a2.as_bytes())).as_bytes()),
