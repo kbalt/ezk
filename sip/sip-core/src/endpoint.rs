@@ -183,7 +183,7 @@ impl Endpoint {
 
         log::trace!(
             "Sending request to {:?}\n{:?}",
-            &message.parts.destination,
+            message.parts.destination,
             BytesPrint(&message.parts.buffer)
         );
 

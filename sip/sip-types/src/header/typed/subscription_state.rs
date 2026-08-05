@@ -115,7 +115,7 @@ impl Print for SubscriptionState {
         if let Some(after) = &self.retry_after {
             write!(f, ";retry-after={after}")?;
         }
-        write!(f, "{}", &self.params)?;
+        write!(f, "{}", self.params)?;
         Ok(())
     }
 }
