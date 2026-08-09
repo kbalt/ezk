@@ -1,18 +1,13 @@
 use std::net::Ipv4Addr;
 
 use ezk_rtc::{
-    OpenSslContext,
     rtp_transport::RtpTransportPorts,
     sdp::{Codec, Codecs, LocalMediaId, SdpSession, SdpSessionConfig, TransportChange},
 };
 use sdp_types::{Direction, MediaType};
 
 pub(crate) fn make_session(config: SdpSessionConfig) -> (LocalMediaId, SdpSession) {
-    let mut session = SdpSession::new(
-        OpenSslContext::try_new().unwrap(),
-        Ipv4Addr::LOCALHOST.into(),
-        config,
-    );
+    let mut session = SdpSession::new(Ipv4Addr::LOCALHOST.into(), config);
 
     let audio = session
         .add_local_media(

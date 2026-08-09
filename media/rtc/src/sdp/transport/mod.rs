@@ -1,16 +1,14 @@
 use super::TransportId;
 use crate::{
-    Mtu, OpenSslContext,
     rtp::RtpExtensionIds,
     rtp_transport::{
-        Connectivity, DtlsSetup, DtlsSrtpCreateError, RtpDtlsSrtpTransport, RtpOrRtcp,
-        RtpTransport, RtpTransportEvent, RtpTransportKind, RtpTransportPorts,
-        ice_to_transport_event,
+        Connectivity, DtlsSetup, RtpDtlsSrtpTransport, RtpOrRtcp, RtpTransport, RtpTransportEvent,
+        RtpTransportKind, RtpTransportPorts, ice_to_transport_event,
     },
     sdp::{TransportChange, TransportType, rtp_extensions::RtpExtensionIdsExt},
+    ssl::DtlsContext,
 };
 use ice::{IceAgent, IceCredentials, ReceivedPkt};
-use openssl::hash::MessageDigest;
 use resolve::resolve_rtp_and_rtcp_address;
 use sdes_srtp::{SdesSrtpNegotiationError, SdesSrtpOffer};
 use sdp_types::{
@@ -30,12 +28,12 @@ pub use resolve::ResolveError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TransportCreateError {
-    #[error("Failed to create DTLS-SRTP transport: {0}")]
-    CreateDtlsSrtp(#[from] DtlsSrtpCreateError),
     #[error("Failed to negotiate SDES-SRTP session: {0}")]
     FailedSdesSrtp(#[from] SdesSrtpNegotiationError),
     #[error("Invalid or missing setup attribute in SDP")]
     InvalidSetupAttribute,
+    #[error("Missing compatible fingerprint attributes in SDP")]
+    MissingFingerprintAttribute,
     #[error(transparent)]
     Resolve(#[from] ResolveError),
     #[error("Unknown transport type")]
@@ -139,8 +137,7 @@ impl OfferedTransport {
 
     pub(crate) fn build_from_answer(
         self,
-        mtu: Mtu,
-        ssl_context: &OpenSslContext,
+        dtls_context: &DtlsContext,
         changes: &mut VecDeque<TransportChange>,
         remote_session_desc: &SessionDescription,
         remote_media_desc: &MediaDescription,
@@ -204,19 +201,21 @@ impl OfferedTransport {
                     }
                 };
 
-                let fingerprints = remote_session_desc
+                let fingerprint = remote_session_desc
                     .fingerprint
                     .iter()
                     .chain(remote_media_desc.fingerprint.iter())
-                    .filter_map(|e| Some((to_openssl_digest(&e.algorithm)?, e.fingerprint.clone())))
-                    .collect();
+                    .find(|e| e.algorithm == FingerprintAlgorithm::SHA256)
+                    .map(|f| f.fingerprint.clone())
+                    .ok_or(TransportCreateError::MissingFingerprintAttribute)?;
 
                 RtpTransportKind::DtlsSrtp(RtpDtlsSrtpTransport::new(
-                    ssl_context,
-                    fingerprints,
+                    dtls_context.config.clone(),
+                    dtls_context.cert.clone(),
+                    fingerprint,
                     setup,
-                    mtu,
-                )?)
+                    Instant::now(),
+                ))
             }
         };
 
@@ -282,8 +281,7 @@ impl OfferedTransport {
 /// create RtpTransport from SDP offer & SdpSession
 #[allow(clippy::too_many_arguments)]
 pub(super) fn create_from_offer(
-    mtu: Mtu,
-    ssl_context: &OpenSslContext,
+    dtls_context: &DtlsContext,
     ice_credentials: &IceCredentials,
     stun_servers: &[SocketAddr],
     changes: &mut VecDeque<TransportChange>,
@@ -358,19 +356,21 @@ pub(super) fn create_from_offer(
                 }
             };
 
-            let fingerprints: Vec<_> = session_desc
+            let fingerprint = session_desc
                 .fingerprint
                 .iter()
                 .chain(media_desc.fingerprint.iter())
-                .filter_map(|e| Some((to_openssl_digest(&e.algorithm)?, e.fingerprint.clone())))
-                .collect();
+                .find(|e| e.algorithm == FingerprintAlgorithm::SHA256)
+                .map(|f| f.fingerprint.clone())
+                .ok_or(TransportCreateError::MissingFingerprintAttribute)?;
 
             RtpTransportKind::DtlsSrtp(RtpDtlsSrtpTransport::new(
-                ssl_context,
-                fingerprints,
+                dtls_context.config.clone(),
+                dtls_context.cert.clone(),
+                fingerprint,
                 setup,
-                mtu,
-            )?)
+                Instant::now(),
+            ))
         }
         _ => return Err(TransportCreateError::UnknownTransportType),
     };
@@ -407,18 +407,5 @@ pub(super) fn populate_desc(transport: &RtpTransport, media_desc: &mut MediaDesc
     if let Connectivity::Ice(ice_agent) = &transport.connectivity() {
         media_desc.ice_candidates.extend(ice_agent.ice_candidates());
         media_desc.ice_end_of_candidates = true;
-    }
-}
-
-fn to_openssl_digest(algo: &FingerprintAlgorithm) -> Option<MessageDigest> {
-    match algo {
-        FingerprintAlgorithm::SHA1 => Some(MessageDigest::sha1()),
-        FingerprintAlgorithm::SHA224 => Some(MessageDigest::sha224()),
-        FingerprintAlgorithm::SHA256 => Some(MessageDigest::sha256()),
-        FingerprintAlgorithm::SHA384 => Some(MessageDigest::sha384()),
-        FingerprintAlgorithm::SHA512 => Some(MessageDigest::sha512()),
-        FingerprintAlgorithm::MD5 => Some(MessageDigest::md5()),
-        FingerprintAlgorithm::MD2 => None,
-        FingerprintAlgorithm::Other(..) => None,
     }
 }

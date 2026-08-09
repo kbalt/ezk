@@ -9,20 +9,19 @@ use super::{
     opt_min,
     rtp_transport::{Connectivity, RtpTransport, RtpTransportEvent, RtpTransportPorts},
 };
-use crate::rtp::RtpPacket;
 use crate::{
-    OpenSslContext,
+    rtp::RtpPacket,
     rtp_session::{
         RtpInboundStream, RtpOutboundStream, RtpSession, RtpSessionPollEvent,
         RtpSessionReceiveRtcpEvent, RxStream, SendRtpPacket,
     },
     rtp_transport::{RtpOrRtcp, TransportConnectionState},
     sdp::{event::MediaRemoved, local_media::LocalMedia, media::MediaStreams},
+    ssl::DtlsContext,
 };
 use bytes::Bytes;
 use bytesstr::BytesStr;
 use ice::{Component, IceAgent, IceCredentials, ReceivedPkt};
-use openssl::hash::MessageDigest;
 use rtcp_types::Compound;
 use sdp_types::{
     Connection, Fingerprint, FingerprintAlgorithm, Fmtp, Group, IceCandidate, IceOptions,
@@ -108,7 +107,7 @@ pub struct SdpSession {
     stun_servers: Vec<SocketAddr>,
 
     // DTLS
-    ssl_context: OpenSslContext,
+    dtls_context: DtlsContext,
     fingerprint: Fingerprint,
 
     // Transports
@@ -163,17 +162,12 @@ impl SdpSession {
     ///
     /// The `address` will be put into the SDP connection attribute, which will serve as fallback address if no ICE is
     /// used.
-    pub fn new(ssl_context: OpenSslContext, address: IpAddr, config: SdpSessionConfig) -> Self {
-        let digest = ssl_context
-            .ctx
-            .certificate()
-            .expect("OpenSslContext context always contains a certificate")
-            .digest(MessageDigest::sha256())
-            .expect("Creating digest of certificate should not fail");
+    pub fn new(address: IpAddr, config: SdpSessionConfig) -> Self {
+        let dtls_context = DtlsContext::new(config.mtu);
 
         let fingerprint = Fingerprint {
             algorithm: FingerprintAlgorithm::SHA256,
-            fingerprint: digest.to_vec(),
+            fingerprint: dtls_context.fingerprint(),
         };
 
         SdpSession {
@@ -185,7 +179,7 @@ impl SdpSession {
             local_media: SlotMap::with_key(),
             ice_credentials: IceCredentials::random(),
             stun_servers: Vec::new(),
-            ssl_context,
+            dtls_context,
             fingerprint,
             next_transport_id: 0,
             transports: SlotMap::with_key(),
@@ -666,8 +660,7 @@ impl SdpSession {
         let id = self.make_public_transport_id();
 
         let transport = transport::create_from_offer(
-            self.config.mtu,
-            &self.ssl_context,
+            &self.dtls_context,
             &self.ice_credentials,
             &self.stun_servers,
             &mut self.transport_changes,
@@ -834,8 +827,7 @@ impl SdpSession {
 
                         let (transport, early_received_rtp_or_rtcp) = offered_transport
                             .build_from_answer(
-                                self.config.mtu,
-                                &self.ssl_context,
+                                &self.dtls_context,
                                 &mut self.transport_changes,
                                 &answer,
                                 remote_media_desc,
@@ -1616,7 +1608,10 @@ impl SdpSession {
             ..
         } in self.transports.values()
         {
-            if transport.local_and_remote_addrs().is_some() {
+            if transport
+                .local_and_remote_addrs_if_transport_is_ready()
+                .is_some()
+            {
                 timeout = opt_min(timeout, rtp_session.timeout(now));
             }
 

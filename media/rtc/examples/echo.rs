@@ -4,7 +4,7 @@ use std::{
 };
 
 use ezk_rtc::{
-    Mtu, OpenSslContext,
+    Mtu,
     rtp_session::{RtpInboundPacket, SendRtpPacket},
     sdp::{
         BundlePolicy, Codec, Codecs, LocalMediaId, RtcpMuxPolicy, SdpSession, SdpSessionConfig,
@@ -15,11 +15,7 @@ use ezk_rtc::{
 use sdp_types::{Direction, MediaType, SessionDescription};
 
 pub(crate) fn make_session(config: SdpSessionConfig) -> (LocalMediaId, SdpSession) {
-    let mut session = SdpSession::new(
-        OpenSslContext::try_new().unwrap(),
-        Ipv4Addr::LOCALHOST.into(),
-        config,
-    );
+    let mut session = SdpSession::new(Ipv4Addr::LOCALHOST.into(), config);
 
     let audio = session
         .add_local_media(
