@@ -1,10 +1,10 @@
 use crate::rtp_session::outbound::RtpOutboundStreamEvent;
 
 use super::SendRtpPacket;
-use bytes::{BufMut, Bytes, BytesMut};
 use crate::rtp::{
     ExtendedRtpTimestamp, ExtendedSequenceNumber, RtpExtensions, RtpPacket, RtpTimestamp, Ssrc,
 };
+use bytes::{BufMut, Bytes, BytesMut};
 use std::{
     collections::{BTreeMap, VecDeque},
     time::{Duration, Instant},
@@ -241,8 +241,8 @@ impl OutboundQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::Bytes;
     use crate::rtp::{RtpTimestamp, SequenceNumber};
+    use bytes::Bytes;
 
     fn packet(media_time: Instant, pt: u8) -> SendRtpPacket {
         SendRtpPacket::new(media_time, pt, Bytes::new())

@@ -30,7 +30,7 @@ mod event;
 mod packet_kind;
 mod sdes_srtp;
 
-pub use dtls_srtp::{DtlsHandshakeError, DtlsSetup, DtlsSrtpCreateError, RtpDtlsSrtpTransport};
+pub use dtls_srtp::{DtlsSetup, RtpDtlsSrtpTransport};
 pub use event::{RtpTransportEvent, TransportConnectionState};
 pub use sdes_srtp::RtpSdesSrtpTransport;
 
@@ -57,7 +57,23 @@ pub enum Connectivity {
     Ice(IceAgent),
 }
 
+impl Connectivity {
+    /// used to check if the RTP path is known, before polling DTLS
+    fn local_and_remote_rtp_addr(&self) -> Option<(Option<SocketAddr>, SocketAddr)> {
+        match self {
+            Connectivity::Static {
+                remote_rtp_address,
+                remote_rtcp_address: _,
+            } => Some((None, *remote_rtp_address)),
+            Connectivity::Ice(ice_agent) => ice_agent
+                .discovered_addr(Component::Rtp)
+                .map(|(local, remote)| (Some(local), remote)),
+        }
+    }
+}
+
 /// The kind of transport thats used to protect RTP
+#[expect(clippy::large_enum_variant)]
 pub enum RtpTransportKind {
     /// RTP is sent plain via UDP
     Unencrypted,
@@ -162,7 +178,9 @@ impl RtpTransport {
             RtpTransportKind::Unencrypted => {}
             RtpTransportKind::SdesSrtp(..) => {}
             RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) => {
-                timeout = opt_min(timeout, rtp_dtls_srtp_transport.timeout());
+                if self.connectivity.local_and_remote_rtp_addr().is_some() {
+                    timeout = opt_min(timeout, rtp_dtls_srtp_transport.timeout(now));
+                }
             }
         }
 
@@ -203,29 +221,17 @@ impl RtpTransport {
         }
 
         // Poll DTLS if RTP addr is known
-        let (local_rtp_addr, remote_rtp_addr) = match &self.connectivity {
-            Connectivity::Static {
-                remote_rtp_address, ..
-            } => (None, *remote_rtp_address),
-            Connectivity::Ice(ice_agent) => {
-                let Some((local, remote)) = ice_agent.discovered_addr(Component::Rtp) else {
-                    return;
-                };
+        if let Some((local_rtp_addr, remote_rtp_addr)) =
+            self.connectivity.local_and_remote_rtp_addr()
+            && let RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) = &mut self.kind
+        {
+            rtp_dtls_srtp_transport.poll(now);
 
-                (Some(local.ip()), remote)
-            }
-        };
-
-        if let RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) = &mut self.kind {
-            if let Err(e) = rtp_dtls_srtp_transport.handshake() {
-                log::warn!("DTLS handshake failed: {e:?}");
-            }
-
-            if let Some(data) = rtp_dtls_srtp_transport.pop_to_send() {
+            while let Some(data) = rtp_dtls_srtp_transport.pop_to_send() {
                 self.events.push_back(RtpTransportEvent::SendData {
                     component: Component::Rtp,
                     data,
-                    source: local_rtp_addr,
+                    source: local_rtp_addr.map(|addr| addr.ip()),
                     target: remote_rtp_addr,
                 });
             }
@@ -317,7 +323,7 @@ impl RtpTransport {
                                 return None;
                             }
                         } else {
-                            log::warn!("Got RTP packet before DTLS connection is complete");
+                            log::debug!("Got RTP packet before DTLS connection is complete");
                             return None;
                         }
                     }
@@ -354,7 +360,7 @@ impl RtpTransport {
                                 return None;
                             }
                         } else {
-                            log::warn!("Got RTCP packet before DTLS connection is complete");
+                            log::debug!("Got RTCP packet before DTLS connection is complete");
                             return None;
                         }
                     }
@@ -375,41 +381,32 @@ impl RtpTransport {
                     return None;
                 }
 
-                let RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) = &mut self.kind else {
-                    log::warn!("Ignoring DTLS packet on non-DTLS transport");
-                    return None;
-                };
+                match &mut self.kind {
+                    RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) => {
+                        rtp_dtls_srtp_transport.receive(pkt.data.clone());
+                        rtp_dtls_srtp_transport.poll(now);
 
-                rtp_dtls_srtp_transport.receive(pkt.data.clone());
-                if let Err(e) = rtp_dtls_srtp_transport.handshake() {
-                    log::warn!("DTLS handshake failed: {e:?}");
-                }
-
-                // Only try to send data if we know the remote's RTP address
-                let (local_rtp_addr, remote_rtp_addr) = match &self.connectivity {
-                    Connectivity::Static {
-                        remote_rtp_address, ..
-                    } => (None, *remote_rtp_address),
-                    Connectivity::Ice(ice_agent) => {
-                        match ice_agent.discovered_addr(Component::Rtp) {
-                            Some((local_rtp_addr, remote_rtp_addr)) => {
-                                (Some(local_rtp_addr.ip()), remote_rtp_addr)
+                        // Only try to send data if we know the remote's RTP address
+                        if let Some((local_rtp_addr, remote_rtp_addr)) =
+                            self.connectivity.local_and_remote_rtp_addr()
+                        {
+                            while let Some(data) = rtp_dtls_srtp_transport.pop_to_send() {
+                                self.events.push_back(RtpTransportEvent::SendData {
+                                    component: Component::Rtp,
+                                    data,
+                                    source: local_rtp_addr.map(|addr| addr.ip()),
+                                    target: remote_rtp_addr,
+                                });
                             }
-                            None => return None,
                         }
+
+                        None
                     }
-                };
-
-                while let Some(data) = rtp_dtls_srtp_transport.pop_to_send() {
-                    self.events.push_back(RtpTransportEvent::SendData {
-                        component: Component::Rtp,
-                        data,
-                        source: local_rtp_addr,
-                        target: remote_rtp_addr,
-                    });
+                    _ => {
+                        log::warn!("Ignoring DTLS packet on non-DTLS transport");
+                        None
+                    }
                 }
-
-                None
             }
             PacketKind::Unknown => {
                 // ignore
@@ -428,7 +425,7 @@ impl RtpTransport {
     pub fn writer(&mut self) -> Option<RtpTransportWriter<'_>> {
         // Check that all addresses are known
         let (local_rtp_addr, local_rtcp_addr, remote_rtp_addr, remote_rtcp_addr) =
-            self.local_and_remote_addrs()?;
+            self.local_and_remote_addrs_if_transport_is_ready()?;
 
         Some(RtpTransportWriter {
             transport: self,
@@ -440,7 +437,7 @@ impl RtpTransport {
     }
 
     // TODO: used to detect if the transport is ready to send/receive, so naming isn't quite right
-    pub(crate) fn local_and_remote_addrs(
+    pub(crate) fn local_and_remote_addrs_if_transport_is_ready(
         &self,
     ) -> Option<(
         Option<SocketAddr>,
@@ -449,6 +446,35 @@ impl RtpTransport {
         SocketAddr,
     )> {
         // Test that connectivity is setup (primarily ICE)
+        let (local_rtp_addr, local_rtcp_addr, remote_rtp_addr, remote_rtcp_addr) =
+            self.local_and_remote_addrs()?;
+
+        // Underlying transport must be connected as well
+        match &self.kind {
+            RtpTransportKind::Unencrypted | RtpTransportKind::SdesSrtp(..) => {}
+            RtpTransportKind::DtlsSrtp(dtls) => {
+                if !matches!(dtls.state(), dtls_srtp::DtlsState::Connected { .. }) {
+                    return None;
+                }
+            }
+        }
+
+        Some((
+            local_rtp_addr,
+            local_rtcp_addr,
+            remote_rtp_addr,
+            remote_rtcp_addr,
+        ))
+    }
+
+    fn local_and_remote_addrs(
+        &self,
+    ) -> Option<(
+        Option<SocketAddr>,
+        Option<SocketAddr>,
+        SocketAddr,
+        SocketAddr,
+    )> {
         let (local_rtp_addr, local_rtcp_addr, remote_rtp_addr, remote_rtcp_addr) =
             match &self.connectivity {
                 Connectivity::Static {
@@ -481,17 +507,6 @@ impl RtpTransport {
                     }
                 }
             };
-
-        // Underlying transport must be connected as well
-        match &self.kind {
-            RtpTransportKind::Unencrypted | RtpTransportKind::SdesSrtp(..) => {}
-            RtpTransportKind::DtlsSrtp(dtls) => {
-                if !matches!(dtls.state(), DtlsState::Connected { .. }) {
-                    return None;
-                }
-            }
-        }
-
         Some((
             local_rtp_addr,
             local_rtcp_addr,
