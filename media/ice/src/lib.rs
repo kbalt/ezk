@@ -412,7 +412,8 @@ impl IceAgent {
             .values()
             .filter(|c| c.component == component && c.kind == kind)
             .count() as u32
-            + local_preference_offset;
+            + local_preference_offset
+            + host_address_preference(addr.ip()) * 256;
 
         let kind_preference = (kind as u32) << 24;
         let local_preference = local_preference << 8;
@@ -1313,6 +1314,15 @@ impl IceAgent {
         if self.is_controlling {
             // Controlling, select a succeeded pair and send a use-candidate
 
+            // A nomination is already in flight for this component
+            let nomination_in_flight = self.pairs.iter().any(|p| {
+                p.component == component && p.nomination == CandidatePairNomination::Nominated
+            });
+            
+            if nomination_in_flight {
+                return;
+            }
+
             let best_pair = self
                 .pairs
                 .iter_mut()
@@ -1467,6 +1477,30 @@ impl IceAgent {
                 }
             })
             .collect()
+    }
+}
+
+
+fn host_address_preference(ip: IpAddr) -> u32 {
+    match ip {
+        IpAddr::V4(ip) => {
+            if ip.is_loopback() || ip.is_link_local() {
+                0
+            } else if ip.is_private() {
+                1
+            } else {
+                2
+            }
+        }
+        IpAddr::V6(ip) => {
+            if ip.is_loopback() || ip.is_unicast_link_local() {
+                0
+            } else if ip.is_unique_local() {
+                1
+            } else {
+                2
+            }
+        }
     }
 }
 
