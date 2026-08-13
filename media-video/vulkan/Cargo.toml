@@ -15,7 +15,7 @@ thiserror = "2"
 smallvec = "1"
 ezk-image = { workspace = true, features = ["multi-thread", "NV12", "RGBA", "BGRA", "ARGB", "ABGR"] }
 
-wgpu = { version = "29", default-features = false, features = ["vulkan"] }
+wgpu = { version = "30", default-features = false, features = ["vulkan"] }
 anyhow = "1"
 
 [dev-dependencies]

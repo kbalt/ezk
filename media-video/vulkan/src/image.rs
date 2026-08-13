@@ -740,6 +740,7 @@ impl Image {
                     usage,
                     view_formats: &[],
                 },
+                wgpu::TextureUses::UNINITIALIZED,
             ),
         )
     }
@@ -835,6 +836,9 @@ impl Image {
             usage.insert(wgpu::TextureUsages::RENDER_ATTACHMENT);
         }
 
+        let initial_state =
+            texture_uses_from_layout(self.inner.state.lock().unwrap()[0].current_layout);
+
         device.create_texture_from_hal::<wgpu::hal::vulkan::Api>(
             hal_texture,
             &wgpu::TextureDescriptor {
@@ -847,7 +851,20 @@ impl Image {
                 usage,
                 view_formats: &[],
             },
+            initial_state,
         )
+    }
+}
+
+fn texture_uses_from_layout(layout: vk::ImageLayout) -> wgpu::TextureUses {
+    match layout {
+        vk::ImageLayout::TRANSFER_SRC_OPTIMAL => wgpu::TextureUses::COPY_SRC,
+        vk::ImageLayout::TRANSFER_DST_OPTIMAL => wgpu::TextureUses::COPY_DST,
+        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL => wgpu::TextureUses::RESOURCE,
+        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL => wgpu::TextureUses::COLOR_TARGET,
+        vk::ImageLayout::PRESENT_SRC_KHR => wgpu::TextureUses::PRESENT,
+        vk::ImageLayout::GENERAL => wgpu::TextureUses::STORAGE_READ_ONLY,
+        _ => wgpu::TextureUses::UNINITIALIZED,
     }
 }
 
