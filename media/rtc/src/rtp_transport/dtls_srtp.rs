@@ -85,16 +85,15 @@ impl RtpDtlsSrtpTransport {
     }
 
     pub(crate) fn timeout(&self, now: Instant) -> Option<Duration> {
-        if let DtlsState::Failed = self.state {
+        if let DtlsState::Failed | DtlsState::Connected { .. } = self.state {
             return None;
         }
-
         self.timeout
             .map(|timeout| timeout.saturating_duration_since(now))
     }
 
     pub(crate) fn receive(&mut self, data: Vec<u8>) {
-        if let DtlsState::Failed = self.state {
+        if let DtlsState::Failed | DtlsState::Connected { .. } = self.state {
             return;
         }
 
@@ -105,7 +104,7 @@ impl RtpDtlsSrtpTransport {
     }
 
     pub(crate) fn poll(&mut self, now: Instant) {
-        if let DtlsState::Failed = self.state {
+        if let DtlsState::Failed | DtlsState::Connected { .. } = self.state {
             return;
         }
 
@@ -171,6 +170,7 @@ impl RtpDtlsSrtpTransport {
                                 "Failed to create SRTP policies from keying-material, {err:?}"
                             );
                             self.state = DtlsState::Failed;
+                            return;
                         }
                     }
                 }
