@@ -2,7 +2,6 @@ use dimpl::Dtls;
 use sha2::{Digest, Sha256};
 use srtp::{DtlsSrtpPolicies, SrtpSession};
 use std::{
-    cmp,
     collections::VecDeque,
     sync::Arc,
     time::{Duration, Instant},
