@@ -169,8 +169,8 @@ impl VkH264Encoder {
             pic_width_in_mbs_minus1: (width_mbaligned / 16) - 1,
             pic_height_in_map_units_minus1: (height_mbaligned / 16) - 1,
             frame_crop_left_offset: 0,
-            frame_crop_right_offset: 0,
-            frame_crop_top_offset: (width_mbaligned - width) / 2,
+            frame_crop_right_offset: (width_mbaligned - width) / 2,
+            frame_crop_top_offset: 0,
             frame_crop_bottom_offset: (height_mbaligned - height) / 2,
             reserved2: 0,
             pOffsetForRefFrame: null(),
@@ -321,7 +321,7 @@ impl VkH264Encoder {
         self.seq_params.pic_width_in_mbs_minus1 = (width_mbaligned / 16) - 1;
         self.seq_params.pic_height_in_map_units_minus1 = (height_mbaligned / 16) - 1;
 
-        self.seq_params.frame_crop_top_offset = (width_mbaligned - width) / 2;
+        self.seq_params.frame_crop_right_offset = (width_mbaligned - width) / 2;
         self.seq_params.frame_crop_bottom_offset = (height_mbaligned - height) / 2;
 
         let mut parameters = vk::VideoEncodeH264SessionParametersAddInfoKHR::default()
