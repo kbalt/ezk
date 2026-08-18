@@ -26,7 +26,7 @@ use vulkan::{
         RateControlInfos, VulkanEncodeFrameError, VulkanEncodeSlot, VulkanEncoder,
         VulkanEncoderConfig, VulkanEncoderImplConfig,
         capabilities::{VulkanEncoderCapabilities, VulkanEncoderCapabilitiesError},
-        codec::H264,
+        codec::{H264, H264ParameterSetIds},
         input::InputData,
     },
 };
@@ -269,14 +269,19 @@ impl VkH264Encoder {
         self.state.begin_new_gop();
     }
 
-    /// Update the encoders rate control config
-    pub fn update_rate_control(&mut self, rate_control: VulkanH264RateControlConfig) {
-        unsafe {
-            self.config.rate_control = rate_control;
+    /// Maximum configured input image extent
+    pub fn max_input_extent(&self) -> vk::Extent2D {
+        self.encoder.max_input_extent()
+    }
 
-            self.encoder
-                .update_rc(rate_control_from_config(&self.config));
-        }
+    /// Maximum configured output extent
+    pub fn max_encode_extent(&self) -> vk::Extent2D {
+        self.encoder.max_encode_extent()
+    }
+
+    /// Current target encode extent
+    pub fn current_encode_extent(&self) -> vk::Extent2D {
+        self.encoder.current_encode_extent()
     }
 
     /// Change the output resolution of the encoder
@@ -284,7 +289,7 @@ impl VkH264Encoder {
         &mut self,
         new_extent: vk::Extent2D,
     ) -> Result<(), VulkanEncodeFrameError> {
-        if new_extent == self.encoder.current_extent() {
+        if new_extent == self.encoder.current_encode_extent() {
             return Ok(());
         }
 
@@ -328,10 +333,26 @@ impl VkH264Encoder {
             .std_sp_ss(std::slice::from_ref(&self.seq_params))
             .std_pp_ss(std::slice::from_ref(&self.pic_params));
 
-        self.encoder
-            .update_current_extent(new_extent, &mut parameters)?;
+        self.encoder.update_current_encode_extent(
+            new_extent,
+            H264ParameterSetIds {
+                sps_id: self.seq_params.seq_parameter_set_id,
+                pps_id: self.pic_params.pic_parameter_set_id,
+            },
+            &mut parameters,
+        )?;
 
         Ok(())
+    }
+
+    /// Update the encoders rate control config
+    pub fn update_rate_control(&mut self, rate_control: VulkanH264RateControlConfig) {
+        unsafe {
+            self.config.rate_control = rate_control;
+
+            self.encoder
+                .update_rc(rate_control_from_config(&self.config));
+        }
     }
 
     pub fn poll_result(&mut self) -> Result<Option<(Instant, Vec<u8>)>, VulkanError> {
@@ -455,7 +476,7 @@ impl VkH264Encoder {
 
         let mut std_slice_headers = vec![];
 
-        let vk::Extent2D { width, height } = self.encoder.current_extent();
+        let vk::Extent2D { width, height } = self.encoder.current_encode_extent();
 
         let total_macroblocks = (width / 16) * (height / 16);
 

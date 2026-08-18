@@ -198,8 +198,37 @@ impl VkAV1Encoder {
 
     /// Request the next frame to be an IDR frame
     pub fn request_idr(&mut self) {
-        // TODO: this totally blows up b-frames are currently queued
         self.state.request_keyframe();
+    }
+
+    /// Maximum configured input image extent
+    pub fn max_input_extent(&self) -> vk::Extent2D {
+        self.encoder.max_input_extent()
+    }
+
+    /// Maximum configured output extent
+    pub fn max_encode_extent(&self) -> vk::Extent2D {
+        self.encoder.max_encode_extent()
+    }
+
+    /// Current target encode extent
+    pub fn current_encode_extent(&self) -> vk::Extent2D {
+        self.encoder.current_encode_extent()
+    }
+
+    /// Change the output resolution of the encoder
+    ///
+    /// # Panics
+    ///
+    /// If the given extent is larger than the configured `max_encode_resolution`
+    pub fn update_output_extent(&mut self, new_extent: vk::Extent2D) {
+        if new_extent == self.encoder.current_encode_extent() {
+            return;
+        }
+
+        self.state.request_keyframe();
+
+        self.encoder.set_current_encode_extent(new_extent);
     }
 
     /// Update the encoders rate control config
@@ -370,6 +399,10 @@ impl VkAV1Encoder {
             pExtensionHeader: null(),
         };
 
+        // Override frame size if encode extent changed from maximum
+        let frame_size_override_flag =
+            u32::from(self.encoder.current_encode_extent() != self.encoder.max_encode_extent());
+
         let std_picture_info = vk::native::StdVideoEncodeAV1PictureInfo {
             flags: vk::native::StdVideoEncodeAV1PictureInfoFlags {
                 _bitfield_align_1: [],
@@ -381,7 +414,7 @@ impl VkAV1Encoder {
                     0, // allow_screen_content_tools,
                     0, // is_filter_switchable,
                     0, // force_integer_mv,
-                    0, // frame_size_override_flag,TODO
+                    frame_size_override_flag,
                     0, // buffer_removal_time_present_flag,
                     1, // allow_intrabc,
                     0, // frame_refs_short_signaling, TODO??
@@ -413,8 +446,8 @@ impl VkAV1Encoder {
             primary_ref_frame,
             refresh_frame_flags: if frame_info.is_key { 0xFF } else { 1 << setup_dpb_slot.index },
             coded_denom: 0,
-            render_width_minus_1: (self.encoder.current_extent().width - 1) as u16,
-            render_height_minus_1: (self.encoder.current_extent().height - 1) as u16,
+            render_width_minus_1: (self.encoder.current_encode_extent().width - 1) as u16,
+            render_height_minus_1: (self.encoder.current_encode_extent().height - 1) as u16,
             interpolation_filter:  vk::native::StdVideoAV1InterpolationFilter_STD_VIDEO_AV1_INTERPOLATION_FILTER_EIGHTTAP,
             TxMode: vk::native::StdVideoAV1TxMode_STD_VIDEO_AV1_TX_MODE_LARGEST,
             delta_q_res: 0,

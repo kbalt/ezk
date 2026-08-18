@@ -91,6 +91,8 @@ pub struct VulkanEncoder<C: VulkanEncCodec> {
     video_session_parameters: VideoSessionParameters,
     video_session_is_uninitialized: bool,
 
+    current_parameter_set_ids: C::ParameterSetIds,
+
     video_feedback_query_pool: VideoFeedbackQueryPool,
 
     graphics_queue_family_index: u32,
@@ -122,7 +124,8 @@ pub struct VulkanEncodeSlot {
     /// Index used for the video feedback query pool
     index: u32,
 
-    emit_parameters: bool,
+    /// Encoded parameter sets to emit ahead of this slot's bitstream
+    parameters: Option<Vec<u8>>,
     submitted_at: Instant,
     input: input::Input,
 
@@ -155,37 +158,55 @@ struct DpbSlot<C: VulkanEncCodec> {
 }
 
 impl<C: VulkanEncCodec> VulkanEncoder<C> {
+    /// Maximum configured input image extent
+    pub fn max_input_extent(&self) -> vk::Extent2D {
+        self.max_input_extent
+    }
+
     /// Maximum configured extent, cannot be changed without re-creating the encoder
-    pub fn max_extent(&self) -> vk::Extent2D {
+    pub fn max_encode_extent(&self) -> vk::Extent2D {
         self.max_encode_extent
     }
 
     /// The extent the encoder is currently configured for, input must match this exactly, to change the current extent
     /// see [`Self::update_current_extent`]
-    pub fn current_extent(&self) -> vk::Extent2D {
+    pub fn current_encode_extent(&self) -> vk::Extent2D {
         self.current_encode_extent
     }
 
-    /// Set the new extent of the encoder and updates vulkan's VideoSessionParameters. The given `parameters` must
-    /// match the given `extent`.
+    /// Set the new extent of the encoder without touching vulkan's VideoSessionParameters.
+    ///
+    /// Only valid for codecs that carry the frame size in the frame header (e.g. AV1).
+    /// Otherwise use [`Self::update_current_encode_extent`].
     ///
     /// # Panics
     ///
     /// If the given extent is larger than [`Self::max_extent`]
-    pub fn update_current_extent<'a>(
+    pub fn set_current_encode_extent(&mut self, extent: vk::Extent2D) {
+        assert!(extent.width <= self.max_encode_extent.width);
+        assert!(extent.height <= self.max_encode_extent.height);
+
+        self.current_encode_extent = extent;
+    }
+
+    /// Set the new extent of the encoder and updates vulkan's VideoSessionParameters. The given `parameters` must
+    /// match the given `extent` and be addressed by the given `parameter_set_ids`.
+    ///
+    /// # Panics
+    ///
+    /// If the given extent is larger than [`Self::max_extent`]
+    pub fn update_current_encode_extent<'a>(
         &mut self,
         extent: vk::Extent2D,
+        parameter_set_ids: C::ParameterSetIds,
         parameters: &'a mut C::ParametersAddInfo<'a>,
     ) -> Result<(), VulkanError>
     where
         C: VulkanEncCodecUpdate,
     {
-        assert!(extent.width <= self.max_encode_extent.width);
-        assert!(extent.height <= self.max_encode_extent.height);
-
-        self.current_encode_extent = extent;
-
+        self.set_current_encode_extent(extent);
         self.video_session_parameters.update(parameters)?;
+        self.current_parameter_set_ids = parameter_set_ids;
 
         Ok(())
     }
@@ -211,10 +232,7 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
         &mut self,
         encode_slot: &mut VulkanEncodeSlot,
     ) -> Result<(), VulkanError> {
-        if encode_slot.emit_parameters {
-            let parameters =
-                C::get_encoded_video_session_parameters(&self.video_session_parameters)?;
-
+        if let Some(parameters) = encode_slot.parameters.take() {
             self.output
                 .push_back((encode_slot.submitted_at, parameters));
         }
@@ -392,7 +410,14 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
         picture_info: C::PictureInfo<'_>,
         emit_parameters: bool,
     ) -> Result<(), VulkanError> {
-        encode_slot.emit_parameters = emit_parameters;
+        encode_slot.parameters = if emit_parameters {
+            Some(C::get_encoded_video_session_parameters(
+                &self.video_session_parameters,
+                self.current_parameter_set_ids,
+            )?)
+        } else {
+            None
+        };
 
         log::trace!(
             "Submit encode slot: references: {reference_indices:?}, setup_reference: {setup_reference}, emit_parameters: {emit_parameters}"

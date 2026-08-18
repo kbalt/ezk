@@ -166,7 +166,7 @@ impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
 
             encode_slots.push(VulkanEncodeSlot {
                 index,
-                emit_parameters: false,
+                parameters: None,
                 // Fake placeholder value
                 submitted_at: Instant::now(),
                 input: inputs.pop().unwrap(),
@@ -254,6 +254,7 @@ impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
             video_session,
             video_session_parameters,
             video_session_is_uninitialized: true,
+            current_parameter_set_ids: Default::default(),
             video_feedback_query_pool,
             graphics_queue_family_index,
             graphics_queue,
