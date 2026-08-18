@@ -1,4 +1,5 @@
 use crate::{CryptoPolicy, SrtpError, SrtpPolicy, Ssrc, ffi};
+use dimpl::{KeyingMaterial, SrtpProfile};
 use openssl::ssl::SslRef;
 use std::{borrow::Cow, mem::MaybeUninit};
 
@@ -6,7 +7,7 @@ use std::{borrow::Cow, mem::MaybeUninit};
 #[derive(Debug, thiserror::Error)]
 pub enum SrtpFromSslError {
     #[error("ssl is missing the srtp profile")]
-    MissingSrtpProfile,
+    MissingOrInvalidSrtpProfile,
     #[error("Failed to get the crypto policy from dtls-srtp protection profile")]
     CryptoPolicyFromProfile(#[source] SrtpError),
     #[error("Failed to export keying material")]
@@ -29,10 +30,44 @@ impl DtlsSrtpPolicies {
     pub fn from_ssl(ssl: &SslRef) -> Result<DtlsSrtpPolicies, SrtpFromSslError> {
         let profile = ssl
             .selected_srtp_profile()
-            .ok_or(SrtpFromSslError::MissingSrtpProfile)?;
+            .ok_or(SrtpFromSslError::MissingOrInvalidSrtpProfile)?;
 
         let profile_id = profile.id().as_raw() as ffi::srtp_profile_t;
 
+        let mut material = [0u8; ffi::SRTP_MAX_KEY_LEN as usize * 2];
+
+        ssl.export_keying_material(&mut material, "EXTRACTOR-dtls_srtp", None)
+            .map_err(SrtpFromSslError::ExportKeyingMaterial)?;
+
+        Self::from_keying_material(profile_id, material.to_vec(), ssl.is_server())
+    }
+
+    pub fn from_dimpl(
+        keying_material: KeyingMaterial,
+        srtp_profile: SrtpProfile,
+        is_server: bool,
+    ) -> Result<DtlsSrtpPolicies, SrtpFromSslError> {
+        let profile_id = match srtp_profile {
+            SrtpProfile::AES128_CM_SHA1_80 => {
+                crate::ffi::srtp_profile_t_srtp_profile_aes128_cm_sha1_80
+            }
+            SrtpProfile::AEAD_AES_128_GCM => {
+                crate::ffi::srtp_profile_t_srtp_profile_aead_aes_128_gcm
+            }
+            SrtpProfile::AEAD_AES_256_GCM => {
+                crate::ffi::srtp_profile_t_srtp_profile_aead_aes_256_gcm
+            }
+            _ => return Err(SrtpFromSslError::MissingOrInvalidSrtpProfile),
+        };
+
+        Self::from_keying_material(profile_id, keying_material.to_vec(), is_server)
+    }
+
+    fn from_keying_material(
+        profile_id: u32,
+        mut material: Vec<u8>,
+        is_server: bool,
+    ) -> Result<DtlsSrtpPolicies, SrtpFromSslError> {
         let (rtp_policy, rtcp_policy) = unsafe {
             let mut rtp_policy = MaybeUninit::uninit();
             let mut rtcp_policy = MaybeUninit::uninit();
@@ -59,11 +94,6 @@ impl DtlsSrtpPolicies {
             )
         };
 
-        let mut material = [0u8; ffi::SRTP_MAX_KEY_LEN as usize * 2];
-
-        ssl.export_keying_material(&mut material, "EXTRACTOR-dtls_srtp", None)
-            .map_err(SrtpFromSslError::ExportKeyingMaterial)?;
-
         // Per RFC 5764 4.2, the exported keying material is laid out as:
         //   [client_write_SRTP_master_key | server_write_SRTP_master_key | client_write_SRTP_master_salt | server_write_SRTP_master_salt]
         //
@@ -87,7 +117,7 @@ impl DtlsSrtpPolicies {
             )
         };
 
-        let (inbound_key, outbound_key) = if ssl.is_server() {
+        let (inbound_key, outbound_key) = if is_server {
             (client_key, server_key)
         } else {
             (server_key, client_key)

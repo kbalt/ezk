@@ -1,6 +1,6 @@
 use super::{ntp_timestamp::NtpTimestamp, report::ReportsQueue};
 use crate::opt_min;
-use crate::rtp::{RtpAudioLevelExt, RtpExtensions, RtpPacket, Ssrc};
+use crate::rtp::{RtpAudioLevelExt, RtpExtensions, RtpPacket, RtpTimestamp, SequenceNumber, Ssrc};
 use bytes::Bytes;
 use queue::OutboundQueue;
 use rtcp_types::{ReportBlock, SenderReport};
@@ -10,6 +10,21 @@ mod queue;
 mod stats;
 
 pub use stats::{RtpOutboundRemoteStats, RtpOutboundStats};
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub enum RtpOutboundQueueMode {
+    /// The stream assigns sequence numbers and derives RTP timestamps from
+    /// each packet's `media_time`.
+    ///
+    /// Use [`RtpOutboundStream::send_rtp`].
+    #[default]
+    Generate,
+    /// The caller supplies the sequence number and RTP timestamp for every
+    /// packet (e.g. an SFU forwarding from an inbound stream).
+    ///
+    /// Use [`RtpOutboundStream::forward_rtp`].
+    Forward,
+}
 
 /// RTP send stream
 pub struct RtpOutboundStream {
@@ -23,13 +38,14 @@ pub struct RtpOutboundStream {
 
 impl RtpOutboundStream {
     pub(crate) fn new(
+        mode: RtpOutboundQueueMode,
         ssrc: Ssrc,
         clock_rate: u32,
         report_interval: Duration,
         rtx: Option<(u8, Ssrc)>,
     ) -> Self {
         RtpOutboundStream {
-            queue: OutboundQueue::new(ssrc, clock_rate, rtx),
+            queue: OutboundQueue::new(mode, ssrc, clock_rate, rtx),
             stats: RtpOutboundStats {
                 bytes_sent: 0,
                 packets_sent: 0,
@@ -101,6 +117,7 @@ impl RtpOutboundStream {
 
         self.stats.remote = Some(RtpOutboundRemoteStats {
             timestamp: now,
+            packets_lost: report_block.cumulative_lost(),
             loss: report_block.fraction_lost() as f32 / 255.0,
             jitter: Duration::from_secs_f32(
                 report_block.interarrival_jitter() as f32 / self.queue.clock_rate,
@@ -114,8 +131,24 @@ impl RtpOutboundStream {
     }
 
     /// Queue the RTP packet to be sent.
+    ///
+    /// # Panics
+    ///
+    /// Only valid on streams created with [`RtpOutboundQueueMode::Generate`].
     pub fn send_rtp(&mut self, packet: SendRtpPacket) {
         self.queue.push(packet);
+    }
+
+    /// Queue a pre-built RTP packet to be forwarded as-is.
+    ///
+    /// The packet's sequence number and RTP timestamp are preserved; only
+    /// the SSRC is rewritten to match this stream.
+    ///
+    /// # Panics
+    ///
+    /// Only valid on streams created with [`RtpOutboundQueueMode::Forward`].
+    pub fn forward_rtp(&mut self, packet: ForwardRtpPacket) {
+        self.queue.push_forward(packet);
     }
 
     /// Check for a RTP packet that is ready to be sent
@@ -198,5 +231,36 @@ impl SendRtpPacket {
     /// Set the marker bit of the RTP header
     pub fn marker(self, marker: bool) -> Self {
         Self { marker, ..self }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ForwardRtpPacket {
+    pub sequence_number: SequenceNumber,
+    pub timestamp: RtpTimestamp,
+    pub pt: u8,
+    pub marker: bool,
+    pub extensions: RtpExtensions,
+    pub payload: Bytes,
+}
+
+impl ForwardRtpPacket {
+    pub fn from_rtp_packet(packet: &RtpPacket) -> ForwardRtpPacket {
+        let extensions = RtpExtensions {
+            // Do not keep mid as it will almost always be wrong
+            mid: None,
+            audio_level: packet.extensions.audio_level,
+            // Do not keep twcc sequence number, it is set per outbound transport and never correct to forward
+            twcc_sequence_number: None,
+        };
+
+        ForwardRtpPacket {
+            sequence_number: packet.sequence_number,
+            timestamp: packet.timestamp,
+            pt: packet.pt,
+            marker: packet.marker,
+            extensions,
+            payload: packet.payload.clone(),
+        }
     }
 }

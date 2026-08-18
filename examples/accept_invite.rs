@@ -1,7 +1,6 @@
 use rtc::{
     rtp_session::SendRtpPacket,
     sdp::{Codec, Codecs, SdpSession, SdpSessionConfig},
-    OpenSslContext,
 };
 use sdp_types::{Direction, MediaType};
 use sip_core::{Endpoint, IncomingRequest, Layer, MayTake, Result};
@@ -41,7 +40,6 @@ impl Layer for InviteAcceptLayer {
 
         // Setup SDP session
         let mut sdp_session = SdpSession::new(
-            OpenSslContext::try_new().unwrap(),
             "192.168.1.128".parse().unwrap(),
             SdpSessionConfig::default(),
         );
