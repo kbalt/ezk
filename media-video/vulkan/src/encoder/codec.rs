@@ -50,9 +50,12 @@ pub trait VulkanEncCodec: Copy {
         + fmt::Debug
         + Copy;
 
+    type ParameterSetIds: Default + Copy + fmt::Debug;
+
     #[allow(private_interfaces)]
     fn get_encoded_video_session_parameters(
         video_session_parameters: &VideoSessionParameters,
+        ids: Self::ParameterSetIds,
     ) -> Result<Vec<u8>, VulkanError>;
 }
 
@@ -61,6 +64,12 @@ pub trait VulkanEncCodecUpdate: VulkanEncCodec {
         + vk::TaggedStructure<'a>
         + fmt::Debug
         + Copy;
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct H264ParameterSetIds {
+    pub sps_id: u8,
+    pub pps_id: u8,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -87,13 +96,18 @@ impl VulkanEncCodec for H264 {
     type RateControlInfo<'a> = vk::VideoEncodeH264RateControlInfoKHR<'a>;
     type RateControlLayerInfo<'a> = vk::VideoEncodeH264RateControlLayerInfoKHR<'a>;
 
+    type ParameterSetIds = H264ParameterSetIds;
+
     #[allow(private_interfaces)]
     fn get_encoded_video_session_parameters(
         video_session_parameters: &VideoSessionParameters,
+        ids: Self::ParameterSetIds,
     ) -> Result<Vec<u8>, VulkanError> {
         let mut info = vk::VideoEncodeH264SessionParametersGetInfoKHR::default()
             .write_std_sps(true)
-            .write_std_pps(true);
+            .write_std_pps(true)
+            .std_sps_id(ids.sps_id.into())
+            .std_pps_id(ids.pps_id.into());
 
         unsafe { video_session_parameters.get_encoded_video_session_parameters(Some(&mut info)) }
     }
@@ -101,6 +115,13 @@ impl VulkanEncCodec for H264 {
 
 impl VulkanEncCodecUpdate for H264 {
     type ParametersAddInfo<'a> = vk::VideoEncodeH264SessionParametersAddInfoKHR<'a>;
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct H265ParameterSetIds {
+    pub vps_id: u8,
+    pub sps_id: u8,
+    pub pps_id: u8,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -127,14 +148,20 @@ impl VulkanEncCodec for H265 {
     type RateControlInfo<'a> = vk::VideoEncodeH265RateControlInfoKHR<'a>;
     type RateControlLayerInfo<'a> = vk::VideoEncodeH265RateControlLayerInfoKHR<'a>;
 
+    type ParameterSetIds = H265ParameterSetIds;
+
     #[allow(private_interfaces)]
     fn get_encoded_video_session_parameters(
         video_session_parameters: &VideoSessionParameters,
+        ids: Self::ParameterSetIds,
     ) -> Result<Vec<u8>, VulkanError> {
         let mut info = vk::VideoEncodeH265SessionParametersGetInfoKHR::default()
             .write_std_sps(true)
             .write_std_pps(true)
-            .write_std_vps(true);
+            .write_std_vps(true)
+            .std_vps_id(ids.vps_id.into())
+            .std_sps_id(ids.sps_id.into())
+            .std_pps_id(ids.pps_id.into());
 
         unsafe { video_session_parameters.get_encoded_video_session_parameters(Some(&mut info)) }
     }
@@ -168,9 +195,12 @@ impl VulkanEncCodec for AV1 {
     type RateControlInfo<'a> = vk::VideoEncodeAV1RateControlInfoKHR<'a>;
     type RateControlLayerInfo<'a> = vk::VideoEncodeAV1RateControlLayerInfoKHR<'a>;
 
+    type ParameterSetIds = ();
+
     #[allow(private_interfaces)]
     fn get_encoded_video_session_parameters(
         video_session_parameters: &VideoSessionParameters,
+        (): Self::ParameterSetIds,
     ) -> Result<Vec<u8>, VulkanError> {
         unsafe { video_session_parameters.get_encoded_video_session_parameters2() }
     }
