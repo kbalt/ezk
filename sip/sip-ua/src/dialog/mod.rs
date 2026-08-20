@@ -131,7 +131,7 @@ impl Dialog {
         request.headers.insert_named(&self.call_id);
         request.headers.insert_named(&cseq);
 
-        if method == Method::INVITE {
+        if matches!(method, Method::INVITE | Method::REFER) {
             request.headers.insert_named(&self.local_contact);
         }
 
@@ -190,5 +190,51 @@ impl Drop for Dialog {
             .dialogs
             .lock()
             .remove(&self.key());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sip_types::uri::{NameAddr, SipUri};
+
+    fn test_dialog() -> Dialog {
+        let local_uri: SipUri = "sip:alice@example.com".parse().unwrap();
+        let local_contact_uri: SipUri = "sip:alice@192.0.2.1:5060".parse().unwrap();
+        let peer_uri: SipUri = "sip:bob@example.net".parse().unwrap();
+        let peer_contact_uri: SipUri = "sip:bob@192.0.2.2:5060".parse().unwrap();
+        let mut endpoint_builder = Endpoint::builder();
+        endpoint_builder.add_layer(DialogLayer::default());
+
+        Dialog {
+            endpoint: endpoint_builder.build(),
+            local_cseq: 1.into(),
+            local_fromto: FromTo::new(NameAddr::uri(local_uri), Some("local-tag".into())),
+            peer_fromto: FromTo::new(NameAddr::uri(peer_uri), Some("peer-tag".into())),
+            local_contact: Contact::new(NameAddr::uri(local_contact_uri)),
+            peer_contact: Contact::new(NameAddr::uri(peer_contact_uri)),
+            call_id: CallID::new("call-id"),
+            route_set: Vec::new(),
+            secure: false,
+            target_tp_info: Mutex::new(TargetTransportInfo::default()),
+        }
+    }
+
+    #[test]
+    fn refer_request_contains_local_contact() {
+        let dialog = test_dialog();
+
+        let request = dialog.create_request(Method::REFER, None);
+
+        assert!(request.headers.contains(&Name::CONTACT));
+    }
+
+    #[test]
+    fn bye_request_does_not_contain_local_contact() {
+        let dialog = test_dialog();
+
+        let request = dialog.create_request(Method::BYE, None);
+
+        assert!(!request.headers.contains(&Name::CONTACT));
     }
 }
