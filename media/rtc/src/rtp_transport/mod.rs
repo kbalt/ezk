@@ -305,28 +305,26 @@ impl RtpTransport {
     pub fn receive(&mut self, now: Instant, mut pkt: ReceivedPkt) -> Option<RtpOrRtcp> {
         match PacketKind::identify(&pkt.data) {
             PacketKind::Rtp => {
-                match &mut self.kind {
-                    RtpTransportKind::Unencrypted => {}
+                let result = match &mut self.kind {
+                    RtpTransportKind::Unencrypted => Ok(()),
                     RtpTransportKind::SdesSrtp(rtp_sdes_srtp_transport) => {
-                        if let Err(e) = rtp_sdes_srtp_transport.inbound.unprotect_rtp(&mut pkt.data)
-                        {
-                            log::warn!("Failed to unprotect incoming RTP packet, {e}");
-                            return None;
-                        }
+                        rtp_sdes_srtp_transport.inbound.unprotect_rtp(&mut pkt.data)
                     }
                     RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) => {
                         if let DtlsState::Connected { inbound, .. } =
                             rtp_dtls_srtp_transport.state_mut()
                         {
-                            if let Err(e) = inbound.unprotect_rtp(&mut pkt.data) {
-                                log::warn!("Failed to unprotect incoming RTP packet, {e}");
-                                return None;
-                            }
+                            inbound.unprotect_rtp(&mut pkt.data)
                         } else {
                             log::debug!("Got RTP packet before DTLS connection is complete");
                             return None;
                         }
                     }
+                };
+
+                if let Err(e) = result {
+                    log::warn!("Failed to unprotect incoming RTP packet, {e}");
+                    return None;
                 }
 
                 let rtp_packet = match RtpPacket::parse(self.extension_ids, pkt.data) {
@@ -340,30 +338,26 @@ impl RtpTransport {
                 Some(RtpOrRtcp::Rtp(rtp_packet))
             }
             PacketKind::Rtcp => {
-                match &mut self.kind {
-                    RtpTransportKind::Unencrypted => {}
-                    RtpTransportKind::SdesSrtp(rtp_sdes_srtp_transport) => {
-                        if let Err(e) = rtp_sdes_srtp_transport
-                            .inbound
-                            .unprotect_rtcp(&mut pkt.data)
-                        {
-                            log::warn!("Failed to unprotect incoming RTCP packet, {e}");
-                            return None;
-                        }
-                    }
+                let result = match &mut self.kind {
+                    RtpTransportKind::Unencrypted => Ok(()),
+                    RtpTransportKind::SdesSrtp(rtp_sdes_srtp_transport) => rtp_sdes_srtp_transport
+                        .inbound
+                        .unprotect_rtcp(&mut pkt.data),
                     RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) => {
                         if let DtlsState::Connected { inbound, .. } =
                             rtp_dtls_srtp_transport.state_mut()
                         {
-                            if let Err(e) = inbound.unprotect_rtcp(&mut pkt.data) {
-                                log::warn!("Failed to unprotect incoming RTCP packet, {e}");
-                                return None;
-                            }
+                            inbound.unprotect_rtcp(&mut pkt.data)
                         } else {
                             log::debug!("Got RTCP packet before DTLS connection is complete");
                             return None;
                         }
                     }
+                };
+
+                if let Err(e) = result {
+                    log::warn!("Failed to unprotect incoming RTCP packet, {e}");
+                    return None;
                 }
 
                 Some(RtpOrRtcp::Rtcp(pkt.data))
@@ -592,7 +586,7 @@ impl RtpTransportWriter<'_> {
         match &mut self.transport.kind {
             RtpTransportKind::Unencrypted => {}
             RtpTransportKind::SdesSrtp(rtp_sdes_srtp_transport) => {
-                rtp_sdes_srtp_transport.outbound.protect_rtp(&mut data)?;
+                rtp_sdes_srtp_transport.outbound.protect_rtp(&mut data)?
             }
             RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) => {
                 let DtlsState::Connected { outbound, .. } = rtp_dtls_srtp_transport.state_mut()
@@ -600,7 +594,7 @@ impl RtpTransportWriter<'_> {
                     unreachable!("RtpTransportWriter is only created when DtlsState is Connected");
                 };
 
-                outbound.protect_rtp(&mut data)?;
+                outbound.protect_rtp(&mut data)?
             }
         }
 
@@ -620,25 +614,27 @@ impl RtpTransportWriter<'_> {
     pub fn send_rctp(&mut self, mut rtcp_packet: Vec<u8>) -> Result<(), SrtpError> {
         match &mut self.transport.kind {
             RtpTransportKind::Unencrypted => {}
-            RtpTransportKind::SdesSrtp(rtp_sdes_srtp_transport) => {
-                rtp_sdes_srtp_transport
-                    .outbound
-                    .protect_rtcp(&mut rtcp_packet)?;
-            }
+            RtpTransportKind::SdesSrtp(rtp_sdes_srtp_transport) => rtp_sdes_srtp_transport
+                .outbound
+                .protect_rtcp(&mut rtcp_packet)?,
             RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) => {
                 let DtlsState::Connected { outbound, .. } = rtp_dtls_srtp_transport.state_mut()
                 else {
                     unreachable!("RtpTransportWriter is only created when DtlsState is Connected");
                 };
 
-                outbound.protect_rtcp(&mut rtcp_packet)?;
+                outbound.protect_rtcp(&mut rtcp_packet)?
             }
         }
 
         self.transport
             .events
             .push_back(RtpTransportEvent::SendData {
-                component: Component::Rtp,
+                component: if self.transport.rtcp_mux {
+                    Component::Rtp
+                } else {
+                    Component::Rtcp
+                },
                 data: rtcp_packet,
                 source: self.local_rtcp_addr,
                 target: self.remote_rtcp_addr,
