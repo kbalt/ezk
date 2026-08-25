@@ -1,115 +1,48 @@
-use crate::ffi;
-use core::fmt;
-use std::error::Error;
+/// Error returned by the protect, unprotect and key setup operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum SrtpError {
+    /// The DTLS-SRTP protection profile is not implemented by this crate
+    #[error("unsupported SRTP protection profile")]
+    UnsupportedProfile,
 
-/// Catch-all error type returned by most functions
-#[derive(Clone, Copy)]
-pub struct SrtpError {
-    expr: Option<&'static str>,
-    status: ffi::srtp_err_status_t,
-}
+    /// Key or salt length does not match the profile
+    #[error("invalid key material length, expected {expected} bytes, got {got}")]
+    BadKeyLength {
+        /// Number of bytes the profile requires
+        expected: usize,
+        /// Number of bytes that were given
+        got: usize,
+    },
 
-impl Error for SrtpError {}
+    /// The packet is shorter than the smallest possible (S)RTP/(S)RTCP packet
+    #[error("packet is too short")]
+    PacketTooShort,
 
-impl SrtpError {
-    pub(crate) fn new(expr: &'static str, status: ffi::srtp_err_status_t) -> Self {
-        SrtpError {
-            expr: Some(expr),
-            status,
-        }
-    }
-}
+    /// The packet headers are self-inconsistent, e.g. the CSRC count or header
+    /// extension length point past the end of the packet
+    #[error("packet is malformed")]
+    MalformedPacket,
 
-impl PartialEq for SrtpError {
-    fn eq(&self, other: &Self) -> bool {
-        self.status == other.status
-    }
-}
+    /// The authentication tag does not match, the packet has been modified or was
+    /// protected with a different key
+    #[error("authentication tag mismatch")]
+    AuthFailed,
 
-macro_rules! ff {
-    ($expr:expr) => {
-        match $expr {
-            ffi::srtp_err_status_t_srtp_err_status_ok => Ok(()),
-            status => Err(SrtpError::new(stringify!($expr), status)),
-        }
-    };
-}
+    /// The packet index has already been seen
+    #[error("packet has already been processed")]
+    ReplayFail,
 
-macro_rules! ff_log_error {
-    ($expr:expr) => {
-        match $expr {
-            ffi::srtp_err_status_t_srtp_err_status_ok => {}
-            status => log::warn!("{}", SrtpError::new(stringify!($expr), status)),
-        }
-    };
-}
+    /// The packet index is too far below the replay window to be checked
+    #[error("packet is too old to be checked against the replay window")]
+    ReplayOld,
 
-macro_rules! error_codes {
-    ($($rust:ident, $c:ident, $c_doc:literal;)*) => {
-        impl SrtpError {
-            $(
-                pub const $rust: SrtpError = SrtpError { expr: None, status: ffi::$c };
-            )*
-        }
+    /// The 48 bit SRTP index or 31 bit SRTCP index is exhausted, the master key must
+    /// be replaced before any further packets can be protected
+    #[error("packet index space is exhausted, the master key must be replaced")]
+    IndexExhausted,
 
-        impl fmt::Debug for SrtpError {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-
-                let dbg: &dyn fmt::Debug = match self.status {
-                    $(ffi::$c => &concat!(stringify!($rust), " (",  $c_doc, ")"),)*
-                    _ => &self.status,
-                };
-
-                f.debug_struct("SrtpError")
-                    .field("expr", &self.expr)
-                    .field("status", dbg)
-                    .finish()
-            }
-        }
-
-        impl fmt::Display for SrtpError {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                if let Some(expr) = self.expr {
-                    write!(f, "`{expr}` returned status ")?;
-                }
-
-                match self.status {
-                    $(ffi::$c => f.write_str(concat!(stringify!($rust), " - ",  $c_doc)),)*
-                    status => {
-                        write!(f, "UNKNOWN: {status}")
-                    }
-                }
-            }
-        }
-    }
-}
-
-error_codes! {
-    FAIL, srtp_err_status_t_srtp_err_status_fail, "unspecified failure";
-    BAD_PARAM, srtp_err_status_t_srtp_err_status_bad_param, "unsupported parameter";
-    ALLOC_FAIL, srtp_err_status_t_srtp_err_status_alloc_fail, "couldn't allocate memory";
-    DEALLOC_FAIL, srtp_err_status_t_srtp_err_status_dealloc_fail, "couldn't deallocate properly";
-    INIT_FAIL, srtp_err_status_t_srtp_err_status_init_fail, "couldn't initialize";
-    TERMINUS, srtp_err_status_t_srtp_err_status_terminus, "can't process as much data as requested";
-    AUTH_FAIL, srtp_err_status_t_srtp_err_status_auth_fail, "authentication failure";
-    CIPHER_FAIL, srtp_err_status_t_srtp_err_status_cipher_fail, "cipher failure";
-    REPLAY_FAIL, srtp_err_status_t_srtp_err_status_replay_fail, "replay check failed (bad index)";
-    REPLAY_OLD, srtp_err_status_t_srtp_err_status_replay_old, "replay check failed (index too old)";
-    ALGO_FAIL, srtp_err_status_t_srtp_err_status_algo_fail, "algorithm failed test routine";
-    NO_SUCH_OP, srtp_err_status_t_srtp_err_status_no_such_op, "unsupported operation";
-    NO_CTX, srtp_err_status_t_srtp_err_status_no_ctx, "no appropriate context found";
-    CANT_CHECK, srtp_err_status_t_srtp_err_status_cant_check, "unable to perform desired validation";
-    KEY_EXPIRED, srtp_err_status_t_srtp_err_status_key_expired, "can't use key any more";
-    SOCKET_ERR, srtp_err_status_t_srtp_err_status_socket_err, "error in use of socket";
-    SIGNAL_ERR, srtp_err_status_t_srtp_err_status_signal_err, "error in use POSIX signals";
-    NONCE_BAD, srtp_err_status_t_srtp_err_status_nonce_bad, "nonce check failed";
-    READ_FAIL, srtp_err_status_t_srtp_err_status_read_fail, "couldn't read data";
-    WRITE_FAIL, srtp_err_status_t_srtp_err_status_write_fail, "couldn't write data";
-    PARSE_ERR, srtp_err_status_t_srtp_err_status_parse_err, "error parsing data";
-    ENCODE_ERR, srtp_err_status_t_srtp_err_status_encode_err, "error encoding data";
-    SEMAPHORE_ERR, srtp_err_status_t_srtp_err_status_semaphore_err, "error while using semaphores";
-    PFKEY_ERR, srtp_err_status_t_srtp_err_status_pfkey_err, "error while using pfkey";
-    BAD_MKI, srtp_err_status_t_srtp_err_status_bad_mki, "error MKI present in packet is invalid";
-    PKT_IDX_OLD, srtp_err_status_t_srtp_err_status_pkt_idx_old, "packet index is too old to consider";
-    PKT_IDX_ADV, srtp_err_status_t_srtp_err_status_pkt_idx_adv,"packet index advanced, reset needed";
+    /// The underlying cipher rejected the input
+    #[error("cipher failure")]
+    CipherFailed,
 }

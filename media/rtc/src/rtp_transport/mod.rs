@@ -21,6 +21,7 @@ use ice::{Component, IceAgent, IceConnectionState, IceGatheringState, ReceivedPk
 use srtp::SrtpError;
 use std::{
     collections::VecDeque,
+    mem,
     net::{IpAddr, SocketAddr},
     time::{Duration, Instant},
 };
@@ -43,6 +44,9 @@ pub struct RtpTransport {
     kind: RtpTransportKind,
     connection_state: TransportConnectionState,
     events: VecDeque<RtpTransportEvent>,
+    /// Reused for the output of protect/unprotect, which write into a separate buffer.
+    /// Buffers are rotated rather than copied, so the hot path stays allocation free.
+    scratch: Vec<u8>,
 }
 
 /// How the RTP transport finds it path to its peer
@@ -99,6 +103,7 @@ impl RtpTransport {
             kind,
             connection_state: TransportConnectionState::New,
             events: VecDeque::new(),
+            scratch: Vec::new(),
         }
     }
 
@@ -305,29 +310,37 @@ impl RtpTransport {
     pub fn receive(&mut self, now: Instant, mut pkt: ReceivedPkt) -> Option<RtpOrRtcp> {
         match PacketKind::identify(&pkt.data) {
             PacketKind::Rtp => {
-                match &mut self.kind {
-                    RtpTransportKind::Unencrypted => {}
-                    RtpTransportKind::SdesSrtp(rtp_sdes_srtp_transport) => {
-                        if let Err(e) = rtp_sdes_srtp_transport.inbound.unprotect_rtp(&mut pkt.data)
-                        {
-                            log::warn!("Failed to unprotect incoming RTP packet, {e}");
-                            return None;
-                        }
-                    }
+                let mut plain = mem::take(&mut self.scratch);
+
+                let result = match &mut self.kind {
+                    RtpTransportKind::Unencrypted => Ok(()),
+                    RtpTransportKind::SdesSrtp(rtp_sdes_srtp_transport) => rtp_sdes_srtp_transport
+                        .inbound
+                        .unprotect_rtp(&pkt.data, &mut plain),
                     RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) => {
                         if let DtlsState::Connected { inbound, .. } =
                             rtp_dtls_srtp_transport.state_mut()
                         {
-                            if let Err(e) = inbound.unprotect_rtp(&mut pkt.data) {
-                                log::warn!("Failed to unprotect incoming RTP packet, {e}");
-                                return None;
-                            }
+                            inbound.unprotect_rtp(&pkt.data, &mut plain)
                         } else {
                             log::debug!("Got RTP packet before DTLS connection is complete");
+                            self.scratch = plain;
                             return None;
                         }
                     }
+                };
+
+                if let Err(e) = result {
+                    log::warn!("Failed to unprotect incoming RTP packet, {e}");
+                    self.scratch = plain;
+                    return None;
                 }
+
+                if !matches!(self.kind, RtpTransportKind::Unencrypted) {
+                    // Hand the plaintext on and keep the now unused buffer for next time
+                    mem::swap(&mut pkt.data, &mut plain);
+                }
+                self.scratch = plain;
 
                 let rtp_packet = match RtpPacket::parse(self.extension_ids, pkt.data) {
                     Ok(rtp_packet) => rtp_packet,
@@ -340,31 +353,36 @@ impl RtpTransport {
                 Some(RtpOrRtcp::Rtp(rtp_packet))
             }
             PacketKind::Rtcp => {
-                match &mut self.kind {
-                    RtpTransportKind::Unencrypted => {}
-                    RtpTransportKind::SdesSrtp(rtp_sdes_srtp_transport) => {
-                        if let Err(e) = rtp_sdes_srtp_transport
-                            .inbound
-                            .unprotect_rtcp(&mut pkt.data)
-                        {
-                            log::warn!("Failed to unprotect incoming RTCP packet, {e}");
-                            return None;
-                        }
-                    }
+                let mut plain = mem::take(&mut self.scratch);
+
+                let result = match &mut self.kind {
+                    RtpTransportKind::Unencrypted => Ok(()),
+                    RtpTransportKind::SdesSrtp(rtp_sdes_srtp_transport) => rtp_sdes_srtp_transport
+                        .inbound
+                        .unprotect_rtcp(&pkt.data, &mut plain),
                     RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) => {
                         if let DtlsState::Connected { inbound, .. } =
                             rtp_dtls_srtp_transport.state_mut()
                         {
-                            if let Err(e) = inbound.unprotect_rtcp(&mut pkt.data) {
-                                log::warn!("Failed to unprotect incoming RTCP packet, {e}");
-                                return None;
-                            }
+                            inbound.unprotect_rtcp(&pkt.data, &mut plain)
                         } else {
                             log::debug!("Got RTCP packet before DTLS connection is complete");
+                            self.scratch = plain;
                             return None;
                         }
                     }
+                };
+
+                if let Err(e) = result {
+                    log::warn!("Failed to unprotect incoming RTCP packet, {e}");
+                    self.scratch = plain;
+                    return None;
                 }
+
+                if !matches!(self.kind, RtpTransportKind::Unencrypted) {
+                    mem::swap(&mut pkt.data, &mut plain);
+                }
+                self.scratch = plain;
 
                 Some(RtpOrRtcp::Rtcp(pkt.data))
             }
@@ -588,21 +606,33 @@ impl RtpTransportWriter<'_> {
     /// Send a RTP packet using the transport
     pub fn send_rtp(&mut self, rtp_packet: RtpPacket) -> Result<(), SrtpError> {
         let mut data = rtp_packet.to_vec(self.transport.extension_ids);
+        let mut protected = mem::take(&mut self.transport.scratch);
 
-        match &mut self.transport.kind {
-            RtpTransportKind::Unencrypted => {}
-            RtpTransportKind::SdesSrtp(rtp_sdes_srtp_transport) => {
-                rtp_sdes_srtp_transport.outbound.protect_rtp(&mut data)?;
-            }
+        let result = match &mut self.transport.kind {
+            RtpTransportKind::Unencrypted => Ok(()),
+            RtpTransportKind::SdesSrtp(rtp_sdes_srtp_transport) => rtp_sdes_srtp_transport
+                .outbound
+                .protect_rtp(&data, &mut protected),
             RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) => {
                 let DtlsState::Connected { outbound, .. } = rtp_dtls_srtp_transport.state_mut()
                 else {
                     unreachable!("RtpTransportWriter is only created when DtlsState is Connected");
                 };
 
-                outbound.protect_rtp(&mut data)?;
+                outbound.protect_rtp(&data, &mut protected)
             }
+        };
+
+        if let Err(e) = result {
+            self.transport.scratch = protected;
+            return Err(e);
         }
+
+        if !matches!(self.transport.kind, RtpTransportKind::Unencrypted) {
+            // Send the protected packet and keep the plaintext buffer for next time
+            mem::swap(&mut data, &mut protected);
+        }
+        self.transport.scratch = protected;
 
         self.transport
             .events
@@ -618,22 +648,32 @@ impl RtpTransportWriter<'_> {
 
     /// Send a RTCP packet using the transport
     pub fn send_rctp(&mut self, mut rtcp_packet: Vec<u8>) -> Result<(), SrtpError> {
-        match &mut self.transport.kind {
-            RtpTransportKind::Unencrypted => {}
-            RtpTransportKind::SdesSrtp(rtp_sdes_srtp_transport) => {
-                rtp_sdes_srtp_transport
-                    .outbound
-                    .protect_rtcp(&mut rtcp_packet)?;
-            }
+        let mut protected = mem::take(&mut self.transport.scratch);
+
+        let result = match &mut self.transport.kind {
+            RtpTransportKind::Unencrypted => Ok(()),
+            RtpTransportKind::SdesSrtp(rtp_sdes_srtp_transport) => rtp_sdes_srtp_transport
+                .outbound
+                .protect_rtcp(&rtcp_packet, &mut protected),
             RtpTransportKind::DtlsSrtp(rtp_dtls_srtp_transport) => {
                 let DtlsState::Connected { outbound, .. } = rtp_dtls_srtp_transport.state_mut()
                 else {
                     unreachable!("RtpTransportWriter is only created when DtlsState is Connected");
                 };
 
-                outbound.protect_rtcp(&mut rtcp_packet)?;
+                outbound.protect_rtcp(&rtcp_packet, &mut protected)
             }
+        };
+
+        if let Err(e) = result {
+            self.transport.scratch = protected;
+            return Err(e);
         }
+
+        if !matches!(self.transport.kind, RtpTransportKind::Unencrypted) {
+            mem::swap(&mut rtcp_packet, &mut protected);
+        }
+        self.transport.scratch = protected;
 
         self.transport
             .events

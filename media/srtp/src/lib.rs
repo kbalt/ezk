@@ -1,76 +1,59 @@
-//! Wrapper around libsrtp
+//! Pure Rust SRTP and SRTCP
+//!
+//! Implements the Secure Real-time Transport Protocol of [RFC 3711] and its AEAD
+//! profiles from [RFC 7714], covering the three protection profiles that DTLS-SRTP can
+//! negotiate ([RFC 5764]) plus the AES counter mode suites used by SDES ([RFC 4568],
+//! [RFC 6188]). See [`SrtpProfile`] for the full list.
+//!
+//! Protection is split by direction: [`SrtpProtector`] holds the sending key and
+//! [`SrtpUnprotector`] the receiving key, which is how both DTLS-SRTP and SDES hand out
+//! keying material in the first place.
+//!
+//! ```
+//! use ezk_srtp::{SrtpKeys, SrtpProfile, SrtpProtector, SrtpUnprotector};
+//!
+//! let profile = SrtpProfile::AEAD_AES_128_GCM;
+//! let keys = SrtpKeys::new(profile, &[0; 16], &[0; 12])?;
+//!
+//! let mut sender = SrtpProtector::new(keys.clone());
+//! let mut receiver = SrtpUnprotector::new(keys);
+//!
+//! let rtp = [
+//!     0x80, 0x60, 0x12, 0x34, 0, 0, 0, 1, 0xde, 0xad, 0xbe, 0xef, b'h', b'i',
+//! ];
+//!
+//! let mut srtp = Vec::new();
+//! sender.protect_rtp(&rtp, &mut srtp)?;
+//! assert_eq!(srtp.len(), rtp.len() + profile.rtp_overhead());
+//!
+//! let mut plain = Vec::new();
+//! receiver.unprotect_rtp(&srtp, &mut plain)?;
+//! assert_eq!(plain, rtp);
+//! # Ok::<(), ezk_srtp::SrtpError>(())
+//! ```
+//!
+//! [RFC 3711]: https://www.rfc-editor.org/rfc/rfc3711
+//! [RFC 4568]: https://www.rfc-editor.org/rfc/rfc4568
+//! [RFC 5764]: https://www.rfc-editor.org/rfc/rfc5764
+//! [RFC 6188]: https://www.rfc-editor.org/rfc/rfc6188
+//! [RFC 7714]: https://www.rfc-editor.org/rfc/rfc7714
 
-use std::{
-    ffi::{CStr, c_char, c_void},
-    ptr,
-    sync::LazyLock,
-};
-
-mod ffi {
-    #![allow(unreachable_pub, dead_code, nonstandard_style)]
-
-    include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
-}
-
-#[macro_use]
+mod auth;
+mod cipher;
 mod error;
-mod crypto_policy;
-mod dtls;
-mod session;
+mod index;
+mod kdf;
+mod keys;
+mod packet;
+mod profile;
+mod protect;
+mod replay;
+#[cfg(test)]
+mod rfc7714;
+mod unprotect;
 
-pub use crypto_policy::CryptoPolicy;
-pub use dtls::{DtlsSrtpPolicies, SrtpFromSslError};
 pub use error::SrtpError;
-pub use session::{SrtpPolicy, SrtpSession, Ssrc};
-
-/// Install log handlers that delegate libsrtp output to the `log` crate
-///
-/// # Safety
-///
-/// Log handlers are installed in a static variable without any synchronization between reading & writing.
-///
-/// Should only be called once per program before [`init`].
-pub unsafe fn install_log_handler() {
-    static INSTALL: LazyLock<()> = LazyLock::new(|| {
-        // Discard status since the function can't actually fail
-        unsafe { ffi::srtp_install_log_handler(Some(on_log), ptr::null_mut()) };
-    });
-
-    unsafe extern "C" fn on_log(
-        level: ffi::srtp_log_level_t,
-        msg: *const c_char,
-        _data: *mut c_void,
-    ) {
-        match level {
-            ffi::srtp_log_level_t_srtp_log_level_error => {
-                log::error!("{:?}", unsafe { CStr::from_ptr(msg) })
-            }
-            ffi::srtp_log_level_t_srtp_log_level_warning => {
-                log::warn!("{:?}", unsafe { CStr::from_ptr(msg) })
-            }
-            ffi::srtp_log_level_t_srtp_log_level_info => {
-                log::info!("{:?}", unsafe { CStr::from_ptr(msg) })
-            }
-            ffi::srtp_log_level_t_srtp_log_level_debug => {
-                log::debug!("{:?}", unsafe { CStr::from_ptr(msg) })
-            }
-            _ => {}
-        }
-    }
-
-    *INSTALL
-}
-
-/// Initialize libsrtp
-pub fn init() -> Result<(), SrtpError> {
-    static INIT: LazyLock<Result<(), SrtpError>> =
-        LazyLock::new(|| unsafe { ff!(ffi::srtp_init()) });
-
-    *INIT
-}
-
-#[doc(hidden)]
-#[deprecated = "only exists to make sure openssl is linked"]
-pub fn ensure_openssl_is_linked() {
-    let _f = openssl_sys::EVP_CIPHER_CTX_new;
-}
+pub use keys::SrtpKeys;
+pub use profile::SrtpProfile;
+pub use protect::SrtpProtector;
+pub use unprotect::SrtpUnprotector;
