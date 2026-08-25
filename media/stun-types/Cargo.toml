@@ -16,11 +16,11 @@ workspace = true
 
 [dependencies]
 byteorder = "1.4"
-rand = "0.9"
-bitfield = "0.18"
+rand = "0.10"
+bitfield = "0.19"
 bytes = "1"
-hmac = "0.12"
-sha1 = "0.10"
-sha2 = "0.10"
+hmac = "0.13"
+sha1 = "0.11"
+sha2 = "0.11"
 thiserror = "2"
-md5 = "0.7"
+md5 = "0.8"

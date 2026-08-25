@@ -14,69 +14,29 @@ const SALT: &str = "517569642070726f2071756f";
 
 /// RFC 7714 section 16, the ASCII string "Gallia est omnis divisa in partes tres" with a
 /// 12 octet header carrying sequence number 0xf17b and SSRC 0x5501a0b2
-const RTP: &str = concat!(
-    "8040f17b8041f8d35501a0b247616c6c",
-    "696120657374206f6d6e697320646976",
-    "69736120696e20706172746573207472",
-    "6573",
-);
+const RTP: &str = "8040f17b8041f8d35501a0b247616c6c696120657374206f6d6e69732064697669736120696e207061727465732074726573";
 
 /// RFC 7714 section 16.1.1
-const SRTP_128: &str = concat!(
-    "8040f17b8041f8d35501a0b2f24de3a3",
-    "fb34de6cacba861c9d7e4bcabe633bd5",
-    "0d294e6f42a5f47a51c7d19b36de3adf",
-    "8833899d7f27beb16a9152cf765ee439",
-    "0cce",
-);
+const SRTP_128: &str = "8040f17b8041f8d35501a0b2f24de3a3fb34de6cacba861c9d7e4bcabe633bd50d294e6f42a5f47a51c7d19b36de3adf8833899d7f27beb16a9152cf765ee4390cce";
 
 /// RFC 7714 section 16.2.1
-const SRTP_256: &str = concat!(
-    "8040f17b8041f8d35501a0b232b1de78",
-    "a822fe12ef9f78fa332e33aab1801238",
-    "9a58e2f3b50b2a0276ffae0f1ba63799",
-    "b87b7aa3db36dfffd6b0f9bb7878d7a7",
-    "6c13",
-);
+const SRTP_256: &str = "8040f17b8041f8d35501a0b232b1de78a822fe12ef9f78fa332e33aab18012389a58e2f3b50b2a0276ffae0f1ba63799b87b7aa3db36dfffd6b0f9bb7878d7a76c13";
 
 /// The packet that RFC 7714 sections 17.1 to 17.4 actually operate on, SSRC "Mars"
 ///
 /// Note that the preamble of section 17 prints a different packet (`81c8000e`, `4e545031`
 /// twice and `0000eb98`) than every subsection encrypts and decrypts. The subsections are
 /// internally consistent with their own AAD and results, so this follows them.
-const RTCP: &str = concat!(
-    "81c8000d4d6172734e5450314e545032",
-    "525450200000042a0000e9304c756e61",
-    "deadbeefdeadbeefdeadbeefdeadbeef",
-    "deadbeef",
-);
+const RTCP: &str = "81c8000d4d6172734e5450314e545032525450200000042a0000e9304c756e61deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
 
 /// RFC 7714 section 17.1
-const SRTCP_128: &str = concat!(
-    "81c8000d4d61727363e94885dcdab67c",
-    "a727d7662f6b7e997ff5c0f76c06f32d",
-    "c676a5f1730d6fda4ce09b4686303ded",
-    "0bb9275bc84aa45896cf4d2fc5abf872",
-    "45d9eade800005d4",
-);
+const SRTCP_128: &str = "81c8000d4d61727363e94885dcdab67ca727d7662f6b7e997ff5c0f76c06f32dc676a5f1730d6fda4ce09b4686303ded0bb9275bc84aa45896cf4d2fc5abf87245d9eade800005d4";
 
 /// RFC 7714 section 17.2
-const SRTCP_256: &str = concat!(
-    "81c8000d4d617273d50ae4d1f5ce5d30",
-    "4ba297e47d470c282c3ece5dbffe0a50",
-    "a2eaa5c1110555be8415f658c61de047",
-    "6f1b6fad1d1eb30c4446839f57ff6f6c",
-    "b26ac3be800005d4",
-);
+const SRTCP_256: &str = "81c8000d4d617273d50ae4d1f5ce5d304ba297e47d470c282c3ece5dbffe0a50a2eaa5c1110555be8415f658c61de0476f1b6fad1d1eb30c4446839f57ff6f6cb26ac3be800005d4";
 
 /// RFC 7714 section 17.3, tagged but not encrypted so the `E` flag is clear
-const SRTCP_128_TAG_ONLY: &str = concat!(
-    "81c8000d4d6172734e5450314e545032",
-    "525450200000042a0000e9304c756e61",
-    "deadbeefdeadbeefdeadbeefdeadbeef",
-    "deadbeef841dd9683dd78ec92ae58790",
-    "125f62b3000005d4",
-);
+const SRTCP_128_TAG_ONLY: &str = "81c8000d4d6172734e5450314e545032525450200000042a0000e9304c756e61deadbeefdeadbeefdeadbeefdeadbeefdeadbeef841dd9683dd78ec92ae58790125f62b3000005d4";
 
 /// The SRTCP index every section 17 vector uses
 const SRTCP_INDEX: u32 = 0x5d4;
