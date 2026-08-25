@@ -1,7 +1,7 @@
 use quinn_udp::{RecvMeta, Transmit, UdpSockRef, UdpSocketState};
 use std::{
     collections::VecDeque,
-    io::{self, IoSliceMut},
+    io::{self, ErrorKind, IoSliceMut},
     net::{IpAddr, SocketAddr},
     task::{Context, Poll, ready},
 };
@@ -65,13 +65,13 @@ impl Socket {
                 });
 
                 match result {
-                    Ok(()) => {
+                    Err(err) if err.kind() == ErrorKind::WouldBlock => {}
+                    Ok(_) => {
                         self.to_send.pop_front();
                         continue 'outer;
                     }
-                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
-                    Err(e) => {
-                        log::warn!("Failed to send UDP packet to {destination}: {e}");
+                    Err(err) => {
+                        log::debug!("Failed to send UDP packet, {err}");
                         self.to_send.pop_front();
                         continue 'outer;
                     }

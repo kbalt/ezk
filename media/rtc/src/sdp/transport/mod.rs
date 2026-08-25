@@ -48,6 +48,8 @@ pub(crate) struct OfferedTransport {
     kind: OfferedTransportKind,
     ice_agent: Option<IceAgent>,
 
+    offered_cryptex: bool,
+
     /// Buffer of prematurely received packets, before the SDP negotiation is complete
     backlog: Vec<(Instant, ReceivedPkt)>,
 }
@@ -65,6 +67,7 @@ impl OfferedTransport {
         kind: TransportType,
         ice_agent: Option<IceAgent>,
         rtcp_mux: bool,
+        offer_cryptex: bool,
     ) -> Self {
         if rtcp_mux {
             changes.push_back(TransportChange::CreateSocket(id));
@@ -78,11 +81,14 @@ impl OfferedTransport {
             TransportType::DtlsSrtp => OfferedTransportKind::DtlsSrtp,
         };
 
+        let offered_cryptex = offer_cryptex && !matches!(kind, OfferedTransportKind::Unencrypted);
+
         Self {
             public_id: id,
             ports: None,
             kind,
             ice_agent,
+            offered_cryptex,
             backlog: Vec::new(),
         }
     }
@@ -117,6 +123,8 @@ impl OfferedTransport {
     pub(crate) fn populate_desc(&self, desc: &mut MediaDescription) {
         desc.extmap
             .extend(RtpExtensionIds::offer(desc.media.media_type).to_extmap());
+
+        desc.cryptex = self.offered_cryptex;
 
         match &self.kind {
             OfferedTransportKind::Unencrypted => {}
@@ -183,11 +191,14 @@ impl OfferedTransport {
             }
         };
 
+        let cryptex =
+            self.offered_cryptex && peer_supports_cryptex(remote_session_desc, remote_media_desc);
+
         let kind = match self.kind {
             OfferedTransportKind::Unencrypted => RtpTransportKind::Unencrypted,
             OfferedTransportKind::SdesSrtp(sdes_srtp_offer) => {
                 let transport = sdes_srtp_offer
-                    .receive_answer(&remote_media_desc.crypto)
+                    .receive_answer(&remote_media_desc.crypto, cryptex)
                     .map_err(TransportCreateError::FailedSdesSrtp)?;
 
                 RtpTransportKind::SdesSrtp(transport)
@@ -214,6 +225,7 @@ impl OfferedTransport {
                     dtls_context.cert.clone(),
                     fingerprint,
                     setup,
+                    cryptex,
                     Instant::now(),
                 ))
             }
@@ -278,7 +290,10 @@ impl OfferedTransport {
     }
 }
 
-/// create RtpTransport from SDP offer & SdpSession
+fn peer_supports_cryptex(session_desc: &SessionDescription, media_desc: &MediaDescription) -> bool {
+    session_desc.cryptex || media_desc.cryptex
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn create_from_offer(
     dtls_context: &DtlsContext,
@@ -286,6 +301,7 @@ pub(super) fn create_from_offer(
     stun_servers: &[SocketAddr],
     changes: &mut VecDeque<TransportChange>,
     id: TransportId,
+    allow_cryptex: bool,
     session_desc: &SessionDescription,
     media_desc: &MediaDescription,
 ) -> Result<RtpTransport, TransportCreateError> {
@@ -337,11 +353,13 @@ pub(super) fn create_from_offer(
 
     let extension_ids = RtpExtensionIds::from_sdp(session_desc, media_desc);
 
+    let cryptex = allow_cryptex && peer_supports_cryptex(session_desc, media_desc);
+
     let transport_kind = match &media_desc.media.proto {
         TransportProtocol::RtpAvp | TransportProtocol::RtpAvpf => RtpTransportKind::Unencrypted,
-        TransportProtocol::RtpSavp | TransportProtocol::RtpSavpf => {
-            RtpTransportKind::SdesSrtp(sdes_srtp::negotiate_from_offer(&media_desc.crypto)?)
-        }
+        TransportProtocol::RtpSavp | TransportProtocol::RtpSavpf => RtpTransportKind::SdesSrtp(
+            sdes_srtp::negotiate_from_offer(&media_desc.crypto, cryptex)?,
+        ),
         TransportProtocol::UdpTlsRtpSavp | TransportProtocol::UdpTlsRtpSavpf => {
             let setup = match media_desc.setup {
                 Some(Setup::Active) => DtlsSetup::Accept,
@@ -369,6 +387,7 @@ pub(super) fn create_from_offer(
                 dtls_context.cert.clone(),
                 fingerprint,
                 setup,
+                cryptex,
                 Instant::now(),
             ))
         }
@@ -387,6 +406,8 @@ pub(super) fn populate_desc(transport: &RtpTransport, media_desc: &mut MediaDesc
     media_desc
         .extmap
         .extend(transport.extension_ids().to_extmap());
+
+    media_desc.cryptex = transport.cryptex();
 
     match transport.kind() {
         RtpTransportKind::Unencrypted => {}

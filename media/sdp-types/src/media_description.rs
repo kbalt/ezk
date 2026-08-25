@@ -71,6 +71,9 @@ pub struct MediaDescription {
     /// Extmap allow mixed attribute (a=extmap-allow-mixed)
     pub extmap_allow_mixed: bool,
 
+    /// Cryptex attribute (a=cryptex)
+    pub cryptex: bool,
+
     /// SSRC attribute (a=ssrc)
     pub ssrc: Vec<Ssrc>,
 
@@ -161,6 +164,10 @@ impl fmt::Display for MediaDescription {
             write!(f, "a=extmap-allow-mixed\r\n")?;
         }
 
+        if self.cryptex {
+            write!(f, "a=cryptex\r\n")?;
+        }
+
         for ssrc in &self.ssrc {
             write!(f, "a=ssrc:{ssrc}\r\n")?;
         }
@@ -214,6 +221,7 @@ impl MediaDescription {
             crypto: vec![],
             extmap: vec![],
             extmap_allow_mixed: false,
+            cryptex: false,
             ssrc: vec![],
             setup: None,
             fingerprint: vec![],

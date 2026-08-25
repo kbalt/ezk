@@ -42,6 +42,9 @@ pub struct SessionDescription {
     /// Extmap allow mixed attribute (a=extmap-allow-mixed)
     pub extmap_allow_mixed: bool,
 
+    /// Cryptex attribute (a=cryptex)
+    pub cryptex: bool,
+
     /// If not present: false
     ///
     /// If specified an ice-lite implementation is used
@@ -111,6 +114,10 @@ impl fmt::Display for SessionDescription {
 
         if self.extmap_allow_mixed {
             write!(f, "a=extmap-allow-mixed\r\n")?;
+        }
+
+        if self.cryptex {
+            write!(f, "a=cryptex\r\n")?;
         }
 
         if !self.ice_options.options.is_empty() {

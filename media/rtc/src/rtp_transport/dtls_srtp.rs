@@ -1,6 +1,6 @@
 use dimpl::Dtls;
 use sha2::{Digest, Sha256};
-use srtp::{DtlsSrtpPolicies, SrtpSession};
+use srtp::{SrtpKeys, SrtpProfile, SrtpProtector, SrtpUnprotector};
 use std::{
     collections::VecDeque,
     sync::Arc,
@@ -13,12 +13,13 @@ pub enum DtlsSetup {
     Connect,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum DtlsState {
     Accepting,
     Connecting,
     Connected {
-        inbound: SrtpSession,
-        outbound: SrtpSession,
+        inbound: SrtpUnprotector,
+        outbound: SrtpProtector,
     },
     Failed,
 }
@@ -31,8 +32,12 @@ pub struct RtpDtlsSrtpTransport {
     out_buf: Vec<u8>,
 
     peer_fingerprint: Vec<u8>,
+    peer_fingerprint_verified: bool,
 
     setup: DtlsSetup,
+
+    cryptex: bool,
+
     state: DtlsState,
 
     events: VecDeque<Vec<u8>>,
@@ -44,6 +49,7 @@ impl RtpDtlsSrtpTransport {
         certificate: dimpl::DtlsCertificate,
         peer_fingerprint: Vec<u8>,
         setup: DtlsSetup,
+        cryptex: bool,
         now: Instant,
     ) -> Self {
         let mut dtls = Dtls::new_auto(config, certificate, now);
@@ -59,7 +65,9 @@ impl RtpDtlsSrtpTransport {
             timeout: Some(now),
             out_buf: vec![0u8; 2000],
             peer_fingerprint,
+            peer_fingerprint_verified: false,
             setup,
+            cryptex,
             state: match setup {
                 DtlsSetup::Accept => DtlsState::Accepting,
                 DtlsSetup::Connect => DtlsState::Connecting,
@@ -74,6 +82,10 @@ impl RtpDtlsSrtpTransport {
 
     pub fn setup(&self) -> DtlsSetup {
         self.setup
+    }
+
+    pub fn cryptex(&self) -> bool {
+        self.cryptex
     }
 
     pub(crate) fn state(&self) -> &DtlsState {
@@ -99,7 +111,6 @@ impl RtpDtlsSrtpTransport {
 
         if let Err(err) = self.dtls.handle_packet(&data) {
             log::error!("Failed to handle DTLS packet, {err:?}");
-            self.state = DtlsState::Failed;
         }
     }
 
@@ -129,7 +140,9 @@ impl RtpDtlsSrtpTransport {
                 dimpl::Output::PeerCert(peer_cert) => {
                     let peer_cert_fingerprint = Sha256::digest(peer_cert);
 
-                    if peer_cert_fingerprint[..] != self.peer_fingerprint {
+                    if peer_cert_fingerprint[..] == self.peer_fingerprint {
+                        self.peer_fingerprint_verified = true;
+                    } else {
                         log::warn!(
                             "peer certificate sha256 fingerprint mismatch expected={:X?} got={:X?}",
                             self.peer_fingerprint,
@@ -140,35 +153,40 @@ impl RtpDtlsSrtpTransport {
                     }
                 }
                 dimpl::Output::KeyingMaterial(keying_material, srtp_profile) => {
-                    match DtlsSrtpPolicies::from_dimpl(
-                        keying_material,
-                        srtp_profile,
+                    if !self.peer_fingerprint_verified {
+                        log::warn!("Got keying material before peer certificate could be verified");
+                        self.state = DtlsState::Failed;
+                        return;
+                    }
+
+                    let profile = match srtp_profile {
+                        dimpl::SrtpProfile::AES128_CM_SHA1_80 => {
+                            SrtpProfile::AES_CM_128_HMAC_SHA1_80
+                        }
+                        dimpl::SrtpProfile::AEAD_AES_128_GCM => SrtpProfile::AEAD_AES_128_GCM,
+                        dimpl::SrtpProfile::AEAD_AES_256_GCM => SrtpProfile::AEAD_AES_256_GCM,
+                        _ => {
+                            log::error!(
+                                "Failed to handle keying material, unhandled profile: {srtp_profile:?}"
+                            );
+                            self.state = DtlsState::Failed;
+                            return;
+                        }
+                    };
+
+                    match SrtpKeys::from_keying_material(
+                        profile,
+                        &keying_material,
                         !self.dtls.is_active(),
                     ) {
-                        Ok(DtlsSrtpPolicies { inbound, outbound }) => {
-                            let inbound = match SrtpSession::new(vec![inbound]) {
-                                Ok(session) => session,
-                                Err(err) => {
-                                    log::error!("Failed to create inbound SRTP session: {err}");
-                                    self.state = DtlsState::Failed;
-                                    return;
-                                }
+                        Ok((inbound, outbound)) => {
+                            self.state = DtlsState::Connected {
+                                inbound: SrtpUnprotector::new(inbound),
+                                outbound: SrtpProtector::new(outbound).cryptex(self.cryptex),
                             };
-                            let outbound = match SrtpSession::new(vec![outbound]) {
-                                Ok(session) => session,
-                                Err(err) => {
-                                    log::error!("Failed to create outbound SRTP session: {err}");
-                                    self.state = DtlsState::Failed;
-                                    return;
-                                }
-                            };
-
-                            self.state = DtlsState::Connected { inbound, outbound };
                         }
                         Err(err) => {
-                            log::error!(
-                                "Failed to create SRTP policies from keying-material, {err:?}"
-                            );
+                            log::error!("Failed to create SRTP keys from keying-material, {err:?}");
                             self.state = DtlsState::Failed;
                             return;
                         }

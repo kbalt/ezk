@@ -38,6 +38,7 @@ async fn main() {
         rtcp_mux_policy: RtcpMuxPolicy::Require,
         bundle_policy: BundlePolicy::MaxBundle,
         mtu: Mtu::new(1400),
+        enable_cryptex: true,
     });
 
     let mut io = TokioIoState::new_with_local_ips().unwrap();

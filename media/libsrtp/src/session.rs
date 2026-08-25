@@ -5,6 +5,7 @@ use crate::{
 use std::{borrow::Cow, ffi::c_void, mem::MaybeUninit, ptr};
 
 /// Defines which RTP/RTCP stream a [`SrtpPolicy`] applies to
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ssrc {
     /// Policy applies to any inbound streams
     AnyInbound,
@@ -12,6 +13,25 @@ pub enum Ssrc {
     AnyOutbound,
     /// Policy applies to RTP streams with the given SSRC
     Specific(u32),
+}
+
+impl Ssrc {
+    fn to_ffi(self) -> ffi::srtp_ssrc_t {
+        match self {
+            Ssrc::AnyInbound => ffi::srtp_ssrc_t {
+                type_: ffi::srtp_ssrc_type_t_ssrc_any_inbound,
+                value: 0,
+            },
+            Ssrc::AnyOutbound => ffi::srtp_ssrc_t {
+                type_: ffi::srtp_ssrc_type_t_ssrc_any_outbound,
+                value: 0,
+            },
+            Ssrc::Specific(value) => ffi::srtp_ssrc_t {
+                type_: ffi::srtp_ssrc_type_t_ssrc_specific,
+                value,
+            },
+        }
+    }
 }
 
 /// Policy which defines how packets are protected.
@@ -52,20 +72,7 @@ impl<'a> SrtpPolicy<'a> {
             return Err(SrtpError::BAD_PARAM);
         }
 
-        let ssrc = match ssrc {
-            Ssrc::AnyInbound => ffi::srtp_ssrc_t {
-                type_: ffi::srtp_ssrc_type_t_ssrc_any_inbound,
-                value: 0,
-            },
-            Ssrc::AnyOutbound => ffi::srtp_ssrc_t {
-                type_: ffi::srtp_ssrc_type_t_ssrc_any_outbound,
-                value: 0,
-            },
-            Ssrc::Specific(value) => ffi::srtp_ssrc_t {
-                type_: ffi::srtp_ssrc_type_t_ssrc_specific,
-                value,
-            },
-        };
+        let ssrc = ssrc.to_ffi();
 
         let policy = ffi::srtp_policy_t {
             ssrc,
@@ -253,6 +260,19 @@ impl SrtpSession {
     /// Set the roll-over-counter on a session for a given SSRC
     pub fn set_stream_roc(&mut self, ssrc: u32, roc: u32) -> Result<(), SrtpError> {
         unsafe { ff!(ffi::srtp_set_stream_roc(self.ctx, ssrc, roc)) }
+    }
+
+    /// Enable or disable cryptex for a stream
+    pub fn set_stream_use_cryptex(&mut self, ssrc: Ssrc, enable: bool) -> Result<(), SrtpError> {
+        let ssrc = ssrc.to_ffi();
+
+        unsafe {
+            ff!(ffi::srtp_set_stream_use_cryptex(
+                self.ctx,
+                &raw const ssrc,
+                i32::from(enable)
+            ))
+        }
     }
 }
 

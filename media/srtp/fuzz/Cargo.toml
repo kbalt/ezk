@@ -1,0 +1,29 @@
+[package]
+name = "ezk-srtp-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+srtp = { package = "ezk-srtp", path = "..", default-features = false }
+
+[[bin]]
+name = "unprotect_rtp"
+path = "fuzz_targets/unprotect_rtp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "unprotect_rtcp"
+path = "fuzz_targets/unprotect_rtcp.rs"
+test = false
+doc = false
+bench = false
+

@@ -41,8 +41,6 @@ local-ip-address = { version = "0.6", optional = true }
 default = ["tokio"]
 tokio = ["dep:tokio", "dep:quinn-udp", "dep:local-ip-address"]
 
-vendor-openssl = ["srtp/vendored"]
-
 [dev-dependencies]
 tokio = { version = "1", features = ["rt"] }
 env_logger = "0.11"

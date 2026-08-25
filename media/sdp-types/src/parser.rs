@@ -38,6 +38,7 @@ pub(crate) struct Parser {
     group: Vec<Group>,
     extmap: Vec<ExtMap>,
     extmap_allow_mixed: bool,
+    cryptex: bool,
     ice_options: IceOptions,
     ice_lite: bool,
     ice_ufrag: Option<IceUsernameFragment>,
@@ -116,6 +117,7 @@ impl Parser {
                     crypto: vec![],
                     extmap: vec![],
                     extmap_allow_mixed: self.extmap_allow_mixed,
+                    cryptex: self.cryptex,
                     ssrc: vec![],
                     setup: self.setup,
                     fingerprint: vec![],
@@ -336,6 +338,13 @@ impl Parser {
                     self.extmap_allow_mixed = true;
                 }
             }
+            "cryptex" => {
+                if let Some(media_description) = self.media_descriptions.last_mut() {
+                    media_description.cryptex = true;
+                } else {
+                    self.cryptex = true;
+                }
+            }
             "rtcp-mux" => {
                 if let Some(media_description) = self.media_descriptions.last_mut() {
                     media_description.rtcp_mux = true;
@@ -381,6 +390,7 @@ impl Parser {
             group: self.group,
             extmap: self.extmap,
             extmap_allow_mixed: self.extmap_allow_mixed,
+            cryptex: self.cryptex,
             ice_lite: self.ice_lite,
             ice_options: self.ice_options,
             ice_ufrag: self.ice_ufrag,
