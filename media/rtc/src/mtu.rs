@@ -43,6 +43,10 @@ impl Mtu {
         }
     }
 
+    pub(crate) fn base(&self) -> usize {
+        self.base
+    }
+
     pub(crate) const fn with_srtp_overhead(self) -> Self {
         Self { srtp: true, ..self }
     }
@@ -60,10 +64,6 @@ impl Mtu {
             rtp_extensions: self.rtp_extensions + attribute_len + 2,
             ..self
         }
-    }
-
-    pub(crate) const fn for_dtls(self) -> usize {
-        self.base
     }
 
     /// The maximum allowed size of RTP payloads

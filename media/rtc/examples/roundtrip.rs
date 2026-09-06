@@ -5,7 +5,6 @@ use std::{
 
 use bytes::Bytes;
 use ezk_rtc::{
-    OpenSslContext,
     rtp_session::SendRtpPacket,
     sdp::{
         Codec, Codecs, LocalMediaId, SdpSession, SdpSessionConfig, SdpSessionEvent, TransportType,
@@ -16,11 +15,7 @@ use sdp_types::{Direction, MediaType};
 use tokio::{select, time::interval};
 
 pub(crate) fn make_session(config: SdpSessionConfig) -> (LocalMediaId, SdpSession) {
-    let mut session = SdpSession::new(
-        OpenSslContext::try_new().unwrap(),
-        Ipv4Addr::LOCALHOST.into(),
-        config,
-    );
+    let mut session = SdpSession::new(Ipv4Addr::LOCALHOST.into(), config);
 
     let audio = session
         .add_local_media(
@@ -38,12 +33,12 @@ async fn main() {
 
     let (local_media_id1, mut sdp_session1) = make_session(SdpSessionConfig {
         offer_ice: true,
-        offer_transport: TransportType::Rtp,
+        offer_transport: TransportType::DtlsSrtp,
         offer_avpf: true,
         ..Default::default()
     });
     let (_local_media_id2, mut sdp_session2) = make_session(SdpSessionConfig {
-        offer_transport: TransportType::Rtp,
+        offer_transport: TransportType::DtlsSrtp,
         ..Default::default()
     });
 

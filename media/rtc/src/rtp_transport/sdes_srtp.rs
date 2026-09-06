@@ -1,15 +1,19 @@
 use sdp_types::SrtpCrypto;
-use srtp::SrtpSession;
+use srtp::{SrtpProtector, SrtpUnprotector};
 
 pub struct RtpSdesSrtpTransport {
     local_sdp_crypto: SrtpCrypto,
 
-    pub(crate) inbound: SrtpSession,
-    pub(crate) outbound: SrtpSession,
+    pub(crate) inbound: SrtpUnprotector,
+    pub(crate) outbound: SrtpProtector,
 }
 
 impl RtpSdesSrtpTransport {
-    pub fn new(local_sdp_crypto: SrtpCrypto, inbound: SrtpSession, outbound: SrtpSession) -> Self {
+    pub fn new(
+        local_sdp_crypto: SrtpCrypto,
+        inbound: SrtpUnprotector,
+        outbound: SrtpProtector,
+    ) -> Self {
         Self {
             local_sdp_crypto,
             inbound,

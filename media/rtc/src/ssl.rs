@@ -1,95 +1,81 @@
-use std::time::SystemTime;
+use std::sync::Arc;
 
-use openssl::{
-    asn1::{Asn1Integer, Asn1Time, Asn1Type},
-    bn::BigNum,
-    error::ErrorStack,
-    hash::MessageDigest,
-    nid::Nid,
-    pkey::{PKey, Private},
-    rsa::Rsa,
-    ssl::{SslAcceptor, SslContext, SslMethod, SslVersion},
-    x509::{X509, X509Name},
-};
+use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, PKCS_ECDSA_P256_SHA256};
+use sha2::{Digest, Sha256};
 
-/// Wrapper around a [`SslContext`] with the guarantee that a certificate is set
+use crate::Mtu;
+
+/// DTLS certificate and configuration used to establish DTLS-SRTP sessions
 #[derive(Clone)]
-pub struct OpenSslContext {
-    pub(crate) ctx: SslContext,
+pub(crate) struct DtlsContext {
+    pub(crate) cert: dimpl::DtlsCertificate,
+    pub(crate) config: Arc<dimpl::Config>,
 }
 
-impl OpenSslContext {
-    /// Create a new SSL context, with a new certificate used for DTLS
-    pub fn try_new() -> Result<Self, ErrorStack> {
-        openssl::init();
+impl DtlsContext {
+    /// Create a new context with a self-signed certificate
+    pub(crate) fn new(mtu: Mtu) -> DtlsContext {
+        let cert = generate_self_signed_certificate().expect("certificate is valid");
 
-        let (cert, pkey) = make_ca_cert()?;
+        let config = dimpl::Config::builder()
+            .mtu(mtu.base())
+            .build()
+            .expect("dimpl config is valid");
 
-        let mut ctx = SslAcceptor::mozilla_modern(SslMethod::dtls())?;
-        ctx.set_tlsext_use_srtp("SRTP_AES128_CM_SHA1_80:SRTP_AES128_CM_SHA1_32:SRTP_AEAD_AES_128_GCM:SRTP_AEAD_AES_256_GCM")?;
-        ctx.set_min_proto_version(Some(SslVersion::DTLS1_2))?;
-        ctx.set_private_key(&pkey)?;
-        ctx.set_certificate(&cert)?;
-        ctx.check_private_key()?;
-
-        Ok(Self {
-            ctx: ctx.build().into_context(),
-        })
-    }
-
-    /// Try to create a new context from an existing [`SslContext`]
-    ///
-    /// Fails if there is no certificate available
-    pub fn try_from_ctx(ctx: SslContext) -> Result<OpenSslContext, SslContext> {
-        if ctx.certificate().is_none() {
-            Err(ctx)
-        } else {
-            Ok(Self { ctx })
+        DtlsContext {
+            cert,
+            config: Arc::new(config),
         }
     }
+
+    /// SHA-256 fingerprint of the local certificate
+    pub(crate) fn fingerprint(&self) -> Vec<u8> {
+        Sha256::digest(&self.cert.certificate).to_vec()
+    }
 }
 
-/// Used str0m's implementation as reference https://github.com/algesten/str0m/blob/8f118ddd6a267583cddd0115ae8560095232d39a/src/crypto/ossl/cert.rs#L35
-fn make_ca_cert() -> Result<(X509, PKey<Private>), ErrorStack> {
-    const RSA_F4: u32 = 0x10001;
+// Copy of dimpl's generate_self_signed_certificate, since they require aws-lc-rs
+// https://github.com/algesten/dimpl/blob/37f950984af1d0c2f86ef21b940c672fb27cd7c7/src/certificate.rs#L39
+fn generate_self_signed_certificate() -> Result<dimpl::DtlsCertificate, rcgen::Error> {
+    // Create a key pair for the certificate
+    let key_pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
 
-    let f4 = BigNum::from_u32(RSA_F4).unwrap();
+    // Set up certificate parameters
+    let mut params = CertificateParams::new(Vec::<String>::new())?;
 
-    let key = Rsa::generate_with_e(2048, &f4)?;
-    let pkey = PKey::from_rsa(key)?;
+    // Set up distinguished name
+    let mut distinguished_name = DistinguishedName::new();
+    distinguished_name.push(DnType::OrganizationName, "DTLS".to_string());
+    distinguished_name.push(DnType::CommonName, "DTLS Peer".to_string());
+    params.distinguished_name = distinguished_name;
 
-    let mut x509b = X509::builder()?;
-    x509b.set_version(2)?; // X509.V3 (zero indexed)
+    // Configure as end entity certificate (not a CA)
+    params.is_ca = IsCa::NoCa;
 
-    let mut serial_buf = [0u8; 16];
-    openssl::rand::rand_bytes(&mut serial_buf)?;
+    // Set validity period (1 year)
+    let not_before = time::OffsetDateTime::now_utc();
+    let not_after = not_before + time::Duration::days(365);
+    params.not_before = not_before;
+    params.not_after = not_after;
 
-    let serial_bn = BigNum::from_slice(&serial_buf)?;
-    let serial = Asn1Integer::from_bn(&serial_bn)?;
-    x509b.set_serial_number(&serial)?;
-    let before = Asn1Time::from_unix((unix_time() - 3600).try_into().unwrap())?;
-    x509b.set_not_before(&before)?;
-    let after = Asn1Time::days_from_now(7)?;
-    x509b.set_not_after(&after)?;
-    x509b.set_pubkey(&pkey)?;
+    // Serial number: must be unique for Firefox compatibility, not only across all certificates
+    // of this process, but also across all certificates of other processes/machines!
+    // See: https://github.com/versatica/mediasoup/issues/127#issuecomment-474460153
+    // and https://github.com/algesten/str0m/issues/517
+    let serial_buf: [u8; 16] = rand::random();
+    params.serial_number = Some(serial_buf.to_vec().into());
 
-    let mut nameb = X509Name::builder()?;
-    nameb.append_entry_by_nid_with_type(Nid::COMMONNAME, "ezk-rtc", Asn1Type::UTF8STRING)?;
+    // Build the certificate
+    let cert = params.self_signed(&key_pair)?;
 
-    let name = nameb.build();
+    // Get the certificate in DER format
+    let cert_der = cert.der().to_vec();
 
-    x509b.set_subject_name(&name)?;
-    x509b.set_issuer_name(&name)?;
+    // Get the private key in DER format
+    let key_der = key_pair.serialize_der();
 
-    x509b.sign(&pkey, MessageDigest::sha256())?;
-    let x509 = x509b.build();
-
-    Ok((x509, pkey))
-}
-
-fn unix_time() -> u64 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
+    Ok(dimpl::DtlsCertificate {
+        certificate: cert_der,
+        private_key: key_der,
+    })
 }

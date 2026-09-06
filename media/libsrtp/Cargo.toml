@@ -1,0 +1,27 @@
+[package]
+name = "ezk-libsrtp"
+version = "0.1.0"
+description = "libsrtp wrapper"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+links = "srtp2"
+
+[dependencies]
+openssl = "0.10"
+openssl-sys = "0.9"
+log = "0.4"
+thiserror = "2"
+dimpl = { version = "0.7", default-features = false, features = ["rust-crypto"] }
+
+[features]
+vendored = ["openssl/vendored", "openssl-sys/vendored"]
+
+[build-dependencies]
+bindgen = "0.72"
+cmake = "0.1"
+
+[lints]
+workspace = true

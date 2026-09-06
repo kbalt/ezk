@@ -5,7 +5,7 @@ use sdp_types::{
     SrtpCrypto, SrtpKeyingMaterial,
     SrtpSuite::{self, *},
 };
-use srtp::{CryptoPolicy, SrtpError, SrtpPolicy, SrtpSession, Ssrc};
+use srtp::{SrtpError, SrtpKeys, SrtpProfile, SrtpProtector, SrtpUnprotector};
 
 const SUITES: [SrtpSuite; 4] = [
     AES_256_CM_HMAC_SHA1_80,
@@ -38,23 +38,13 @@ pub(super) fn negotiate_from_offer(
 
     let recv_key = BASE64_STANDARD.decode(&crypto.keys[0].key_and_salt)?;
 
-    let suite = srtp_suite_to_policy(&crypto.suite).expect("Previously checked the suite");
+    let profile = srtp_suite_to_profile(&crypto.suite).expect("Previously checked the suite");
 
-    let mut send_key = vec![0u8; suite.key_len()];
+    let mut send_key = vec![0u8; profile.key_and_salt_len()];
     rand::rng().fill_bytes(&mut send_key);
 
-    let inbound = SrtpSession::new(vec![SrtpPolicy::new(
-        suite,
-        suite,
-        recv_key.into(),
-        srtp::Ssrc::AnyInbound,
-    )?])?;
-    let outbound = SrtpSession::new(vec![SrtpPolicy::new(
-        suite,
-        suite,
-        std::borrow::Cow::Borrowed(&send_key),
-        srtp::Ssrc::AnyOutbound,
-    )?])?;
+    let inbound = SrtpUnprotector::new(SrtpKeys::from_concatenated(profile, &recv_key)?);
+    let outbound = SrtpProtector::new(SrtpKeys::from_concatenated(profile, &send_key)?);
 
     Ok(RtpSdesSrtpTransport::new(
         SrtpCrypto {
@@ -81,9 +71,9 @@ impl SdesSrtpOffer {
         let mut keys = vec![];
 
         for suite in SUITES {
-            let policy = srtp_suite_to_policy(&suite).expect("only using known working suites");
+            let profile = srtp_suite_to_profile(&suite).expect("only using known working suites");
 
-            let mut send_key = vec![0u8; policy.key_len()];
+            let mut send_key = vec![0u8; profile.key_and_salt_len()];
             rand::rng().fill_bytes(&mut send_key);
 
             keys.push((suite, send_key));
@@ -136,21 +126,10 @@ impl SdesSrtpOffer {
                 params: vec![],
             };
 
-            let crypto_policy = srtp_suite_to_policy(&suite).expect("suite is one we offered");
+            let profile = srtp_suite_to_profile(&suite).expect("suite is one we offered");
 
-            let inbound = SrtpSession::new(vec![SrtpPolicy::new(
-                crypto_policy,
-                crypto_policy,
-                recv_key.into(),
-                Ssrc::AnyInbound,
-            )?])?;
-
-            let outbound = SrtpSession::new(vec![SrtpPolicy::new(
-                crypto_policy,
-                crypto_policy,
-                send_key.into(),
-                Ssrc::AnyOutbound,
-            )?])?;
+            let inbound = SrtpUnprotector::new(SrtpKeys::from_concatenated(profile, &recv_key)?);
+            let outbound = SrtpProtector::new(SrtpKeys::from_concatenated(profile, &send_key)?);
 
             return Ok(RtpSdesSrtpTransport::new(
                 local_sdp_crypto,
@@ -163,16 +142,16 @@ impl SdesSrtpOffer {
     }
 }
 
-fn srtp_suite_to_policy(suite: &SrtpSuite) -> Option<CryptoPolicy> {
+fn srtp_suite_to_profile(suite: &SrtpSuite) -> Option<SrtpProfile> {
     match suite {
-        SrtpSuite::AES_CM_128_HMAC_SHA1_80 => Some(CryptoPolicy::aes_cm_128_hmac_sha1_80()),
-        SrtpSuite::AES_CM_128_HMAC_SHA1_32 => Some(CryptoPolicy::aes_cm_128_hmac_sha1_32()),
-        SrtpSuite::AES_192_CM_HMAC_SHA1_80 => Some(CryptoPolicy::aes_cm_192_hmac_sha1_80()),
-        SrtpSuite::AES_192_CM_HMAC_SHA1_32 => Some(CryptoPolicy::aes_cm_192_hmac_sha1_32()),
-        SrtpSuite::AES_256_CM_HMAC_SHA1_80 => Some(CryptoPolicy::aes_cm_256_hmac_sha1_80()),
-        SrtpSuite::AES_256_CM_HMAC_SHA1_32 => Some(CryptoPolicy::aes_cm_256_hmac_sha1_32()),
-        SrtpSuite::AEAD_AES_128_GCM => Some(CryptoPolicy::aes_gcm_128_16_auth()),
-        SrtpSuite::AEAD_AES_256_GCM => Some(CryptoPolicy::aes_gcm_256_16_auth()),
+        SrtpSuite::AES_CM_128_HMAC_SHA1_80 => Some(SrtpProfile::AES_CM_128_HMAC_SHA1_80),
+        SrtpSuite::AES_CM_128_HMAC_SHA1_32 => Some(SrtpProfile::AES_CM_128_HMAC_SHA1_32),
+        SrtpSuite::AES_192_CM_HMAC_SHA1_80 => Some(SrtpProfile::AES_CM_192_HMAC_SHA1_80),
+        SrtpSuite::AES_192_CM_HMAC_SHA1_32 => Some(SrtpProfile::AES_CM_192_HMAC_SHA1_32),
+        SrtpSuite::AES_256_CM_HMAC_SHA1_80 => Some(SrtpProfile::AES_CM_256_HMAC_SHA1_80),
+        SrtpSuite::AES_256_CM_HMAC_SHA1_32 => Some(SrtpProfile::AES_CM_256_HMAC_SHA1_32),
+        SrtpSuite::AEAD_AES_128_GCM => Some(SrtpProfile::AEAD_AES_128_GCM),
+        SrtpSuite::AEAD_AES_256_GCM => Some(SrtpProfile::AEAD_AES_256_GCM),
         _ => None,
     }
 }
