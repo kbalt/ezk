@@ -52,7 +52,7 @@ impl Socket {
                 let result = self.socket.try_io(Interest::WRITABLE, || {
                     let udp_ref = UdpSockRef::from(&self.socket);
 
-                    self.state.send(
+                    self.state.try_send(
                         udp_ref,
                         &Transmit {
                             destination: *destination,
@@ -64,10 +64,17 @@ impl Socket {
                     )
                 });
 
-                // Only return WouldBlock
-                if result.is_ok() {
-                    self.to_send.pop_front();
-                    continue 'outer;
+                match result {
+                    Ok(()) => {
+                        self.to_send.pop_front();
+                        continue 'outer;
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
+                    Err(e) => {
+                        log::warn!("Failed to send UDP packet to {destination}: {e}");
+                        self.to_send.pop_front();
+                        continue 'outer;
+                    }
                 }
             }
         }
