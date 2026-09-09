@@ -277,8 +277,21 @@ impl Usage for InviteUsage {
                             *request.inner() = Some(bye);
                         }
                     }
-                    InviteSessionState::Cancelled | InviteSessionState::Terminated => {
-                        // These states don't need to handle BYE requests
+                    InviteSessionState::Cancelled => {
+                        // This dialog was never established.
+                    }
+                    InviteSessionState::Terminated => {
+                        // A local BYE may have crossed this incoming BYE. While the
+                        // dialog usage still exists, acknowledge the incoming BYE.
+                        drop(state);
+
+                        let mut bye = request.take();
+                        let response = endpoint.create_response(&bye, StatusCode::OK, None);
+                        let transaction = endpoint.create_server_tsx(&mut bye);
+
+                        if let Err(e) = transaction.respond(response).await {
+                            log::warn!("Failed to respond to BYE in terminated state: {e:?}");
+                        }
                     }
                 }
             }
