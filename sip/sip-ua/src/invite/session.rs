@@ -6,7 +6,7 @@ use sip_core::transaction::{ServerInvTsx, ServerTsx, TsxResponse};
 use sip_core::transport::OutgoingResponse;
 use sip_core::{Endpoint, IncomingRequest, Result};
 use sip_types::header::typed::Refresher;
-use sip_types::{CodeKind, Method, StatusCode};
+use sip_types::{CodeKind, Headers, Method, StatusCode};
 use std::sync::Arc;
 use tokio::select;
 use tokio::sync::mpsc::{self, Receiver};
@@ -115,10 +115,18 @@ impl InviteSession {
     }
 
     pub async fn terminate(&mut self) -> Result<TsxResponse, sip_core::Error> {
+        self.terminate_with_headers(Headers::new()).await
+    }
+
+    pub async fn terminate_with_headers(
+        &mut self,
+        headers: Headers,
+    ) -> Result<TsxResponse, sip_core::Error> {
         let mut state = self.inner.state.lock().await;
         state.set_terminated();
 
-        let request = self.dialog.create_request(Method::BYE, None);
+        let mut request = self.dialog.create_request(Method::BYE, None);
+        crate::append_headers(&mut request.headers, &headers);
 
         let mut target_tp_info = self.dialog.target_tp_info.lock().await;
 

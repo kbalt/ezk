@@ -11,7 +11,7 @@ use sip_core::IncomingRequest;
 use sip_types::header::typed::{Event, ReferTo, SubStateValue};
 use sip_types::uri::NameAddr;
 use sip_types::uri::params::Params;
-use sip_types::{CodeKind, Method, Name};
+use sip_types::{CodeKind, Headers, Method, Name};
 use sip_types::{StatusCode, header::typed::ContentType};
 use std::collections::VecDeque;
 use std::fmt::Debug;
@@ -271,6 +271,15 @@ impl<M: MediaBackend> Call<M> {
         &mut self,
         uri: NameAddr,
     ) -> Result<EventSubscriptionReceiver<ReferEvent>, ReferError> {
+        self.refer_with_headers(uri, Headers::new()).await
+    }
+
+    /// Refer to the given URI with additional SIP headers
+    pub async fn refer_with_headers(
+        &mut self,
+        uri: NameAddr,
+        headers: Headers,
+    ) -> Result<EventSubscriptionReceiver<ReferEvent>, ReferError> {
         if self.refer_state.is_some() {
             return Err(ReferError::AlreadyInProgress);
         }
@@ -282,6 +291,7 @@ impl<M: MediaBackend> Call<M> {
             uri,
             params: Params::default(),
         });
+        crate::append_headers(&mut refer.headers, &headers);
 
         let mut target = invite_session.dialog.target_tp_info.lock().await;
 
@@ -305,9 +315,18 @@ impl<M: MediaBackend> Call<M> {
     }
 
     /// Terminate the call
-    pub async fn terminate(mut self) -> Result<(), sip_core::Error> {
+    pub async fn terminate(self) -> Result<(), sip_core::Error> {
+        self.terminate_with_headers(Headers::new()).await
+    }
+
+    /// Terminate the call with additional SIP headers on the BYE request
+    pub async fn terminate_with_headers(mut self, headers: Headers) -> Result<(), sip_core::Error> {
         self.terminated = true;
-        self.invite_session.as_mut().unwrap().terminate().await?;
+        self.invite_session
+            .as_mut()
+            .unwrap()
+            .terminate_with_headers(headers)
+            .await?;
         Ok(())
     }
 }
