@@ -259,6 +259,8 @@ impl Registration {
         )
         .await?;
 
+        self.inner.is_registered.send_replace(true);
+
         // keep alive
         tokio::spawn(keep_alive_task(
             self.endpoint.clone(),
@@ -375,5 +377,83 @@ async fn register<A: ClientAuthenticator>(
             }
             _ => return Err(RegisterError::Failed(response_code)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sip_auth::DigestAuthenticator;
+    use sip_core::{IncomingRequest, Layer, MayTake};
+    use sip_types::header::typed::Expires;
+    use std::error::Error;
+    use tokio::{sync::mpsc, time::timeout};
+
+    struct Registrar(mpsc::UnboundedSender<u32>);
+
+    #[async_trait::async_trait]
+    impl Layer for Registrar {
+        fn name(&self) -> &'static str {
+            "test-registrar"
+        }
+
+        async fn receive(&self, endpoint: &Endpoint, request: MayTake<'_, IncomingRequest>) {
+            let mut request = request.take();
+            let expires = request.headers.get_named::<Expires>().unwrap();
+            let response = endpoint.create_response(&request, StatusCode::OK, None);
+            endpoint
+                .create_server_tsx(&mut request)
+                .respond(response)
+                .await
+                .unwrap();
+            self.0.send(expires.0).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn retry_restores_registered_state() -> Result<(), Box<dyn Error>> {
+        timeout(Duration::from_secs(5), async {
+            let (responses, mut received) = mpsc::unbounded_channel();
+            let mut registrar_builder = Endpoint::builder();
+            let transport = registrar_builder.bind_udp("127.0.0.1:0".parse()?).await?;
+            registrar_builder.add_layer(Registrar(responses));
+            let _registrar = registrar_builder.build();
+
+            let mut endpoint_builder = Endpoint::builder();
+            endpoint_builder.add_allow(sip_types::Method::REGISTER);
+            endpoint_builder.bind_udp("127.0.0.1:0".parse()?).await?;
+            let endpoint = endpoint_builder.build();
+
+            let registrar_uri = SipUri::new(transport.bound().into());
+            let id = NameAddr::uri("sip:alice@example.com".parse()?);
+            let contact = Contact::new(NameAddr::uri("sip:alice@127.0.0.1".parse()?));
+            let (is_registered, receiver) = watch::channel(false);
+            let inner = Arc::new(RegistrationInner {
+                id,
+                contact,
+                registrar: registrar_uri,
+                request_expiry: Duration::from_secs(300),
+                is_registered,
+            });
+            let mut registration = Registration {
+                endpoint,
+                is_registered: receiver,
+                inner,
+            };
+
+            registration
+                .retry_register(DigestAuthenticator::new(Default::default()))
+                .await?;
+            assert!(registration.is_registered());
+            assert_eq!(received.recv().await, Some(300));
+
+            drop(registration);
+            assert_eq!(received.recv().await, Some(0));
+
+            Ok::<_, Box<dyn Error>>(())
+        })
+        .await??;
+
+        Ok(())
     }
 }
