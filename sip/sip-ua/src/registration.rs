@@ -4,7 +4,10 @@ use crate::{
     outbound_call::{MakeCallError, OutboundCall},
 };
 use sip_auth::{ClientAuthenticator, RequestParts, ResponseParts};
-use sip_core::{Endpoint, transport::TargetTransportInfo};
+use sip_core::{
+    Endpoint,
+    transport::{TargetTransportInfo, TransportState},
+};
 use sip_types::{
     StatusCode,
     header::typed::Contact,
@@ -281,8 +284,22 @@ async fn keep_alive_task<A: ClientAuthenticator>(
     mut authenticator: A,
     inner: Arc<RegistrationInner>,
 ) {
+    let (transport, _) = target_transport_info
+        .transport
+        .as_ref()
+        .expect("successful REGISTER must have selected a transport");
+    let mut transport_state = transport.watch_state();
+    let watch_transport = !transport.is_udp();
+
     loop {
         select! {
+            biased;
+            // Do not refresh or unregister when closure is already known.
+            state = transport_state.wait_for(|state| matches!(state, TransportState::Closed(_))), if watch_transport => {
+                inner.is_registered.send_replace(false);
+                log::warn!("REGISTER transport failed: {state:?}");
+                return;
+            }
             _ = inner.is_registered.closed() => {
                 // Registration dropped, exit loop
                 break;
