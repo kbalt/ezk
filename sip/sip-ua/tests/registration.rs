@@ -81,7 +81,7 @@ async fn tcp_closure_fails_registration_and_retry_reconnects() {
                 DigestAuthenticator::new(Default::default()),
             ),
         );
-        assert!(header(&request, "Expires").parse::<u32>().unwrap() > 0);
+        assert_eq!(header(&request, "Expires"), EXPIRY.to_string());
         let mut registration = registration.unwrap();
         assert!(registration.is_registered());
 

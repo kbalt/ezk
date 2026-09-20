@@ -137,11 +137,12 @@ impl Registration {
             ))
         });
 
+        let request_expiry = config.expiry.unwrap_or(Duration::from_secs(300));
         let mut registration = RegistrationProto::new(
             id.clone(),
             contact.clone(),
             config.registrar.clone(),
-            Duration::from_secs(300),
+            request_expiry,
         );
 
         let mut target_transport_info = TargetTransportInfo {
@@ -164,7 +165,7 @@ impl Registration {
             id,
             contact,
             registrar: config.registrar,
-            request_expiry: config.expiry.unwrap_or(Duration::from_secs(300)),
+            request_expiry,
             is_registered: tx,
         });
 
