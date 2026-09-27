@@ -1,0 +1,30 @@
+[package]
+name = "ezk-libva"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = "2"
+log = "0.4"
+ezk-image = { workspace = true, features = [
+    "NV12",
+    "RGBA",
+    "BGRA",
+    "I420",
+    "I422",
+    "I444",
+    "RGB",
+    "BGR",
+    "I010",
+] }
+bitflags = "2"
+
+[build-dependencies]
+bindgen = "0.72"
+pkg-config = "0.3"
