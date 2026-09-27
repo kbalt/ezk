@@ -39,6 +39,7 @@ async fn main() {
         offer_avpf: true,
         rtcp_mux_policy: RtcpMuxPolicy::Require,
         bundle_policy: BundlePolicy::MaxBundle,
+        enable_cryptex: true,
         mtu: Mtu::new(1400),
         inbound_stream_mode: RtpInboundQueueMode::Passthrough(
             RtpInboundPassthroughConfig::default(),

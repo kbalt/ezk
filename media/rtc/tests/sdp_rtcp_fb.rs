@@ -18,7 +18,7 @@ fn make_audio_video_session(offer_avpf: bool) -> (LocalMediaId, LocalMediaId, Sd
 
     let video = session
         .add_local_media(
-            Codecs::new(MediaType::Video).with_codec(Codec::H264),
+            Codecs::new(MediaType::Video).with_codec(Codec::H264.with_rtx()),
             Direction::SendRecv,
         )
         .unwrap();
