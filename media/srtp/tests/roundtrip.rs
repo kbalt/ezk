@@ -550,7 +550,10 @@ fn cryptex_round_trips_for_every_profile_shape_and_size() {
                     }
 
                     receiver.unprotect_rtp(&mut buf).expect("unprotect");
-                    assert_eq!(buf, packet, "{profile:?} {ext:?} {csrcs} csrcs payload {len}");
+                    assert_eq!(
+                        buf, packet,
+                        "{profile:?} {ext:?} {csrcs} csrcs payload {len}"
+                    );
                 }
             }
         }
