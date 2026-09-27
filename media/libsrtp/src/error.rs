@@ -112,4 +112,5 @@ error_codes! {
     BAD_MKI, srtp_err_status_t_srtp_err_status_bad_mki, "error MKI present in packet is invalid";
     PKT_IDX_OLD, srtp_err_status_t_srtp_err_status_pkt_idx_old, "packet index is too old to consider";
     PKT_IDX_ADV, srtp_err_status_t_srtp_err_status_pkt_idx_adv,"packet index advanced, reset needed";
+    CRYPTEX_ERR, srtp_err_status_t_srtp_err_status_cryptex_err, "cryptex error";
 }

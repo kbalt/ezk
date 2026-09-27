@@ -1,23 +1,17 @@
 use crate::cipher::aes_cm;
 
-/// Key derivation label for the SRTP encryption key (RFC 3711 section 4.3.1)
+// Key derivation labels (RFC 3711 sections 4.3.1 and 4.3.2)
 pub(crate) const LABEL_RTP_ENCRYPTION: u8 = 0x00;
-/// Key derivation label for the SRTP authentication key
 pub(crate) const LABEL_RTP_AUTHENTICATION: u8 = 0x01;
-/// Key derivation label for the SRTP session salt
 pub(crate) const LABEL_RTP_SALT: u8 = 0x02;
-/// Key derivation label for the SRTCP encryption key (RFC 3711 section 4.3.2)
 pub(crate) const LABEL_RTCP_ENCRYPTION: u8 = 0x03;
-/// Key derivation label for the SRTCP authentication key
 pub(crate) const LABEL_RTCP_AUTHENTICATION: u8 = 0x04;
-/// Key derivation label for the SRTCP session salt
 pub(crate) const LABEL_RTCP_SALT: u8 = 0x05;
 
 /// Derive `out.len()` bytes of session key material for `label`
 ///
-/// This is the AES-CM pseudo random function of RFC 3711 section 4.3.1 with a key
-/// derivation rate of zero, so `index DIV kdr` is always zero and the key id reduces to
-/// the label alone:
+/// The AES-CM pseudo random function of RFC 3711 section 4.3.1 with a key derivation rate
+/// of zero, so the key id reduces to the label alone:
 ///
 /// ```text
 /// key_id = label || (index DIV kdr)      // 8 + 48 bits
@@ -25,12 +19,8 @@ pub(crate) const LABEL_RTCP_SALT: u8 = 0x05;
 /// out    = AES-CM(master_key, x * 2^16)
 /// ```
 ///
-/// Aligning the 56 bit key id with the low bits of the 112 bit master salt puts the label
-/// on octet 7, and with a zero derivation rate octets 8..14 are left untouched.
-///
-/// The AEAD profiles use the same function with a 96 bit master salt, which is right
-/// padded with two zero octets to the 112 bits the function expects
-/// (RFC 7714 section 11).
+/// A 96 bit AEAD master salt is right padded with two zero octets to the 112 bits the
+/// function expects (RFC 7714 section 11).
 pub(crate) fn derive(master_key: &[u8], master_salt: &[u8], label: u8, out: &mut [u8]) {
     debug_assert!(master_salt.len() == 14 || master_salt.len() == 12);
 
@@ -46,11 +36,11 @@ pub(crate) fn derive(master_key: &[u8], master_salt: &[u8], label: u8, out: &mut
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::hex;
 
     const MASTER_KEY: &str = "E1F97A0D3E018BE0D64FA32C06DE4139";
     const MASTER_SALT: &str = "0EC675AD498AFEEBB6960B3AABE6";
 
-    /// RFC 3711 appendix B.3
     #[test]
     fn rfc3711_b3_key_derivation() {
         let key = hex(MASTER_KEY);
@@ -64,20 +54,20 @@ mod test {
         derive(&key, &salt, LABEL_RTP_SALT, &mut cipher_salt);
         assert_eq!(cipher_salt, hex("30CBBC08863D8C85D49DB34A9AE1")[..]);
 
-        // The appendix derives the full 94 octet authentication key of the RFC's example
-        // transform, of which the HMAC-SHA1 profiles use the first 20
+        // The full 94 octet authentication key of the RFC's example transform, of which
+        // the HMAC-SHA1 profiles use the first 20
         let mut auth_key = [0u8; 94];
         derive(&key, &salt, LABEL_RTP_AUTHENTICATION, &mut auth_key);
         assert_eq!(
             auth_key[..],
             hex(
                 "CEBE321F6FF7716B6FD4AB49AF256A156D38BAA48F0A0ACF3C34E2359E6CDBCEE049646C43D9327AD175578EF72270986371C10C9A369AC2F94A8C5FBCDDDC256D6E919A48B610EF17C2041E474035766B68642C59BBFC2F34DB60DBDFB2"
-            )[..]
+            )
         );
     }
 
-    /// The label is exclusive ored into octet 7 of the master salt, which is what aligns
-    /// the 56 bit key id with the low bits of the 112 bit salt
+    /// The label is exclusive ored into octet 7 of the master salt, aligning the 56 bit
+    /// key id with the low bits of the 112 bit salt
     #[test]
     fn label_lands_on_octet_seven() {
         let salt = hex(MASTER_SALT);
@@ -91,12 +81,5 @@ mod test {
         let mut expected = salt;
         expected[7] ^= LABEL_RTP_AUTHENTICATION;
         assert_eq!(expected, hex("0EC675AD498AFEEAB6960B3AABE6"));
-    }
-
-    fn hex(s: &str) -> Vec<u8> {
-        (0..s.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
-            .collect()
     }
 }

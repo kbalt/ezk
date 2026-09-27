@@ -11,9 +11,9 @@ pub(crate) mod aes_gcm;
 /// IV = (session_salt * 2^16) XOR (SSRC * 2^64) XOR (index * 2^16)
 /// ```
 ///
-/// which places the 112 bit session salt in octets 0..14, the SSRC in octets 4..8, the
-/// 48 bit packet index in octets 8..14 and leaves octets 14..16 as the AES-CM block
-/// counter. For SRTCP `index` is the 31 bit SRTCP index (RFC 3711 section 3.4).
+/// placing the 112 bit session salt in octets 0..14, the SSRC in octets 4..8, the 48 bit
+/// packet index in octets 8..14 and leaving octets 14..16 as the AES-CM block counter. For
+/// SRTCP `index` is the 31 bit SRTCP index (RFC 3711 section 3.4).
 pub(crate) fn aes_cm_iv(session_salt: &[u8], ssrc: u32, index: u64) -> [u8; 16] {
     debug_assert_eq!(session_salt.len(), 14);
 
@@ -63,8 +63,8 @@ pub(crate) fn aes_gcm_srtp_iv(session_salt: &[u8], ssrc: u32, index: u64) -> [u8
 /// (0x0000 || SSRC || 0x0000 || 0 || SRTCP index) XOR session_salt
 /// ```
 ///
-/// Note that the SRTCP index goes into octets 8..12, not 6..12 as for SRTP, and that the
-/// `E` flag is not part of the IV.
+/// The SRTCP index goes into octets 8..12, not 6..12 as for SRTP, and the `E` flag is not
+/// part of the IV.
 pub(crate) fn aes_gcm_srtcp_iv(session_salt: &[u8], ssrc: u32, index: u32) -> [u8; 12] {
     debug_assert_eq!(session_salt.len(), 12);
     debug_assert_eq!(index & 0x8000_0000, 0);
@@ -83,9 +83,9 @@ pub(crate) fn aes_gcm_srtcp_iv(session_salt: &[u8], ssrc: u32, index: u32) -> [u
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::hex;
 
-    /// RFC 7714 section 16 prints the SRTP initialization vector for SSRC 0x5501a0b2,
-    /// rollover counter 0 and sequence number 0xf17b
+    /// RFC 7714 section 16, SSRC 0x5501a0b2, rollover counter 0, sequence number 0xf17b
     #[test]
     fn rfc7714_srtp_iv() {
         let salt = hex("517569642070726f2071756f");
@@ -94,8 +94,7 @@ mod test {
         assert_eq!(iv[..], hex("51753c6580c2726f20718414")[..]);
     }
 
-    /// RFC 7714 section 17 prints the SRTCP initialization vector for SSRC "Mars" and
-    /// SRTCP index 0x5d4
+    /// RFC 7714 section 17, SSRC "Mars", SRTCP index 0x5d4
     #[test]
     fn rfc7714_srtcp_iv() {
         let salt = hex("517569642070726f2071756f");
@@ -104,19 +103,12 @@ mod test {
         assert_eq!(iv[..], hex("517524055203726f207170bb")[..]);
     }
 
-    /// The counter mode initialization vector of RFC 3711 section 4.1.1 places the SSRC
-    /// at octets 4..8 and the 48 bit index at octets 8..14
+    /// RFC 3711 section 4.1.1 places the SSRC at octets 4..8 and the 48 bit index at
+    /// octets 8..14
     #[test]
     fn aes_cm_iv_layout() {
         let iv = aes_cm_iv(&[0u8; 14], 0x0102_0304, 0x0000_5566_7788);
 
         assert_eq!(iv, hex("00000000010203040000556677880000")[..]);
-    }
-
-    fn hex(s: &str) -> Vec<u8> {
-        (0..s.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
-            .collect()
     }
 }

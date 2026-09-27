@@ -7,9 +7,7 @@ use aes_gcm::{AeadInOut, Aes128Gcm, Aes256Gcm, KeyInit, Nonce, Tag};
 ///
 /// # Panics
 ///
-/// Panics if `key` is not 16 or 32 bytes long. Key lengths are validated against the
-/// profile when [`SrtpKeys`](crate::SrtpKeys) is constructed, so this cannot be reached
-/// through the public API.
+/// Panics if `key` is not 16 or 32 bytes long.
 pub(crate) fn seal(
     key: &[u8],
     iv: &[u8; 12],
@@ -17,15 +15,14 @@ pub(crate) fn seal(
     buf: &mut [u8],
 ) -> Result<[u8; GCM_TAG_LEN], SrtpError> {
     let nonce = Nonce::cast_from_core(iv);
-    let buf = InOutBuf::from(buf);
 
     let tag: Tag = match key.len() {
         16 => Aes128Gcm::new_from_slice(key)
             .expect("lengths checked")
-            .encrypt_inout_detached(nonce, aad, buf),
+            .encrypt_inout_detached(nonce, aad, InOutBuf::from(buf)),
         32 => Aes256Gcm::new_from_slice(key)
             .expect("lengths checked")
-            .encrypt_inout_detached(nonce, aad, buf),
+            .encrypt_inout_detached(nonce, aad, InOutBuf::from(buf)),
         len => unreachable!("unsupported AES-GCM key length {len}"),
     }
     .map_err(|_| SrtpError::CipherFailed)?;
@@ -41,7 +38,7 @@ pub(crate) fn seal(
 ///
 /// # Panics
 ///
-/// Panics if `key` is not 16 or 32 bytes long, see [`seal`].
+/// Panics if `key` is not 16 or 32 bytes long.
 pub(crate) fn open(
     key: &[u8],
     iv: &[u8; 12],
@@ -52,15 +49,14 @@ pub(crate) fn open(
     let tag: [u8; GCM_TAG_LEN] = tag.try_into().map_err(|_| SrtpError::MalformedPacket)?;
     let tag = Tag::from(tag);
     let nonce = Nonce::cast_from_core(iv);
-    let buf = InOutBuf::from(buf);
 
     match key.len() {
         16 => Aes128Gcm::new_from_slice(key)
             .expect("lengths checked")
-            .decrypt_inout_detached(nonce, aad, buf, &tag),
+            .decrypt_inout_detached(nonce, aad, InOutBuf::from(buf), &tag),
         32 => Aes256Gcm::new_from_slice(key)
             .expect("lengths checked")
-            .decrypt_inout_detached(nonce, aad, buf, &tag),
+            .decrypt_inout_detached(nonce, aad, InOutBuf::from(buf), &tag),
         len => unreachable!("unsupported AES-GCM key length {len}"),
     }
     .map_err(|_| SrtpError::AuthFailed)

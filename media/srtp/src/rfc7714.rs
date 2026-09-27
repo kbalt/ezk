@@ -1,19 +1,19 @@
 //! Packet level test vectors from RFC 7714 sections 16 and 17.
 //!
-//! These vectors are stated in terms of the session key and session salt rather than the
-//! master key, so they are applied below the key derivation function via
-//! [`SessionKeys::from_session_material`]. The key derivation itself is pinned separately
-//! by the RFC 3711 appendix B.3 vectors in [`crate::kdf`].
+//! These are stated in terms of the session key and salt rather than the master key, so
+//! they are applied below the key derivation function via
+//! [`SessionKeys::from_session_material`]. Key derivation itself is pinned by the
+//! RFC 3711 appendix B.3 vectors in [`crate::kdf`].
 
 use crate::keys::SessionKeys;
-use crate::{SrtpProfile, SrtpProtector, SrtpUnprotector};
+use crate::{SrtpProfile, SrtpProtector, SrtpUnprotector, hex};
 
 const KEY_128: &str = "000102030405060708090a0b0c0d0e0f";
 const KEY_256: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 const SALT: &str = "517569642070726f2071756f";
 
-/// RFC 7714 section 16, the ASCII string "Gallia est omnis divisa in partes tres" with a
-/// 12 octet header carrying sequence number 0xf17b and SSRC 0x5501a0b2
+/// RFC 7714 section 16, a 12 octet header carrying sequence number 0xf17b and SSRC
+/// 0x5501a0b2
 const RTP: &str = "8040f17b8041f8d35501a0b247616c6c696120657374206f6d6e69732064697669736120696e207061727465732074726573";
 
 /// RFC 7714 section 16.1.1
@@ -22,11 +22,10 @@ const SRTP_128: &str = "8040f17b8041f8d35501a0b2f24de3a3fb34de6cacba861c9d7e4bca
 /// RFC 7714 section 16.2.1
 const SRTP_256: &str = "8040f17b8041f8d35501a0b232b1de78a822fe12ef9f78fa332e33aab18012389a58e2f3b50b2a0276ffae0f1ba63799b87b7aa3db36dfffd6b0f9bb7878d7a76c13";
 
-/// The packet that RFC 7714 sections 17.1 to 17.4 actually operate on, SSRC "Mars"
+/// The packet that RFC 7714 sections 17.1 to 17.4 operate on, SSRC "Mars"
 ///
-/// Note that the preamble of section 17 prints a different packet (`81c8000e`, `4e545031`
-/// twice and `0000eb98`) than every subsection encrypts and decrypts. The subsections are
-/// internally consistent with their own AAD and results, so this follows them.
+/// The preamble of section 17 prints a different packet than the subsections encrypt and
+/// decrypt. The subsections are internally consistent, so this follows them.
 const RTCP: &str = "81c8000d4d6172734e5450314e545032525450200000042a0000e9304c756e61deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
 
 /// RFC 7714 section 17.1
@@ -71,19 +70,18 @@ fn check_srtp(profile: SrtpProfile, key: &str, expected: &str) {
     let rtp = hex(RTP);
     let expected = hex(expected);
 
-    // The packet is the first of its stream and carries sequence number 0xf17b, so the
-    // rollover counter is zero, which is what the vector assumes
-    let mut out = Vec::new();
+    // First packet of its stream, so the rollover counter is zero as the vector assumes
+    let mut buf = rtp.clone();
     protector(profile, key)
-        .protect_rtp(&rtp, &mut out)
+        .protect_rtp(&mut buf)
         .expect("protect");
-    assert_eq!(to_hex(&out), to_hex(&expected), "{profile:?} protect");
+    assert_eq!(to_hex(&buf), to_hex(&expected), "{profile:?} protect");
 
-    let mut out = Vec::new();
+    let mut buf = expected.clone();
     unprotector(profile, key)
-        .unprotect_rtp(&expected, &mut out)
+        .unprotect_rtp(&mut buf)
         .expect("unprotect");
-    assert_eq!(to_hex(&out), to_hex(&rtp), "{profile:?} unprotect");
+    assert_eq!(to_hex(&buf), to_hex(&rtp), "{profile:?} unprotect");
 }
 
 #[test]
@@ -101,23 +99,22 @@ fn check_srtcp(profile: SrtpProfile, key: &str, expected: &str) {
     let expected = hex(expected);
 
     // Unprotecting reads the index out of the packet, so it needs no setup
-    let mut out = Vec::new();
+    let mut buf = expected.clone();
     unprotector(profile, key)
-        .unprotect_rtcp(&expected, &mut out)
+        .unprotect_rtcp(&mut buf)
         .expect("unprotect");
-    assert_eq!(to_hex(&out), to_hex(&rtcp), "{profile:?} unprotect");
+    assert_eq!(to_hex(&buf), to_hex(&rtcp), "{profile:?} unprotect");
 
-    // Protecting counts up from index 1, so wind the stream forward to the index the
-    // vector uses. The discarded packets go through the same code path.
+    // Protecting counts up from index 1, so wind the stream forward to the vector's index
     let mut sender = protector(profile, key);
-    let mut scratch = Vec::new();
     for _ in 1..SRTCP_INDEX {
-        sender.protect_rtcp(&rtcp, &mut scratch).expect("protect");
+        let mut scratch = rtcp.clone();
+        sender.protect_rtcp(&mut scratch).expect("protect");
     }
 
-    let mut out = Vec::new();
-    sender.protect_rtcp(&rtcp, &mut out).expect("protect");
-    assert_eq!(to_hex(&out), to_hex(&expected), "{profile:?} protect");
+    let mut buf = rtcp.clone();
+    sender.protect_rtcp(&mut buf).expect("protect");
+    assert_eq!(to_hex(&buf), to_hex(&expected), "{profile:?} protect");
 }
 
 /// RFC 7714 section 17.3: with the `E` flag clear nothing is encrypted and the whole
@@ -127,19 +124,12 @@ fn srtcp_tag_only_is_accepted() {
     let rtcp = hex(RTCP);
     let tagged = hex(SRTCP_128_TAG_ONLY);
 
-    let mut out = Vec::new();
+    let mut buf = tagged.clone();
     unprotector(SrtpProfile::AEAD_AES_128_GCM, KEY_128)
-        .unprotect_rtcp(&tagged, &mut out)
+        .unprotect_rtcp(&mut buf)
         .expect("unprotect");
 
-    assert_eq!(to_hex(&out), to_hex(&rtcp));
-}
-
-fn hex(s: &str) -> Vec<u8> {
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("valid hex"))
-        .collect()
+    assert_eq!(to_hex(&buf), to_hex(&rtcp));
 }
 
 fn to_hex(bytes: &[u8]) -> String {

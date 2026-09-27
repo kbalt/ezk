@@ -16,6 +16,8 @@ pub struct SdpSessionConfig {
     pub rtcp_mux_policy: RtcpMuxPolicy,
     /// Policy to use when offering bundled media over a single transport
     pub bundle_policy: BundlePolicy,
+    /// Wether to offer and accept the SRTP cryptex extension
+    pub enable_cryptex: bool,
     /// Maximum allowed UDP payload size
     pub mtu: Mtu,
     /// Configuration for inbound RTP streams

@@ -81,8 +81,8 @@ impl SrtpKeys {
     /// client_write_SRTP_master_salt || server_write_SRTP_master_salt
     /// ```
     ///
-    /// so each endpoint's key and salt are not adjacent and have to be paired up. Each
-    /// side reads what the other writes, which is what `is_server` selects.
+    /// so each endpoint's key and salt have to be paired up. Each side reads what the
+    /// other writes, which is what `is_server` selects.
     ///
     /// Returns `(inbound, outbound)`.
     pub fn from_keying_material(
@@ -94,14 +94,14 @@ impl SrtpKeys {
         let salt_len = profile.master_salt_len();
         let expected = 2 * (key_len + salt_len);
 
-        if keying_material.len() < expected {
+        if keying_material.len() != expected {
             return Err(SrtpError::BadKeyLength {
                 expected,
                 got: keying_material.len(),
             });
         }
 
-        let (keys, salts) = keying_material[..expected].split_at(2 * key_len);
+        let (keys, salts) = keying_material.split_at(2 * key_len);
         let (client_key, server_key) = keys.split_at(key_len);
         let (client_salt, server_salt) = salts.split_at(salt_len);
 
@@ -121,10 +121,10 @@ impl SrtpKeys {
     }
 }
 
-/// The session keys derived from a master key, shared by every stream using it
+/// The session keys derived from a master key
 ///
-/// Session keys depend only on the master key, master salt and the derivation label, not
-/// on the SSRC, so they are derived once per [`SrtpKeys`] rather than per stream.
+/// These depend only on the master key, master salt and derivation label, not on the
+/// SSRC, so they are shared by every stream using the same [`SrtpKeys`].
 pub(crate) struct SessionKeys {
     pub(crate) profile: SrtpProfile,
 
@@ -139,10 +139,6 @@ pub(crate) struct SessionKeys {
 
 impl SessionKeys {
     /// Build session keys directly, bypassing the key derivation function
-    ///
-    /// The packet level test vectors of RFC 7714 sections 16 and 17 are stated in terms of
-    /// the session key and session salt, not the master key, so they can only be applied
-    /// below the key derivation function.
     #[cfg(test)]
     pub(crate) fn from_session_material(profile: SrtpProfile, key: &[u8], salt: &[u8]) -> Self {
         Self {
@@ -165,8 +161,8 @@ impl SessionKeys {
             out
         };
 
-        // The session salt has the same length as the master salt, the session cipher key
-        // the same length as the master key (RFC 3711 section 4.3.1, RFC 7714 section 12)
+        // Session salt and cipher key have the same lengths as the master salt and master
+        // key (RFC 3711 section 4.3.1, RFC 7714 section 12)
         Self {
             profile,
             rtp_key: derive(LABEL_RTP_ENCRYPTION, profile.master_key_len()),

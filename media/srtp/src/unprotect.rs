@@ -1,22 +1,21 @@
 use std::collections::HashMap;
 
-use crate::cipher::{aes_cm, aes_cm_iv, aes_gcm, aes_gcm_srtcp_iv, aes_gcm_srtp_iv};
-use crate::index::RtpIndex;
-use crate::keys::{SessionKeys, SrtpKeys};
-use crate::packet::{self, RTCP_HEADER_LEN};
-use crate::profile::{SRTCP_INDEX_LEN, SrtpProfile};
-use crate::replay::{DEFAULT_WINDOW, ReplayWindow};
-use crate::{SrtpError, auth};
+use crate::{
+    SrtpError, auth,
+    cipher::{aes_cm, aes_cm_iv, aes_gcm, aes_gcm_srtcp_iv, aes_gcm_srtp_iv},
+    cryptex,
+    index::RtpIndex,
+    keys::{SessionKeys, SrtpKeys},
+    packet::{self, RTCP_HEADER_LEN},
+    profile::{GCM_TAG_LEN, SRTCP_INDEX_LEN, SrtpProfile},
+    replay::{DEFAULT_WINDOW, MAX_WINDOW, MIN_WINDOW, ReplayWindow},
+};
 
 /// Unprotects inbound SRTP and SRTCP packets
-///
-/// One unprotector covers every SSRC received under the same master key. Per stream
-/// state, the rollover counter and the replay windows, is created when the first
-/// *authentic* packet for an SSRC arrives; packets that fail to authenticate leave no
-/// trace, so a peer cannot make the map grow by spoofing SSRCs.
 pub struct SrtpUnprotector {
     keys: SessionKeys,
     window: u16,
+    require_cryptex: bool,
     streams: HashMap<u32, InboundStream>,
 }
 
@@ -42,25 +41,29 @@ impl SrtpUnprotector {
         Self {
             keys: SessionKeys::derive(&keys),
             window: DEFAULT_WINDOW,
+            require_cryptex: false,
             streams: HashMap::new(),
         }
     }
 
-    /// Set the replay window size in packets, rounded up to a multiple of 64
-    ///
-    /// Defaults to 128, which is what libsrtp uses. Has no effect on streams that have
-    /// already received a packet.
+    /// Set the size of the replay windows in packets, rounded up to the next multiple of 64
     pub fn replay_window(mut self, packets: u16) -> Self {
-        self.window = packets;
+        self.window = packets.clamp(MIN_WINDOW, MAX_WINDOW);
         self
     }
 
-    /// Build from session keys directly, for the RFC 7714 packet vectors
+    /// Reject inbound packets that are not cryptex protected
+    pub fn require_cryptex(mut self, required: bool) -> Self {
+        self.require_cryptex = required;
+        self
+    }
+
     #[cfg(test)]
     pub(crate) fn from_session_keys(keys: crate::keys::SessionKeys) -> Self {
         Self {
             keys,
             window: crate::replay::DEFAULT_WINDOW,
+            require_cryptex: false,
             streams: std::collections::HashMap::new(),
         }
     }
@@ -70,182 +73,200 @@ impl SrtpUnprotector {
         self.keys.profile
     }
 
-    /// Replace the keys, keeping the rollover counter and replay windows of every stream
+    /// Replace the keys, keeping the state of every stream
     pub fn rekey(&mut self, keys: SrtpKeys) {
         self.keys = SessionKeys::derive(&keys);
     }
 
-    /// Unprotect an SRTP packet, writing the RTP packet into `out`
+    /// State for `ssrc`, created if absent
     ///
-    /// `out` is cleared first and is left empty when an error is returned, so `srtp` can
-    /// still be inspected or logged by the caller.
-    pub fn unprotect_rtp(&mut self, srtp: &[u8], out: &mut Vec<u8>) -> Result<(), SrtpError> {
-        out.clear();
+    /// Must only be called once a packet has passed authentication, so a peer cannot make
+    /// the receiver allocate by sending forged SSRCs.
+    fn stream_mut(&mut self, ssrc: u32) -> &mut InboundStream {
+        self.streams
+            .entry(ssrc)
+            .or_insert_with(|| InboundStream::new(self.window))
+    }
 
-        let result = self.unprotect_rtp_inner(srtp, out);
+    /// Unprotect an SRTP packet in place, turning `buf` into the RTP packet
+    ///
+    /// `buf` is cleared on error
+    pub fn unprotect_rtp(&mut self, buf: &mut Vec<u8>) -> Result<(), SrtpError> {
+        let result = self.unprotect_rtp_inner(buf);
         if result.is_err() {
-            out.clear();
+            buf.clear();
         }
         result
     }
 
-    fn unprotect_rtp_inner(&mut self, srtp: &[u8], out: &mut Vec<u8>) -> Result<(), SrtpError> {
+    fn unprotect_rtp_inner(&mut self, buf: &mut Vec<u8>) -> Result<(), SrtpError> {
         let profile = self.keys.profile;
         let tag_len = profile.rtp_auth_tag_len();
 
-        let body_len = srtp
+        let body_len = buf
             .len()
             .checked_sub(tag_len)
             .ok_or(SrtpError::PacketTooShort)?;
 
-        let (body, tag) = srtp.split_at(body_len);
-        let header = packet::parse_rtp(body)?;
+        let header = packet::parse_rtp(&buf[..body_len])?;
 
-        // An unknown SSRC is served from a provisional stream that is only inserted once
-        // the packet authenticates. Inserting it up front would let anyone who can reach
-        // the socket allocate per stream state for every spoofed SSRC they care to send,
-        // which is unbounded growth for the cost of one small packet. libsrtp guards the
-        // same way, cloning its template stream only after the auth check passes.
-        let mut provisional = None;
-        let stream = match self.streams.get_mut(&header.ssrc) {
-            Some(stream) => stream,
-            None => provisional.insert(InboundStream::new(self.window)),
+        let plain_profile = cryptex::cryptex_profile_to_profile(&header, self.require_cryptex)?;
+        let enc_start = match plain_profile {
+            Some(_) => cryptex::ENC_START,
+            None => header.payload_offset,
         };
 
-        // The index is only an estimate until the packet is authenticated, so neither the
-        // rollover counter nor the replay window is updated before that succeeds
-        let index = stream.rtp_index.estimate(header.seq);
-        stream.rtp_replay.check(index)?;
+        profile.check_cipher_len(body_len - enc_start)?;
 
-        out.reserve(body.len());
+        // An unknown SSRC has no state, its index is just the sequence number
+        // and its replay window is empty, so neither check can fail
+        let index = match self.streams.get(&header.ssrc) {
+            Some(stream) => {
+                let index = stream.rtp_index.estimate(header.seq);
+                stream.rtp_replay.check(index)?;
+                index
+            }
+            None => u64::from(header.seq),
+        };
 
         if profile.is_aead() {
-            out.extend_from_slice(body);
+            if plain_profile.is_some() {
+                cryptex::to_cipher_order(buf, header.csrc_count);
+            }
 
             let iv = aes_gcm_srtp_iv(&self.keys.rtp_salt, header.ssrc, index);
-            let (aad, ciphertext) = out.split_at_mut(header.payload_offset);
+            let (body, tag) = buf.split_at_mut(body_len);
+            let (aad, ciphertext) = body.split_at_mut(enc_start);
             aes_gcm::open(&self.keys.rtp_key, &iv, aad, ciphertext, tag)?;
         } else {
+            // The tag covers the packet in wire order, so verify before swapping
             let roc = RtpIndex::roc_of(index).to_be_bytes();
+            let (body, tag) = buf.split_at(body_len);
             if !auth::verify(&self.keys.rtp_auth, &[body, &roc], tag) {
                 return Err(SrtpError::AuthFailed);
             }
 
-            out.extend_from_slice(body);
+            if plain_profile.is_some() {
+                cryptex::to_cipher_order(buf, header.csrc_count);
+            }
 
             let iv = aes_cm_iv(&self.keys.rtp_salt, header.ssrc, index);
-            aes_cm::apply(&self.keys.rtp_key, &iv, &mut out[header.payload_offset..]);
+            aes_cm::apply(&self.keys.rtp_key, &iv, &mut buf[enc_start..body_len])?;
         }
 
+        if let Some(plain_profile) = plain_profile {
+            cryptex::to_wire_order(buf, header.csrc_count);
+            cryptex::set_extension_profile(buf, header.csrc_count, plain_profile);
+        }
+
+        buf.truncate(body_len);
+
+        // Verified, so it is now worth keeping state for this SSRC
+        let stream = self.stream_mut(header.ssrc);
         stream.rtp_index.commit(index);
         stream.rtp_replay.add(index);
-
-        // The packet is genuine, so this SSRC has earned its state
-        if let Some(stream) = provisional {
-            self.streams.insert(header.ssrc, stream);
-        }
 
         Ok(())
     }
 
-    /// Unprotect an SRTCP packet, writing the RTCP packet into `out`
+    /// Unprotect an SRTCP packet in place, turning `buf` into the RTCP packet
     ///
-    /// `out` is cleared first and is left empty when an error is returned.
-    pub fn unprotect_rtcp(&mut self, srtcp: &[u8], out: &mut Vec<u8>) -> Result<(), SrtpError> {
-        out.clear();
-
-        let result = self.unprotect_rtcp_inner(srtcp, out);
+    /// `buf` is cleared on error
+    pub fn unprotect_rtcp(&mut self, buf: &mut Vec<u8>) -> Result<(), SrtpError> {
+        let result = self.unprotect_rtcp_inner(buf);
         if result.is_err() {
-            out.clear();
+            buf.clear();
         }
         result
     }
 
-    fn unprotect_rtcp_inner(&mut self, srtcp: &[u8], out: &mut Vec<u8>) -> Result<(), SrtpError> {
+    fn unprotect_rtcp_inner(&mut self, buf: &mut Vec<u8>) -> Result<(), SrtpError> {
         let profile = self.keys.profile;
         let tag_len = profile.rtcp_auth_tag_len();
 
-        if srtcp.len() < RTCP_HEADER_LEN + tag_len + SRTCP_INDEX_LEN {
+        if buf.len() < RTCP_HEADER_LEN + tag_len + SRTCP_INDEX_LEN {
             return Err(SrtpError::PacketTooShort);
         }
 
-        let ssrc = packet::parse_rtcp_ssrc(srtcp)?;
+        let ssrc = packet::parse_rtcp_ssrc(buf)?;
 
         // The AEAD profiles put the tag before the index trailer (RFC 7714 section 9.1),
         // the counter mode profiles put it after (RFC 3711 section 3.4)
-        let (payload_end, e_index_bytes, tag) = if profile.is_aead() {
-            let index_at = srtcp.len() - SRTCP_INDEX_LEN;
+        let (payload_end, index_at, tag_at) = if profile.is_aead() {
+            let index_at = buf.len() - SRTCP_INDEX_LEN;
             let tag_at = index_at - tag_len;
-            (tag_at, &srtcp[index_at..], &srtcp[tag_at..index_at])
+            (tag_at, index_at, tag_at)
         } else {
-            let tag_at = srtcp.len() - tag_len;
+            let tag_at = buf.len() - tag_len;
             let index_at = tag_at - SRTCP_INDEX_LEN;
-            (index_at, &srtcp[index_at..tag_at], &srtcp[tag_at..])
+            (index_at, index_at, tag_at)
         };
 
-        let e_index = u32::from_be_bytes(
-            e_index_bytes
-                .try_into()
-                .map_err(|_| SrtpError::MalformedPacket)?,
-        );
+        profile.check_cipher_len(payload_end - RTCP_HEADER_LEN)?;
+
+        // Copied out of the buffer so that the rest can be decrypted in place
+        let mut e_index_bytes = [0u8; SRTCP_INDEX_LEN];
+        e_index_bytes.copy_from_slice(&buf[index_at..index_at + SRTCP_INDEX_LEN]);
+
+        let mut tag = [0u8; GCM_TAG_LEN];
+        let tag = &mut tag[..tag_len];
+        tag.copy_from_slice(&buf[tag_at..tag_at + tag_len]);
+
+        let e_index = u32::from_be_bytes(e_index_bytes);
         let encrypted = e_index & 0x8000_0000 != 0;
         let index = e_index & 0x7fff_ffff;
 
-        // Provisional until the packet authenticates, see `unprotect_rtp_inner`
-        let mut provisional = None;
-        let stream = match self.streams.get_mut(&ssrc) {
-            Some(stream) => stream,
-            None => provisional.insert(InboundStream::new(self.window)),
-        };
-
-        stream.rtcp_replay.check(u64::from(index))?;
+        // As for SRTP, an unseen SSRC has an empty replay window that accepts anything
+        if let Some(stream) = self.streams.get(&ssrc) {
+            stream.rtcp_replay.check(u64::from(index))?;
+        }
 
         if profile.is_aead() {
             let iv = aes_gcm_srtcp_iv(&self.keys.rtcp_salt, ssrc, index);
 
             if encrypted {
                 let mut aad = [0u8; RTCP_HEADER_LEN + SRTCP_INDEX_LEN];
-                aad[..RTCP_HEADER_LEN].copy_from_slice(&srtcp[..RTCP_HEADER_LEN]);
-                aad[RTCP_HEADER_LEN..].copy_from_slice(e_index_bytes);
+                aad[..RTCP_HEADER_LEN].copy_from_slice(&buf[..RTCP_HEADER_LEN]);
+                aad[RTCP_HEADER_LEN..].copy_from_slice(&e_index_bytes);
 
-                out.extend_from_slice(&srtcp[..payload_end]);
                 aes_gcm::open(
                     &self.keys.rtcp_key,
                     &iv,
                     &aad,
-                    &mut out[RTCP_HEADER_LEN..],
+                    &mut buf[RTCP_HEADER_LEN..payload_end],
                     tag,
                 )?;
             } else {
                 // RFC 7714 section 9.2: with the E flag clear nothing is encrypted and
-                // the entire packet is associated data
-                let mut aad = Vec::with_capacity(payload_end + SRTCP_INDEX_LEN);
-                aad.extend_from_slice(&srtcp[..payload_end]);
-                aad.extend_from_slice(e_index_bytes);
+                // the whole packet plus the index trailer is associated data. The two are
+                // not adjacent on the wire, so the trailer is moved over the tag, which
+                // has already been copied out.
+                buf.copy_within(index_at..index_at + SRTCP_INDEX_LEN, payload_end);
 
-                aes_gcm::open(&self.keys.rtcp_key, &iv, &aad, &mut [], tag)?;
-                out.extend_from_slice(&srtcp[..payload_end]);
+                let aad_end = payload_end + SRTCP_INDEX_LEN;
+                aes_gcm::open(&self.keys.rtcp_key, &iv, &buf[..aad_end], &mut [], tag)?;
             }
         } else {
             // The authenticated portion covers the header, the payload and the trailer
-            let authenticated = &srtcp[..payload_end + SRTCP_INDEX_LEN];
+            let authenticated = &buf[..payload_end + SRTCP_INDEX_LEN];
             if !auth::verify(&self.keys.rtcp_auth, &[authenticated], tag) {
                 return Err(SrtpError::AuthFailed);
             }
 
-            out.extend_from_slice(&srtcp[..payload_end]);
-
             if encrypted {
                 let iv = aes_cm_iv(&self.keys.rtcp_salt, ssrc, u64::from(index));
-                aes_cm::apply(&self.keys.rtcp_key, &iv, &mut out[RTCP_HEADER_LEN..]);
+                aes_cm::apply(
+                    &self.keys.rtcp_key,
+                    &iv,
+                    &mut buf[RTCP_HEADER_LEN..payload_end],
+                )?;
             }
         }
 
-        stream.rtcp_replay.add(u64::from(index));
+        buf.truncate(payload_end);
 
-        if let Some(stream) = provisional {
-            self.streams.insert(ssrc, stream);
-        }
+        // Verified, so it is now worth keeping state for this SSRC
+        self.stream_mut(ssrc).rtcp_replay.add(u64::from(index));
 
         Ok(())
     }
@@ -255,17 +276,55 @@ impl SrtpUnprotector {
 mod test {
     use super::*;
     use crate::{SrtpKeys, SrtpProfile, SrtpProtector};
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
 
-    fn keys(profile: SrtpProfile) -> SrtpKeys {
-        let material = vec![0x5au8; profile.key_and_salt_len()];
+    thread_local! {
+        static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
+    }
+
+    struct CountingAllocator;
+
+    unsafe impl GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let _ = ALLOCATIONS.try_with(|c| c.set(c.get() + 1));
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            let _ = ALLOCATIONS.try_with(|c| c.set(c.get() + 1));
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+    }
+
+    #[global_allocator]
+    static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+    fn generate_test_keys(profile: SrtpProfile, key: u8) -> SrtpKeys {
+        let material = vec![key; profile.key_and_salt_len()];
         SrtpKeys::from_concatenated(profile, &material).expect("valid keys")
     }
 
-    fn rtp_with_ssrc(ssrc: u32, seq: u16) -> Vec<u8> {
+    fn generate_test_rtp_packet(ssrc: u32, seq: u16) -> Vec<u8> {
         let mut pkt = vec![0x80, 0x60];
         pkt.extend_from_slice(&seq.to_be_bytes());
         pkt.extend_from_slice(&[0, 0, 0, 0]);
         pkt.extend_from_slice(&ssrc.to_be_bytes());
+        pkt.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        pkt
+    }
+
+    fn generate_cryptex_rtp_packet(ssrc: u32, seq: u16) -> Vec<u8> {
+        let mut pkt = vec![0x92, 0x60];
+        pkt.extend_from_slice(&seq.to_be_bytes());
+        pkt.extend_from_slice(&[0, 0, 0, 0]);
+        pkt.extend_from_slice(&ssrc.to_be_bytes());
+        pkt.extend_from_slice(&[0x11; 8]);
+        pkt.extend_from_slice(&[0xbe, 0xde, 0x00, 0x01, 0x10, 0xaa, 0x00, 0x00]);
         pkt.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
         pkt
     }
@@ -276,33 +335,24 @@ mod test {
         pkt
     }
 
-    /// An attacker who can reach the socket must not be able to make us allocate per
-    /// stream state, or every spoofed SSRC costs us memory for the price of one packet.
-    /// libsrtp only clones its template stream after the auth check, and so do we.
     #[test]
     fn unauthenticated_packets_do_not_allocate_stream_state() {
         for &profile in SrtpProfile::ALL {
-            // Protected with one key, received with another, so nothing authenticates
-            let mut forger = SrtpProtector::new(keys(profile));
-            let mut receiver = SrtpUnprotector::new(
-                SrtpKeys::from_concatenated(profile, &vec![0xa5u8; profile.key_and_salt_len()])
-                    .expect("valid keys"),
-            );
-
-            let mut out = Vec::new();
+            let mut forger = SrtpProtector::new(generate_test_keys(profile, 0)).cryptex(true);
+            let mut receiver = SrtpUnprotector::new(generate_test_keys(profile, 1));
 
             for ssrc in 0..500u32 {
-                let mut forged = Vec::new();
-                forger
-                    .protect_rtp(&rtp_with_ssrc(ssrc, 1), &mut forged)
-                    .expect("protect");
-                assert!(receiver.unprotect_rtp(&forged, &mut out).is_err());
+                let mut forged = generate_test_rtp_packet(ssrc, 1);
+                forger.protect_rtp(&mut forged).unwrap();
+                assert!(receiver.unprotect_rtp(&mut forged).is_err());
 
-                let mut forged = Vec::new();
-                forger
-                    .protect_rtcp(&rtcp_with_ssrc(ssrc), &mut forged)
-                    .expect("protect");
-                assert!(receiver.unprotect_rtcp(&forged, &mut out).is_err());
+                let mut forged = generate_cryptex_rtp_packet(ssrc, 2);
+                forger.protect_rtp(&mut forged).unwrap();
+                assert!(receiver.unprotect_rtp(&mut forged).is_err());
+
+                let mut forged = rtcp_with_ssrc(ssrc);
+                forger.protect_rtcp(&mut forged).unwrap();
+                assert!(receiver.unprotect_rtcp(&mut forged).is_err());
             }
 
             assert_eq!(
@@ -313,38 +363,96 @@ mod test {
         }
     }
 
-    /// The flip side: a genuine packet must still get lasting state, otherwise the
-    /// rollover counter and replay window would reset on every packet
+    #[test]
+    fn the_replay_window_is_clamped_to_a_usable_range() {
+        let profile = SrtpProfile::AEAD_AES_128_GCM;
+
+        for (asked, expected) in [
+            (0u16, MIN_WINDOW),
+            (1, MIN_WINDOW),
+            (63, MIN_WINDOW),
+            (64, 64),
+            (4096, 4096),
+            (MAX_WINDOW, MAX_WINDOW),
+            (u16::MAX, MAX_WINDOW),
+        ] {
+            let receiver =
+                SrtpUnprotector::new(generate_test_keys(profile, 0)).replay_window(asked);
+
+            assert_eq!(receiver.window, expected, "asked for {asked}");
+        }
+    }
+
+    #[test]
+    fn unauthenticated_packets_do_not_allocate() {
+        for &profile in SrtpProfile::ALL {
+            let mut forger = SrtpProtector::new(generate_test_keys(profile, 0));
+            let mut receiver = SrtpUnprotector::new(generate_test_keys(profile, 1));
+
+            // Warm the working buffer and stream map so the measurement sees only what
+            // handling the packet itself costs. Unprotecting consumes the buffer, so the
+            // forged packets are copied into it rather than passed directly.
+            let mut buf = Vec::with_capacity(4096);
+            receiver.streams.reserve(64);
+
+            let mut forged_rtp = generate_test_rtp_packet(1, 1);
+            forger.protect_rtp(&mut forged_rtp).unwrap();
+            forger.set_cryptex(true);
+            let mut forged_cryptex = generate_cryptex_rtp_packet(1, 2);
+            forger.protect_rtp(&mut forged_cryptex).unwrap();
+            let mut forged_rtcp = rtcp_with_ssrc(1);
+            forger.protect_rtcp(&mut forged_rtcp).unwrap();
+
+            let before = ALLOCATIONS.with(|c| c.get());
+
+            for ssrc in 0..200u32 {
+                // Rewrite the SSRC so every packet looks like a new stream
+                forged_rtp[8..12].copy_from_slice(&ssrc.to_be_bytes());
+                buf.clear();
+                buf.extend_from_slice(&forged_rtp);
+                assert!(receiver.unprotect_rtp(&mut buf).is_err());
+
+                forged_cryptex[8..12].copy_from_slice(&ssrc.to_be_bytes());
+                buf.clear();
+                buf.extend_from_slice(&forged_cryptex);
+                assert!(receiver.unprotect_rtp(&mut buf).is_err());
+
+                forged_rtcp[4..8].copy_from_slice(&ssrc.to_be_bytes());
+                buf.clear();
+                buf.extend_from_slice(&forged_rtcp);
+                assert!(receiver.unprotect_rtcp(&mut buf).is_err());
+            }
+
+            assert_eq!(
+                ALLOCATIONS.with(|c| c.get()) - before,
+                0,
+                "{profile:?} allocated while rejecting forged packets"
+            );
+        }
+    }
+
     #[test]
     fn authenticated_packets_do_allocate_stream_state() {
         for &profile in SrtpProfile::ALL {
-            let mut sender = SrtpProtector::new(keys(profile));
-            let mut receiver = SrtpUnprotector::new(keys(profile));
-            let mut out = Vec::new();
+            let mut sender = SrtpProtector::new(generate_test_keys(profile, 0));
+            let mut receiver = SrtpUnprotector::new(generate_test_keys(profile, 0));
 
             for ssrc in 0..3u32 {
-                let mut protected = Vec::new();
-                sender
-                    .protect_rtp(&rtp_with_ssrc(ssrc, 1), &mut protected)
-                    .expect("protect");
-                receiver
-                    .unprotect_rtp(&protected, &mut out)
-                    .expect("unprotect");
+                let mut buf = generate_test_rtp_packet(ssrc, 1);
+                sender.protect_rtp(&mut buf).expect("protect");
+                receiver.unprotect_rtp(&mut buf).expect("unprotect");
             }
 
             assert_eq!(receiver.streams.len(), 3, "{profile:?}");
 
-            // And the retained state must actually be used: a replay is now detected,
-            // which is only possible if the window survived the first delivery
-            let mut protected = Vec::new();
-            sender
-                .protect_rtp(&rtp_with_ssrc(0, 2), &mut protected)
-                .expect("protect");
-            receiver
-                .unprotect_rtp(&protected, &mut out)
-                .expect("unprotect");
+            // The retained state must be used, a replay is only detected if the window survived the first delivery
+            let mut protected = generate_test_rtp_packet(0, 2);
+            sender.protect_rtp(&mut protected).expect("protect");
+
+            let mut replay = protected.clone();
+            receiver.unprotect_rtp(&mut protected).expect("unprotect");
             assert_eq!(
-                receiver.unprotect_rtp(&protected, &mut out),
+                receiver.unprotect_rtp(&mut replay),
                 Err(SrtpError::ReplayFail),
                 "{profile:?}"
             );

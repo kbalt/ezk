@@ -1,5 +1,13 @@
 use bytes::BufMut;
 
+/// RFC 8285 section 4.2
+pub(crate) const PROFILE_ONE_BYTE: u16 = 0xBEDE;
+
+/// RFC 8285 section 4.3, only the top 12 bits are fixed, the low 4 are the appbits
+pub(crate) const PROFILE_TWO_BYTE: u16 = 0x1000;
+
+const PROFILE_TWO_BYTE_MASK: u16 = 0xFFF0;
+
 pub(crate) struct RtpExtensionsWriter {
     buffer: Vec<u8>,
     len: usize,
@@ -48,12 +56,16 @@ impl RtpExtensionsWriter {
     }
 
     pub(crate) fn finish(mut self) -> (u16, Vec<u8>) {
-        let id = if self.two_byte { 0x0100 } else { 0xBEDE };
+        let profile = if self.two_byte {
+            PROFILE_TWO_BYTE
+        } else {
+            PROFILE_ONE_BYTE
+        };
 
         let padding = padding_32_bit_boundry(self.len);
         self.buffer.put_bytes(0, padding);
 
-        (id, self.buffer)
+        (profile, self.buffer)
     }
 }
 
@@ -76,9 +88,9 @@ impl<T: Iterator, U: Iterator<Item = T::Item>> Iterator for ExtensionsIter<T, U>
 }
 
 pub(crate) fn parse_extensions(profile: u16, data: &[u8]) -> impl Iterator<Item = (u8, &[u8])> {
-    if profile == 0xBEDE {
+    if profile == PROFILE_ONE_BYTE {
         ExtensionsIter::OneByte(parse_onebyte(data))
-    } else if (profile & 0xFFF) == 0x100 {
+    } else if (profile & PROFILE_TWO_BYTE_MASK) == PROFILE_TWO_BYTE {
         ExtensionsIter::TwoBytes(parse_twobyte(data))
     } else {
         ExtensionsIter::None
@@ -112,7 +124,7 @@ fn parse_onebyte(mut data: &[u8]) -> impl Iterator<Item = (u8, &[u8])> {
     })
 }
 
-// https://www.rfc-editor.org/rfc/rfc5285#section-4.3
+// https://www.rfc-editor.org/rfc/rfc8285#section-4.3
 fn parse_twobyte(mut data: &[u8]) -> impl Iterator<Item = (u8, &[u8])> {
     std::iter::from_fn(move || {
         let &[id, len, ref remaining @ ..] = data else {

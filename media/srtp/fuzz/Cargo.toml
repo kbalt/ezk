@@ -7,8 +7,6 @@ edition = "2024"
 [package.metadata]
 cargo-fuzz = true
 
-# Its own workspace so the fuzz crate, which needs a nightly toolchain and sanitizer
-# flags, stays out of the normal `cargo build --workspace`
 [workspace]
 
 [dependencies]
@@ -29,5 +27,3 @@ test = false
 doc = false
 bench = false
 
-[profile.release]
-debug = 1

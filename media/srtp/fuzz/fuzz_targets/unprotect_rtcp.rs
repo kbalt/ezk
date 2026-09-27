@@ -1,6 +1,3 @@
-//! See `unprotect_rtp`. SRTCP has a second attacker controlled length, the index
-//! trailer, and two different tag placements depending on the profile, so it gets its
-//! own target.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
@@ -12,7 +9,7 @@ fuzz_target!(|data: &[u8]| {
         let keys = SrtpKeys::from_concatenated(profile, &material).expect("valid keys");
         let mut receiver = SrtpUnprotector::new(keys);
 
-        let mut out = Vec::new();
-        let _ = receiver.unprotect_rtcp(data, &mut out);
+        let mut buf = data.to_vec();
+        let _ = receiver.unprotect_rtcp(&mut buf);
     }
 });

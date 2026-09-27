@@ -26,6 +26,7 @@ pub enum SdesSrtpNegotiationError {
 
 pub(super) fn negotiate_from_offer(
     remote_crypto: &[SrtpCrypto],
+    cryptex: bool,
 ) -> Result<RtpSdesSrtpTransport, SdesSrtpNegotiationError> {
     let crypto = SUITES
         .iter()
@@ -44,7 +45,8 @@ pub(super) fn negotiate_from_offer(
     rand::rng().fill_bytes(&mut send_key);
 
     let inbound = SrtpUnprotector::new(SrtpKeys::from_concatenated(profile, &recv_key)?);
-    let outbound = SrtpProtector::new(SrtpKeys::from_concatenated(profile, &send_key)?);
+    let outbound =
+        SrtpProtector::new(SrtpKeys::from_concatenated(profile, &send_key)?).cryptex(cryptex);
 
     Ok(RtpSdesSrtpTransport::new(
         SrtpCrypto {
@@ -57,6 +59,7 @@ pub(super) fn negotiate_from_offer(
             }],
             params: vec![],
         },
+        cryptex,
         inbound,
         outbound,
     ))
@@ -102,6 +105,7 @@ impl SdesSrtpOffer {
     pub(super) fn receive_answer(
         self,
         remote_crypto: &[SrtpCrypto],
+        cryptex: bool,
     ) -> Result<RtpSdesSrtpTransport, SdesSrtpNegotiationError> {
         for (index, (suite, send_key)) in self.keys.into_iter().enumerate() {
             let tag = index as u32 + 1;
@@ -129,10 +133,12 @@ impl SdesSrtpOffer {
             let profile = srtp_suite_to_profile(&suite).expect("suite is one we offered");
 
             let inbound = SrtpUnprotector::new(SrtpKeys::from_concatenated(profile, &recv_key)?);
-            let outbound = SrtpProtector::new(SrtpKeys::from_concatenated(profile, &send_key)?);
+            let outbound = SrtpProtector::new(SrtpKeys::from_concatenated(profile, &send_key)?)
+                .cryptex(cryptex);
 
             return Ok(RtpSdesSrtpTransport::new(
                 local_sdp_crypto,
+                cryptex,
                 inbound,
                 outbound,
             ));

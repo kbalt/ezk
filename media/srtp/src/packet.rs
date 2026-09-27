@@ -1,23 +1,25 @@
 use crate::SrtpError;
 
-/// Length of the fixed RTP header (RFC 3550 section 5.1)
+/// Minimum length of the RTP header
 pub(crate) const RTP_HEADER_LEN: usize = 12;
 
 /// Length of the fixed RTCP header up to and including the sender SSRC, which is the part
 /// SRTCP leaves in the clear (RFC 3711 section 3.4)
 pub(crate) const RTCP_HEADER_LEN: usize = 8;
 
+/// "Defined by profile" field plus the extension length in 32 bit words
+pub(crate) const RTP_EXT_HEADER_LEN: usize = 4;
+
 /// The parts of an RTP header that SRTP needs
 pub(crate) struct RtpHeader {
-    /// Offset of the payload, i.e. the length of the header including CSRC list and
-    /// header extension. This is the start of the encrypted portion for the counter mode
-    /// profiles and the length of the AAD for the AEAD profiles.
+    /// Length of the header including CSRC list and header extension
     pub(crate) payload_offset: usize,
+    pub(crate) csrc_count: usize,
+    pub(crate) extension_profile: Option<u16>,
     pub(crate) seq: u16,
     pub(crate) ssrc: u32,
 }
 
-/// Locate the payload of an RTP packet and read its sequence number and SSRC
 pub(crate) fn parse_rtp(pkt: &[u8]) -> Result<RtpHeader, SrtpError> {
     if pkt.len() < RTP_HEADER_LEN {
         return Err(SrtpError::PacketTooShort);
@@ -30,16 +32,22 @@ pub(crate) fn parse_rtp(pkt: &[u8]) -> Result<RtpHeader, SrtpError> {
     let ssrc = u32::from_be_bytes([pkt[8], pkt[9], pkt[10], pkt[11]]);
 
     let mut payload_offset = RTP_HEADER_LEN + csrc_count * 4;
+    let mut extension_profile = None;
 
     if has_extension {
         // 16 bit profile identifier, 16 bit length in 32 bit words, then the extension
         let header_end = payload_offset
-            .checked_add(4)
+            .checked_add(RTP_EXT_HEADER_LEN)
             .ok_or(SrtpError::MalformedPacket)?;
 
         if pkt.len() < header_end {
             return Err(SrtpError::MalformedPacket);
         }
+
+        extension_profile = Some(u16::from_be_bytes([
+            pkt[payload_offset],
+            pkt[payload_offset + 1],
+        ]));
 
         let words = usize::from(u16::from_be_bytes([
             pkt[payload_offset + 2],
@@ -57,12 +65,13 @@ pub(crate) fn parse_rtp(pkt: &[u8]) -> Result<RtpHeader, SrtpError> {
 
     Ok(RtpHeader {
         payload_offset,
+        csrc_count,
+        extension_profile,
         seq,
         ssrc,
     })
 }
 
-/// Read the sender SSRC of an RTCP packet
 pub(crate) fn parse_rtcp_ssrc(pkt: &[u8]) -> Result<u32, SrtpError> {
     if pkt.len() < RTCP_HEADER_LEN {
         return Err(SrtpError::PacketTooShort);
@@ -88,6 +97,48 @@ mod test {
     }
 
     #[test]
+    fn the_extension_profile_is_reported() {
+        for profile in [0xbedeu16, 0x1000, 0x100f, 0xc0de, 0xc2de, 0xabcd] {
+            let mut pkt = vec![0x90, 0x60, 0, 0];
+            pkt.extend_from_slice(&[0; 8]);
+            pkt.extend_from_slice(&profile.to_be_bytes());
+            pkt.extend_from_slice(&[0x00, 0x00]); // zero length extension
+
+            let hdr = parse_rtp(&pkt).unwrap();
+            assert_eq!(hdr.extension_profile, Some(profile), "{profile:#06x}");
+            assert_eq!(hdr.csrc_count, 0);
+            assert_eq!(hdr.payload_offset, 16);
+        }
+    }
+
+    #[test]
+    fn a_packet_without_an_extension_reports_no_profile() {
+        // 2 csrcs, X clear
+        let mut pkt = vec![0x82, 0x60, 0, 0];
+        pkt.extend_from_slice(&[0; 8]);
+        pkt.extend_from_slice(&[0; 8]);
+
+        let hdr = parse_rtp(&pkt).unwrap();
+        assert_eq!(hdr.extension_profile, None);
+        assert_eq!(hdr.csrc_count, 2);
+        assert_eq!(hdr.payload_offset, 20);
+    }
+
+    #[test]
+    fn a_zero_length_extension_after_csrcs_is_accepted() {
+        let mut pkt = vec![0x92, 0x60, 0, 0];
+        pkt.extend_from_slice(&[0; 8]);
+        pkt.extend_from_slice(&[0; 8]); // 2 contributing sources
+        pkt.extend_from_slice(&[0xc0, 0xde, 0x00, 0x00]);
+        pkt.extend_from_slice(&[1, 2, 3]);
+
+        let hdr = parse_rtp(&pkt).unwrap();
+        assert_eq!(hdr.extension_profile, Some(0xc0de));
+        assert_eq!(hdr.csrc_count, 2);
+        assert_eq!(hdr.payload_offset, 24);
+    }
+
+    #[test]
     fn csrc_list_and_extension_are_part_of_the_header() {
         // 2 CSRCs and a one word header extension
         let mut pkt = vec![0x92, 0x60, 0x00, 0x01];
@@ -100,6 +151,8 @@ mod test {
 
         let hdr = parse_rtp(&pkt).unwrap();
         assert_eq!(hdr.payload_offset, 12 + 8 + 4 + 4);
+        assert_eq!(hdr.csrc_count, 2);
+        assert_eq!(hdr.extension_profile, Some(0xbede));
     }
 
     #[test]

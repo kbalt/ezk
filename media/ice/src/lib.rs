@@ -1318,7 +1318,7 @@ impl IceAgent {
             let nomination_in_flight = self.pairs.iter().any(|p| {
                 p.component == component && p.nomination == CandidatePairNomination::Nominated
             });
-            
+
             if nomination_in_flight {
                 return;
             }
@@ -1479,7 +1479,6 @@ impl IceAgent {
             .collect()
     }
 }
-
 
 fn host_address_preference(ip: IpAddr) -> u32 {
     match ip {

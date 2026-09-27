@@ -1,10 +1,16 @@
 use crate::SrtpError;
 
-/// Default replay window size in packets
-///
-/// Matches libsrtp's default, which is what the peers on the other end of a WebRTC or
-/// SIP call almost always use.
+/// Default replay window size in packets, matching libsrtp
 pub(crate) const DEFAULT_WINDOW: u16 = 128;
+
+/// Smallest replay window a caller may ask for (RFC 3711 section 3.3.2)
+pub(crate) const MIN_WINDOW: u16 = 64;
+
+/// Largest replay window a caller may ask for
+///
+/// The index estimation of RFC 3711 appendix A only reaches half the sequence number
+/// space in either direction, so a wider window can never be filled by a genuine packet.
+pub(crate) const MAX_WINDOW: u16 = 32768;
 
 /// Sliding window replay protection (RFC 3711 section 3.3.2)
 ///
@@ -27,8 +33,10 @@ impl Default for ReplayWindow {
 
 impl ReplayWindow {
     /// Create a window covering at least `packets` indices
+    ///
+    /// The bitmap is made of 64 bit words, so `packets` is rounded up to a multiple of 64.
     pub(crate) fn new(packets: u16) -> Self {
-        let words = (usize::from(packets.max(1)).div_ceil(64)).max(1);
+        let words = usize::from(packets).div_ceil(64).max(1);
 
         Self {
             latest: 0,
@@ -45,8 +53,7 @@ impl ReplayWindow {
     /// Check whether `index` may still be processed
     ///
     /// Call this before decrypting, and [`ReplayWindow::add`] only once the packet has
-    /// been authenticated. Accepting an index into the window before authentication would
-    /// let a forged packet lock out the genuine one.
+    /// been authenticated, so a forged packet cannot lock out the genuine one.
     pub(crate) fn check(&self, index: u64) -> Result<(), SrtpError> {
         if self.empty || index > self.latest {
             return Ok(());
@@ -187,6 +194,41 @@ mod test {
 
         assert_eq!(w.check(10), Err(SrtpError::ReplayOld));
         assert_eq!(w.check(10_000), Err(SrtpError::ReplayFail));
+    }
+
+    #[test]
+    fn the_window_covers_exactly_the_requested_number_of_packets() {
+        for packets in [64u16, 128, 192, 1024, 32768] {
+            let mut w = ReplayWindow::new(packets);
+            assert_eq!(w.size(), u64::from(packets), "window of {packets}");
+
+            let latest = 1_000_000;
+            w.add(latest);
+
+            let oldest_inside = latest - (u64::from(packets) - 1);
+            assert_eq!(w.check(oldest_inside), Ok(()), "window of {packets}");
+            assert_eq!(
+                w.check(oldest_inside - 1),
+                Err(SrtpError::ReplayOld),
+                "window of {packets}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_window_is_rounded_up_to_a_whole_word() {
+        assert_eq!(ReplayWindow::new(1).size(), 64);
+        assert_eq!(ReplayWindow::new(63).size(), 64);
+        assert_eq!(ReplayWindow::new(65).size(), 128);
+        // Zero must not produce an empty bitmap, which would panic on indexing
+        assert_eq!(ReplayWindow::new(0).size(), 64);
+        assert_eq!(ReplayWindow::new(0).check(0), Ok(()));
+    }
+
+    #[test]
+    fn the_default_window_matches_libsrtp() {
+        assert_eq!(ReplayWindow::default().size(), u64::from(DEFAULT_WINDOW));
+        assert_eq!(DEFAULT_WINDOW, 128);
     }
 
     #[test]

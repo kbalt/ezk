@@ -4,17 +4,12 @@ use subtle::ConstantTimeEq;
 
 use crate::profile::HMAC_SHA1_KEY_LEN;
 
-type HmacSha1 = Hmac<Sha1>;
-
 /// Compute the HMAC-SHA1 of `parts` concatenated, truncated into `tag`
-///
-/// This is the authentication transform of RFC 3711 section 4.2. The caller passes the
-/// authenticated portion in `parts` so that the trailing rollover counter of SRTP does
-/// not have to be copied into a contiguous buffer.
+/// (RFC 3711 section 4.2)
 pub(crate) fn tag(key: &[u8], parts: &[&[u8]], tag: &mut [u8]) {
     debug_assert!(tag.len() <= HMAC_SHA1_KEY_LEN);
 
-    let mut mac = HmacSha1::new_from_slice(key).expect("HMAC accepts keys of any length");
+    let mut mac = Hmac::<Sha1>::new_from_slice(key).expect("HMAC accepts keys of any length");
     for part in parts {
         mac.update(part);
     }

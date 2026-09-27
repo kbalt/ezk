@@ -13,9 +13,6 @@ pub enum DtlsSetup {
     Connect,
 }
 
-// The protector and unprotector hold the session keys and per SSRC state inline rather
-// than behind a pointer, as the old libsrtp context did. There is one of these per media
-// session, so the size difference does not matter, same as for `Connectivity`.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum DtlsState {
     Accepting,
@@ -35,8 +32,12 @@ pub struct RtpDtlsSrtpTransport {
     out_buf: Vec<u8>,
 
     peer_fingerprint: Vec<u8>,
+    peer_fingerprint_verified: bool,
 
     setup: DtlsSetup,
+
+    cryptex: bool,
+
     state: DtlsState,
 
     events: VecDeque<Vec<u8>>,
@@ -48,6 +49,7 @@ impl RtpDtlsSrtpTransport {
         certificate: dimpl::DtlsCertificate,
         peer_fingerprint: Vec<u8>,
         setup: DtlsSetup,
+        cryptex: bool,
         now: Instant,
     ) -> Self {
         let mut dtls = Dtls::new_auto(config, certificate, now);
@@ -63,7 +65,9 @@ impl RtpDtlsSrtpTransport {
             timeout: Some(now),
             out_buf: vec![0u8; 2000],
             peer_fingerprint,
+            peer_fingerprint_verified: false,
             setup,
+            cryptex,
             state: match setup {
                 DtlsSetup::Accept => DtlsState::Accepting,
                 DtlsSetup::Connect => DtlsState::Connecting,
@@ -78,6 +82,10 @@ impl RtpDtlsSrtpTransport {
 
     pub fn setup(&self) -> DtlsSetup {
         self.setup
+    }
+
+    pub fn cryptex(&self) -> bool {
+        self.cryptex
     }
 
     pub(crate) fn state(&self) -> &DtlsState {
@@ -103,7 +111,6 @@ impl RtpDtlsSrtpTransport {
 
         if let Err(err) = self.dtls.handle_packet(&data) {
             log::error!("Failed to handle DTLS packet, {err:?}");
-            self.state = DtlsState::Failed;
         }
     }
 
@@ -133,7 +140,9 @@ impl RtpDtlsSrtpTransport {
                 dimpl::Output::PeerCert(peer_cert) => {
                     let peer_cert_fingerprint = Sha256::digest(peer_cert);
 
-                    if peer_cert_fingerprint[..] != self.peer_fingerprint {
+                    if peer_cert_fingerprint[..] == self.peer_fingerprint {
+                        self.peer_fingerprint_verified = true;
+                    } else {
                         log::warn!(
                             "peer certificate sha256 fingerprint mismatch expected={:X?} got={:X?}",
                             self.peer_fingerprint,
@@ -144,6 +153,12 @@ impl RtpDtlsSrtpTransport {
                     }
                 }
                 dimpl::Output::KeyingMaterial(keying_material, srtp_profile) => {
+                    if !self.peer_fingerprint_verified {
+                        log::warn!("Got keying material before peer certificate could be verified");
+                        self.state = DtlsState::Failed;
+                        return;
+                    }
+
                     let profile = match srtp_profile {
                         dimpl::SrtpProfile::AES128_CM_SHA1_80 => {
                             SrtpProfile::AES_CM_128_HMAC_SHA1_80
@@ -154,6 +169,7 @@ impl RtpDtlsSrtpTransport {
                             log::error!(
                                 "Failed to handle keying material, unhandled profile: {srtp_profile:?}"
                             );
+                            self.state = DtlsState::Failed;
                             return;
                         }
                     };
@@ -166,7 +182,7 @@ impl RtpDtlsSrtpTransport {
                         Ok((inbound, outbound)) => {
                             self.state = DtlsState::Connected {
                                 inbound: SrtpUnprotector::new(inbound),
-                                outbound: SrtpProtector::new(outbound),
+                                outbound: SrtpProtector::new(outbound).cryptex(self.cryptex),
                             };
                         }
                         Err(err) => {

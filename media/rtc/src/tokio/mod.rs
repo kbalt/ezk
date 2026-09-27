@@ -190,7 +190,7 @@ impl TokioIoState {
 
         let now = Instant::now();
         session.poll(now);
-        self.update_sleep(session, now, false);
+        self.update_sleep(session, now);
 
         // Poll sleep at least once to register it with the context
         while let Some(sleep) = self.sleep.as_mut()
@@ -198,7 +198,7 @@ impl TokioIoState {
         {
             let now = Instant::now();
             session.poll(now);
-            self.update_sleep(session, now, false);
+            self.update_sleep(session, now);
         }
 
         if session.has_events() {
@@ -208,15 +208,13 @@ impl TokioIoState {
         }
     }
 
-    fn update_sleep(&mut self, session: &mut SdpSession, now: Instant, allow_zero: bool) {
+    fn update_sleep(&mut self, session: &mut SdpSession, now: Instant) {
         match session.timeout(now) {
             Some(duration) => {
-                if !allow_zero {
-                    debug_assert!(
-                        duration != Duration::ZERO,
-                        "SdpSession::timeout must not return Duration::ZERO after SdpSession::poll"
-                    );
-                }
+                debug_assert!(
+                    duration != Duration::ZERO,
+                    "SdpSession::timeout must not return Duration::ZERO after SdpSession::poll"
+                );
 
                 let deadline = (now + duration).into();
 

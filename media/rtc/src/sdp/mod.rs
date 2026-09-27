@@ -339,6 +339,7 @@ impl SdpSession {
                         transport_kind,
                         ice_agent,
                         matches!(self.config.rtcp_mux_policy, RtcpMuxPolicy::Require),
+                        self.config.enable_cryptex,
                     ));
 
                 (
@@ -361,6 +362,7 @@ impl SdpSession {
                         transport_kind,
                         ice_agent,
                         matches!(self.config.rtcp_mux_policy, RtcpMuxPolicy::Require),
+                        self.config.enable_cryptex,
                     ));
 
                     AnyTransportId::Offered(id)
@@ -665,6 +667,7 @@ impl SdpSession {
             &self.stun_servers,
             &mut self.transport_changes,
             id,
+            self.config.enable_cryptex,
             session_desc,
             remote_media_desc,
         )?;
@@ -1143,6 +1146,7 @@ impl SdpSession {
             group: self.build_bundle_groups(false),
             extmap: vec![],
             extmap_allow_mixed: true,
+            cryptex: false,
             ice_lite: false,
             ice_options: IceOptions::default(),
             ice_ufrag: None,
@@ -1328,7 +1332,8 @@ impl SdpSession {
                 ice_end_of_candidates: false,
                 crypto: vec![],
                 extmap: vec![],
-                extmap_allow_mixed: true,
+                extmap_allow_mixed: false,
+                cryptex: false,
                 ssrc: vec![],
                 setup: None,
                 fingerprint: vec![],
@@ -1367,6 +1372,7 @@ impl SdpSession {
             group: self.build_bundle_groups(true),
             extmap: vec![],
             extmap_allow_mixed: true,
+            cryptex: false,
             ice_lite: false,
             ice_options: IceOptions::default(),
             ice_ufrag: None,
@@ -1552,7 +1558,8 @@ impl SdpSession {
             ice_end_of_candidates: false,
             crypto: vec![],
             extmap: vec![],
-            extmap_allow_mixed: true,
+            extmap_allow_mixed: false,
+            cryptex: false,
             ssrc: vec![],
             setup: None,
             fingerprint: vec![],
@@ -2047,10 +2054,10 @@ impl SdpSession {
     }
 
     /// Returns an iterator over all internal RTP transports and their corresponding transport id
-    pub fn rtp_sessions(&self) -> impl Iterator<Item = (TransportId, &RtpSession)> {
+    pub fn rtp_sessions(&self) -> impl Iterator<Item = (TransportId, &RtpTransport, &RtpSession)> {
         self.transports
             .values()
-            .map(|x| (x.public_id, &x.rtp_session))
+            .map(|x| (x.public_id, &x.transport, &x.rtp_session))
     }
 
     /// Returns the cumulative gathering state of all ice agents

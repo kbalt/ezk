@@ -1,3 +1,6 @@
+//! End to end check that a negotiated `a=cryptex` reaches the SRTP protector, by inspecting
+//! the bytes on the wire. `sdp_cryptex.rs` covers the signalling.
+
 use std::{
     net::{Ipv4Addr, SocketAddr},
     time::{Duration, Instant},
@@ -45,11 +48,12 @@ fn satisfy_transport_changes(session: &mut SdpSession, port: u16) -> Option<Tran
     id
 }
 
-fn session(port: u16) -> (SdpSession, Option<TransportId>) {
+fn session(port: u16, offer_cryptex: bool) -> SdpSession {
     let mut session = SdpSession::new(
         Ipv4Addr::LOCALHOST.into(),
         SdpSessionConfig {
             offer_transport: TransportType::SdesSrtp,
+            enable_cryptex: offer_cryptex,
             ..Default::default()
         },
     );
@@ -62,32 +66,33 @@ fn session(port: u16) -> (SdpSession, Option<TransportId>) {
         .unwrap();
 
     session.add_media(media, Direction::SendRecv, None, None);
-    let id = satisfy_transport_changes(&mut session, port);
+    satisfy_transport_changes(&mut session, port);
 
-    (session, id)
+    session
 }
 
-#[test]
-fn rtp_survives_a_negotiated_sdes_srtp_transport() {
-    const PORT1: u16 = 45100;
-    const PORT2: u16 = 45200;
+fn is_rtcp(data: &[u8]) -> bool {
+    matches!(data.get(1), Some(&b) if (64..=95).contains(&(b & 0x7f)))
+}
 
-    let (mut session1, _) = session(PORT1);
-    let (mut session2, _) = session(PORT2);
+fn exchange(port1: u16, port2: u16, offer_cryptex: bool) -> (Vec<Vec<u8>>, Vec<Bytes>, bool) {
+    let mut session1 = session(port1, offer_cryptex);
+    let mut session2 = session(port2, offer_cryptex);
 
     let offer = session1.create_sdp_offer();
     let pending = session2.receive_sdp_offer(offer).unwrap();
-    let id2 = satisfy_transport_changes(&mut session2, PORT2).unwrap();
+    let id2 = satisfy_transport_changes(&mut session2, port2).unwrap();
     let answer = session2.create_sdp_answer(pending);
 
     session1.receive_sdp_answer(answer).unwrap();
-    satisfy_transport_changes(&mut session1, PORT1);
+    satisfy_transport_changes(&mut session1, port1);
 
     while session1.pop_event().is_some() {}
     while session2.pop_event().is_some() {}
 
     let now = Instant::now();
     let media_id = session1.media_iter().next().unwrap().id();
+    let negotiated = session1.rtp_sessions().next().unwrap().1.cryptex();
 
     {
         let mut outbound = session1.outbound_media(media_id).unwrap();
@@ -96,8 +101,7 @@ fn rtp_survives_a_negotiated_sdes_srtp_transport() {
 
     session1.poll(now);
 
-    // Hand everything session 1 wants to send to session 2
-    let mut forwarded = 0;
+    let mut sent_rtp = Vec::new();
     while let Some(event) = session1.pop_event() {
         if let SdpSessionEvent::SendData {
             component,
@@ -106,23 +110,24 @@ fn rtp_survives_a_negotiated_sdes_srtp_transport() {
             ..
         } = event
         {
-            forwarded += 1;
+            if !is_rtcp(&data) {
+                sent_rtp.push(data.to_vec());
+            }
+
             session2.receive(
                 now,
                 id2,
                 ReceivedPkt {
                     data,
-                    source: SocketAddr::new(Ipv4Addr::LOCALHOST.into(), PORT1),
+                    source: SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port1),
                     destination: SocketAddr::new(Ipv4Addr::LOCALHOST.into(), target.port()),
                     component,
                 },
             );
         }
     }
-    assert!(forwarded > 0, "session 1 did not send anything");
 
-    // Inbound RTP is released by the jitter buffer on a later poll, so advance time
-    // until it comes out
+    // The jitter buffer releases on a later poll, so advance time
     let mut payloads = Vec::new();
     for step in 0..100 {
         session2.poll(now + Duration::from_millis(step * 10));
@@ -138,8 +143,56 @@ fn rtp_survives_a_negotiated_sdes_srtp_transport() {
         }
     }
 
-    assert!(
-        payloads.iter().any(|p| p.as_ref() == PAYLOAD),
-        "the RTP payload did not survive protect/unprotect, got {payloads:?}"
-    );
+    (sent_rtp, payloads, negotiated)
+}
+
+#[test]
+fn negotiated_cryptex_protects_the_header_extension() {
+    const PORT1: u16 = 45300;
+    const PORT2: u16 = 45400;
+
+    let (sent, received, negotiated) = exchange(PORT1, PORT2, true);
+
+    assert!(negotiated, "cryptex was not negotiated");
+    assert!(!sent.is_empty(), "session 1 sent no RTP");
+
+    for packet in &sent {
+        // The mid extension is negotiated, so every packet carries an extension block
+        assert_eq!(packet[0] & 0x10, 0x10, "X bit not set: {packet:02x?}");
+
+        let csrcs = usize::from(packet[0] & 0x0f);
+        let at = 12 + csrcs * 4;
+        let profile = u16::from_be_bytes([packet[at], packet[at + 1]]);
+
+        assert!(
+            profile == 0xc0de || profile == 0xc2de,
+            "extension tag is {profile:#06x}, not a cryptex one"
+        );
+    }
+
+    assert_eq!(received, [Bytes::from_static(PAYLOAD)]);
+}
+
+#[test]
+fn disabled_policy_does_not_affect_header_extension() {
+    const PORT1: u16 = 45500;
+    const PORT2: u16 = 45600;
+
+    let (sent, received, negotiated) = exchange(PORT1, PORT2, false);
+
+    assert!(!negotiated, "cryptex was negotiated despite being disabled");
+    assert!(!sent.is_empty(), "session 1 sent no RTP");
+
+    for packet in &sent {
+        let csrcs = usize::from(packet[0] & 0x0f);
+        let at = 12 + csrcs * 4;
+        let profile = u16::from_be_bytes([packet[at], packet[at + 1]]);
+
+        assert!(
+            profile == 0xbede || profile == 0x1000,
+            "extension tag is {profile:#06x}, expected a plain RFC 8285 one"
+        );
+    }
+
+    assert_eq!(received, [Bytes::from_static(PAYLOAD)]);
 }
