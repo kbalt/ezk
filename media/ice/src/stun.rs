@@ -264,7 +264,7 @@ impl StunServerBinding {
                 }
 
                 *retransmits += 1;
-                *retransmit_at += stun_config.retransmit_delta(*retransmits);
+                *retransmit_at = now + stun_config.retransmit_delta(*retransmits);
 
                 on_event(IceEvent::SendData {
                     component: self.component,

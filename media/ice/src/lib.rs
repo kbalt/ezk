@@ -60,6 +60,7 @@ pub enum IceEvent {
     },
     DiscoveredAddr {
         component: Component,
+        source: SocketAddr,
         target: SocketAddr,
     },
     SendData {
@@ -93,6 +94,11 @@ pub struct IceAgent {
 
     gathering_state: IceGatheringState,
     connection_state: IceConnectionState,
+
+    /// Pair last reported as used for each component (index = component - 1)
+    selected_pairs: [Option<(LocalCandidateId, RemoteCandidateId)>; 2],
+
+    pac_deadline: Option<Instant>,
 
     last_ta_trigger: Option<Instant>,
 
@@ -222,7 +228,10 @@ enum CandidatePairState {
 
 const MAX_CANCELLED_TRANSACTIONS: usize = 64;
 
-/// Connectivity check that has been superseded by a new check of the same pair, kept to match incoming responses
+/// Minimum ICE runtime before timeout as recommended in RFC 8863
+const PAC_TIMEOUT: Duration = Duration::from_millis(39_500);
+
+/// Transaction that has been replaced by a new check of the same pair, kept to match incoming responses
 #[derive(Debug)]
 struct CancelledTransaction {
     local: LocalCandidateId,
@@ -288,6 +297,8 @@ impl IceAgent {
             max_pairs: 100,
             gathering_state: IceGatheringState::New,
             connection_state: IceConnectionState::New,
+            selected_pairs: [None; 2],
+            pac_deadline: None,
             last_ta_trigger: None,
             backlog: vec![],
             events: VecDeque::new(),
@@ -315,6 +326,8 @@ impl IceAgent {
             max_pairs: 100,
             gathering_state: IceGatheringState::New,
             connection_state: IceConnectionState::New,
+            selected_pairs: [None; 2],
+            pac_deadline: None,
             last_ta_trigger: None,
             backlog: vec![],
             events: VecDeque::new(),
@@ -393,25 +406,35 @@ impl IceAgent {
         self.connection_state
     }
 
+    /// Returns if the agent is currently in the controlling role
+    ///
+    /// The role may change during ICE processing to resolve a role conflict.
+    pub fn is_controlling(&self) -> bool {
+        self.is_controlling
+    }
+
     /// Returns the discovered local & remote address for the given component
     pub fn discovered_addr(&self, mut component: Component) -> Option<(SocketAddr, SocketAddr)> {
         if self.rtcp_mux {
             component = Component::Rtp;
         }
 
-        self.pairs
-            .iter()
-            .find(|pair| {
-                pair.component == component
-                    && pair.state == CandidatePairState::Succeeded
-                    && pair.nomination == CandidatePairNomination::Selected
-            })
-            .map(|pair| {
-                (
-                    self.local_candidates[pair.local].base,
-                    self.remote_candidates[pair.remote].base,
-                )
-            })
+        self.selected_pair(component).map(|pair| {
+            (
+                self.local_candidates[pair.local].base,
+                self.remote_candidates[pair.remote].base,
+            )
+        })
+    }
+
+    /// The pair used for a component: the highest priority pair that has been selected and succeeded
+    fn selected_pair(&self, component: Component) -> Option<&CandidatePair> {
+        // pairs are sorted by priority
+        self.pairs.iter().find(|pair| {
+            pair.component == component
+                && pair.state == CandidatePairState::Succeeded
+                && pair.nomination == CandidatePairNomination::Selected
+        })
     }
 
     fn add_local_candidate(
@@ -783,17 +806,41 @@ impl IceAgent {
 
         let component = pair.component;
 
-        self.events.push_back(IceEvent::DiscoveredAddr {
-            component,
-            target: self.remote_candidates[pair.remote].addr,
-        });
-
         // Remove all triggered checks for this component
         self.triggered_check_queue.retain(|(local_id, _)| {
             self.local_candidates
                 .get(*local_id)
                 .is_some_and(|c| c.component != component)
         });
+    }
+
+    /// Emit a [`IceEvent::DiscoveredAddr`] when the pair used by a component changed
+    fn report_selected_pairs(&mut self) {
+        for component in [Component::Rtp, Component::Rtcp] {
+            if component == Component::Rtcp && self.rtcp_mux {
+                continue;
+            }
+
+            let selected = self
+                .selected_pair(component)
+                .map(|pair| (pair.local, pair.remote));
+
+            let reported = &mut self.selected_pairs[component as usize - 1];
+
+            if *reported == selected {
+                continue;
+            }
+
+            *reported = selected;
+
+            if let Some((local, remote)) = selected {
+                self.events.push_back(IceEvent::DiscoveredAddr {
+                    component,
+                    source: self.local_candidates[local].base,
+                    target: self.remote_candidates[remote].addr,
+                });
+            }
+        }
     }
 
     /// Respond to a STUN request with a 487 (Role Conflict) error
@@ -879,7 +926,7 @@ impl IceAgent {
         self.receive_stun(now, pkt);
 
         // Received messages may conclude or revive ICE processing, report it without waiting for the next poll
-        self.poll_state();
+        self.poll_state(now);
     }
 
     fn receive_stun(&mut self, now: Instant, pkt: ReceivedPkt<Message>) {
@@ -1278,7 +1325,7 @@ impl IceAgent {
 
         // Handle pending stun retransmissions
         self.poll_retransmit(now);
-        self.poll_state();
+        self.poll_state(now);
         self.poll_nomination();
 
         // Skip anything beyond this before we received the remote credentials & candidates
@@ -1425,7 +1472,8 @@ impl IceAgent {
             }
 
             *retransmits += 1;
-            *retransmit_at += self.stun_config.retransmit_delta(*retransmits);
+            // Relative to `now`, so a late poll doesn't leave the deadline in the past
+            *retransmit_at = now + self.stun_config.retransmit_delta(*retransmits);
 
             log::trace!(
                 "retransmitting connectivity check for pair {}",
@@ -1444,7 +1492,7 @@ impl IceAgent {
         }
     }
 
-    fn poll_state(&mut self) {
+    fn poll_state(&mut self, now: Instant) {
         // Check gathering state
         let mut all_completed = true;
         for stun_server in &self.stun_server {
@@ -1473,6 +1521,8 @@ impl IceAgent {
         if self.remote_credentials.is_none() {
             return;
         }
+
+        let pac_deadline = *self.pac_deadline.get_or_insert(now + PAC_TIMEOUT);
 
         // Check connection state
         let mut has_rtp_nomination = false;
@@ -1536,10 +1586,17 @@ impl IceAgent {
                     }
                     IceConnectionState::Disconnected => {}
                 }
+            } else if now < pac_deadline {
+                // PAC deadline not hit, so not failed yet
+                if self.connection_state == IceConnectionState::Connected {
+                    self.set_connection_state(IceConnectionState::Disconnected);
+                }
             } else {
                 self.set_connection_state(IceConnectionState::Failed);
             }
         }
+
+        self.report_selected_pairs();
     }
 
     fn set_connection_state(&mut self, new: IceConnectionState) {
@@ -1619,6 +1676,8 @@ impl IceAgent {
     }
 
     /// Returns a duration after which to call [`poll`](IceAgent::poll)
+    ///
+    /// Right after [`poll`](IceAgent::poll) was called with the same `now`, this never returns `Some(Duration::ZERO)`.
     pub fn timeout(&self, now: Instant) -> Option<Duration> {
         // Next TA trigger
         let ta = if self.remote_credentials.is_some()
@@ -1643,7 +1702,7 @@ impl IceAgent {
             .iter()
             .filter_map(|p| {
                 if let CandidatePairState::InProgress { retransmit_at, .. } = &p.state {
-                    retransmit_at.checked_duration_since(now)
+                    Some(retransmit_at.saturating_duration_since(now))
                 } else {
                     None
                 }
@@ -1653,7 +1712,15 @@ impl IceAgent {
         // Next stun binding refresh/retransmit
         let stun_bindings = self.stun_server.iter().filter_map(|b| b.timeout(now)).min();
 
-        opt_min(opt_min(ta, pair_retransmit), stun_bindings)
+        // Expiry of the PAC timer, after which ICE processing may fail
+        let pac = self
+            .pac_deadline
+            .filter(|deadline| {
+                *deadline > now && self.connection_state != IceConnectionState::Connected
+            })
+            .map(|deadline| deadline - now);
+
+        opt_min(opt_min(opt_min(ta, pair_retransmit), stun_bindings), pac)
     }
 
     /// Returns all discovered local ice agents, does not include peer-reflexive candidates
