@@ -899,7 +899,7 @@ impl IceAgent {
             }
 
             let Some(addr) =
-                stun_server_binding.receive_stun_response(now, &self.stun_config, pkt.data)
+                stun_server_binding.receive_stun_success(now, &self.stun_config, pkt.data)
             else {
                 // TODO; no xor mapped in response, discard message
                 return;
@@ -1018,6 +1018,17 @@ impl IceAgent {
     }
 
     fn receive_stun_error(&mut self, now: Instant, mut pkt: ReceivedPkt<Message>) {
+        // Check our stun server binding checks before verifying integrity since these aren't authenticated
+        for stun_server_binding in &mut self.stun_server {
+            if !stun_server_binding.wants_stun_response(pkt.data.transaction_id()) {
+                continue;
+            }
+
+            stun_server_binding.receive_stun_error(pkt.data);
+
+            return;
+        }
+
         let Some(remote_credentials) = &self.remote_credentials else {
             if self.backlog.len() < 128 {
                 self.backlog.push((now, pkt));

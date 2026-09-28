@@ -319,7 +319,7 @@ impl StunServerBinding {
     /// Receive a STUN success response
     ///
     /// Returns a SocketAddr discovered through the STUN binding
-    pub(crate) fn receive_stun_response(
+    pub(crate) fn receive_stun_success(
         &mut self,
         now: Instant,
         stun_config: &StunConfig,
@@ -333,5 +333,18 @@ impl StunServerBinding {
         self.last_mapped_addr = Some(mapped.0);
 
         Some(mapped.0)
+    }
+
+    /// Receive a STUN error response
+    pub(crate) fn receive_stun_error(&mut self, mut stun_msg: Message) {
+        if let Some(Ok(err)) = stun_msg.attribute::<ErrorCode>() {
+            log::warn!(
+                "Got error response from stun server, code={}, reason={}",
+                err.number,
+                err.reason
+            );
+        }
+
+        self.state = StunServerBindingState::Failed;
     }
 }
