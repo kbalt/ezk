@@ -43,6 +43,13 @@ impl StunConfig {
 
         min(rto, self.max_rto)
     }
+
+    /// Duration after which a transaction without response is considered failed
+    pub(crate) fn transaction_timeout(&self) -> Duration {
+        (0..=self.max_retransmits)
+            .map(|attempts| self.retransmit_delta(attempts))
+            .sum()
+    }
 }
 
 pub(super) fn make_binding_request(

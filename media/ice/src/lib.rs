@@ -84,6 +84,7 @@ pub struct IceAgent {
 
     pairs: Vec<CandidatePair>,
     triggered_check_queue: VecDeque<(LocalCandidateId, RemoteCandidateId)>,
+    cancelled_transactions: Vec<CancelledTransaction>,
 
     rtcp_mux: bool,
     is_controlling: bool,
@@ -175,6 +176,11 @@ struct CandidatePair {
     component: Component,
 
     nomination: CandidatePairNomination,
+
+    /// The controlling peer sent a request with USE-CANDIDATE for this pair.
+    ///
+    /// The pair is selected as soon as it has succeeded.
+    remote_nominated: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -202,6 +208,8 @@ enum CandidatePairState {
         target: SocketAddr,
         /// If the request was sent with ICE-CONTROLLING (true) or ICE-CONTROLLED (false)
         controlling: bool,
+        /// If the request contained the USE-CANDIDATE attribute
+        use_candidate: bool,
     },
 
     // A check has been sent for this pair, and it produced a successful result.
@@ -210,6 +218,31 @@ enum CandidatePairState {
     /// A check has been sent for this pair, and it failed (a response to the check
     /// was never received, or a failure response was received).
     Failed,
+}
+
+const MAX_CANCELLED_TRANSACTIONS: usize = 64;
+
+/// Connectivity check that has been superseded by a new check of the same pair, kept to match incoming responses
+#[derive(Debug)]
+struct CancelledTransaction {
+    local: LocalCandidateId,
+    remote: RemoteCandidateId,
+    transaction_id: TransactionId,
+    source: IpAddr,
+    target: SocketAddr,
+    controlling: bool,
+    use_candidate: bool,
+    expires_at: Instant,
+}
+
+struct MatchedTransaction {
+    pair_index: usize,
+    source: IpAddr,
+    target: SocketAddr,
+    controlling: bool,
+    use_candidate: bool,
+    /// The transaction is the pair's in-progress check and hasn't been cancelled
+    active: bool,
 }
 
 /// Credentials of an ICE agent
@@ -248,6 +281,7 @@ impl IceAgent {
             remote_candidates: SlotMap::with_key(),
             pairs: Vec::new(),
             triggered_check_queue: VecDeque::new(),
+            cancelled_transactions: Vec::new(),
             rtcp_mux,
             is_controlling,
             control_tie_breaker: rand::random(),
@@ -274,6 +308,7 @@ impl IceAgent {
             remote_candidates: SlotMap::with_key(),
             pairs: Vec::new(),
             triggered_check_queue: VecDeque::new(),
+            cancelled_transactions: Vec::new(),
             rtcp_mux,
             is_controlling,
             control_tie_breaker: rand::random(),
@@ -524,7 +559,6 @@ impl IceAgent {
                     remote_candidate,
                     self.is_controlling,
                     &mut self.pairs,
-                    false,
                 );
             }
         }
@@ -542,7 +576,6 @@ impl IceAgent {
         remote_candidate: &Candidate,
         is_controlling: bool,
         pairs: &mut Vec<CandidatePair>,
-        received_use_candidate: bool,
     ) {
         if pairs
             .iter()
@@ -566,11 +599,8 @@ impl IceAgent {
             priority,
             state: CandidatePairState::Waiting,
             component: local_candidate.component,
-            nomination: if received_use_candidate {
-                CandidatePairNomination::Selected
-            } else {
-                CandidatePairNomination::None
-            },
+            nomination: CandidatePairNomination::None,
+            remote_nominated: false,
         });
         pairs.sort_unstable_by_key(|b| std::cmp::Reverse(b.priority));
     }
@@ -589,7 +619,7 @@ impl IceAgent {
     }
 
     /// Switch the agent's role to resolve a role conflict
-    fn set_role(&mut self, is_controlling: bool) {
+    fn set_role(&mut self, now: Instant, is_controlling: bool) {
         if self.is_controlling == is_controlling {
             return;
         }
@@ -608,28 +638,162 @@ impl IceAgent {
         // Nominations belong to the previous role, the (new) controlling agent has to nominate again
         for pair in &mut self.pairs {
             pair.nomination = CandidatePairNomination::None;
+            pair.remote_nominated = false;
         }
 
         // In-flight checks still carry the previous role, repeat them with the new one
-        let in_progress: Vec<_> = self
-            .pairs
-            .iter()
-            .filter(|p| matches!(p.state, CandidatePairState::InProgress { .. }))
-            .map(|p| (p.local, p.remote))
-            .collect();
+        for index in 0..self.pairs.len() {
+            if matches!(
+                self.pairs[index].state,
+                CandidatePairState::InProgress { .. }
+            ) {
+                self.cancel_check(now, index);
 
-        for pair_key in in_progress {
-            self.enqueue_triggered_check(pair_key);
+                let pair = &self.pairs[index];
+                self.enqueue_triggered_check((pair.local, pair.remote), false);
+            }
         }
 
         // A role switch requires an agent to recompute pair priorities, since the priority values depend on the role.
         self.recompute_pair_priorities();
     }
 
-    fn enqueue_triggered_check(&mut self, pair_key: (LocalCandidateId, RemoteCandidateId)) {
-        if !self.triggered_check_queue.contains(&pair_key) {
+    /// Add a pair to the triggered-check queue, if it isn't already queued.
+    ///
+    /// With `front` set the pair is moved to the front of the queue.
+    fn enqueue_triggered_check(
+        &mut self,
+        pair_key: (LocalCandidateId, RemoteCandidateId),
+        front: bool,
+    ) {
+        if front {
+            self.triggered_check_queue.retain(|key| *key != pair_key);
+            self.triggered_check_queue.push_front(pair_key);
+        } else if !self.triggered_check_queue.contains(&pair_key) {
             self.triggered_check_queue.push_back(pair_key);
         }
+    }
+
+    /// Stop retransmitting the in-progress check of a pair and set the pair to Waiting.
+    ///
+    /// A response to the cancelled check is still accepted until the transaction would have timed out.
+    fn cancel_check(&mut self, now: Instant, pair_index: usize) {
+        let pair = &mut self.pairs[pair_index];
+
+        let CandidatePairState::InProgress {
+            transaction_id,
+            source,
+            target,
+            controlling,
+            use_candidate,
+            ..
+        } = pair.state
+        else {
+            return;
+        };
+
+        pair.state = CandidatePairState::Waiting;
+
+        if self.cancelled_transactions.len() >= MAX_CANCELLED_TRANSACTIONS {
+            self.cancelled_transactions.remove(0);
+        }
+
+        self.cancelled_transactions.push(CancelledTransaction {
+            local: pair.local,
+            remote: pair.remote,
+            transaction_id,
+            source,
+            target,
+            controlling,
+            use_candidate,
+            expires_at: now + self.stun_config.transaction_timeout(),
+        });
+    }
+
+    /// Find the connectivity check a STUN response belongs to.
+    ///
+    /// A matched cancelled transaction is consumed.
+    fn match_transaction(&mut self, transaction_id: TransactionId) -> Option<MatchedTransaction> {
+        let active = self
+            .pairs
+            .iter()
+            .enumerate()
+            .find_map(|(pair_index, p)| match p.state {
+                CandidatePairState::InProgress {
+                    transaction_id: id,
+                    source,
+                    target,
+                    controlling,
+                    use_candidate,
+                    ..
+                } if id == transaction_id => Some(MatchedTransaction {
+                    pair_index,
+                    source,
+                    target,
+                    controlling,
+                    use_candidate,
+                    active: true,
+                }),
+                _ => None,
+            });
+
+        if active.is_some() {
+            return active;
+        }
+
+        let index = self
+            .cancelled_transactions
+            .iter()
+            .position(|t| t.transaction_id == transaction_id)?;
+
+        let cancelled = self.cancelled_transactions.remove(index);
+
+        let pair_index = self
+            .pairs
+            .iter()
+            .position(|p| p.local == cancelled.local && p.remote == cancelled.remote)?;
+
+        Some(MatchedTransaction {
+            pair_index,
+            source: cancelled.source,
+            target: cancelled.target,
+            controlling: cancelled.controlling,
+            use_candidate: cancelled.use_candidate,
+            active: false,
+        })
+    }
+
+    /// Use the pair for its component, which concludes ICE processing for the component
+    fn select_pair(&mut self, pair_index: usize) {
+        let pair = &mut self.pairs[pair_index];
+
+        if pair.nomination == CandidatePairNomination::Selected {
+            return;
+        }
+
+        pair.nomination = CandidatePairNomination::Selected;
+
+        log::debug!(
+            "selected pair {}",
+            DisplayPair(
+                &self.local_candidates[pair.local],
+                &self.remote_candidates[pair.remote]
+            )
+        );
+
+        let component = pair.component;
+
+        self.events.push_back(IceEvent::DiscoveredAddr {
+            component,
+            target: self.remote_candidates[pair.remote].addr,
+        });
+
+        // Remove all triggered checks for this component
+        self.triggered_check_queue.retain(|(local_id, _)| {
+            self.local_candidates
+                .get(*local_id)
+                .is_some_and(|c| c.component != component)
+        });
     }
 
     /// Respond to a STUN request with a 487 (Role Conflict) error
@@ -713,6 +877,9 @@ impl IceAgent {
         };
 
         self.receive_stun(now, pkt);
+
+        // Received messages may conclude or revive ICE processing, report it without waiting for the next poll
+        self.poll_state();
     }
 
     fn receive_stun(&mut self, now: Instant, pkt: ReceivedPkt<Message>) {
@@ -769,50 +936,48 @@ impl IceAgent {
         // o  The Binding request generated a success response; and
         // o  The source and destination transport addresses in the Binding
         //    request and response are symmetric.
-        let Some(pair) = self
-            .pairs
-            .iter_mut()
-            .find(|p| {
-                matches!(p.state, CandidatePairState::InProgress { transaction_id, .. } if pkt.data.transaction_id() == transaction_id)
-            }) else {
-                log::debug!("Failed to find transaction for STUN success, discarding");
-                return;
-            };
-
-        let CandidatePairState::InProgress { source, target, .. } = &pair.state else {
-            unreachable!()
+        let Some(transaction) = self.match_transaction(pkt.data.transaction_id()) else {
+            log::debug!("Failed to find transaction for STUN success, discarding");
+            return;
         };
 
-        if pkt.source == *target && pkt.destination.ip() == *source {
+        let pair_index = transaction.pair_index;
+
+        if pkt.source == transaction.target && pkt.destination.ip() == transaction.source {
+            let pair = &self.pairs[pair_index];
+
             log::debug!(
-                "got success response for pair {} nomination={:?}",
+                "got success response for pair {} nomination={:?} cancelled={}",
                 DisplayPair(
                     &self.local_candidates[pair.local],
                     &self.remote_candidates[pair.remote],
                 ),
                 pair.nomination,
+                !transaction.active,
             );
 
-            // This request was a nomination for this pair
-            if pair.nomination == CandidatePairNomination::Nominated {
-                pair.nomination = CandidatePairNomination::Selected;
-
-                let local_candidate = &self.local_candidates[pair.local];
-                let remote_candidate = &self.remote_candidates[pair.remote];
-
-                self.events.push_back(IceEvent::DiscoveredAddr {
-                    component: local_candidate.component,
-                    target: remote_candidate.addr,
-                });
-
-                // Remove all triggered checks for this component
-                self.triggered_check_queue.retain(|(local_id, _)| {
-                    self.local_candidates[*local_id].component != local_candidate.component
-                });
+            // A response to a cancelled check validates the pair as well. Keep the newer check matchable, since it
+            // may be the one carrying the nomination.
+            if !transaction.active {
+                self.cancel_check(now, pair_index);
             }
 
+            let pair = &mut self.pairs[pair_index];
             pair.state = CandidatePairState::Succeeded;
-        } else {
+
+            // This request was a nomination for this pair (controlling), or the peer nominated this pair (controlled)
+            let nominated = if self.is_controlling {
+                transaction.use_candidate && pair.nomination == CandidatePairNomination::Nominated
+            } else {
+                pair.remote_nominated
+            };
+
+            if nominated {
+                self.select_pair(pair_index);
+            }
+        } else if transaction.active {
+            let pair = &mut self.pairs[pair_index];
+
             log::debug!(
                 "got success response with invalid source address for pair {}",
                 DisplayPair(
@@ -828,7 +993,12 @@ impl IceAgent {
             // If the addresses are not symmetric, the agent MUST set the candidate pair state to Failed.
             pair.nomination = CandidatePairNomination::None;
             pair.state = CandidatePairState::Failed;
+        } else {
+            // The pair has a newer check which decides its state
+            log::debug!("got success response with invalid source address for a cancelled check");
         }
+
+        let pair = &self.pairs[pair_index];
 
         // Check if we discover a new peer-reflexive candidate here
         if let Some(Ok(mapped_addr)) = pkt.data.attribute::<XorMappedAddress>() {
@@ -860,15 +1030,12 @@ impl IceAgent {
             return;
         }
 
-        let Some(pair) = self
-            .pairs
-            .iter_mut()
-            .find(|p| {
-                matches!(p.state, CandidatePairState::InProgress { transaction_id, .. } if pkt.data.transaction_id() == transaction_id)
-            }) else {
-                log::debug!("Failed to find transaction for STUN error, discarding");
-                return;
-            };
+        let Some(transaction) = self.match_transaction(pkt.data.transaction_id()) else {
+            log::debug!("Failed to find transaction for STUN error, discarding");
+            return;
+        };
+
+        let pair = &mut self.pairs[transaction.pair_index];
 
         let error_code = pkt.data.attribute::<ErrorCode>().and_then(|r| r.ok());
 
@@ -879,27 +1046,26 @@ impl IceAgent {
 
         if let Some(error_code) = &error_code {
             log::debug!(
-                "Candidate pair {display_pair} failed with code={}, reason={}",
+                "Candidate pair {display_pair} failed with code={}, reason={}, cancelled={}",
                 error_code.number,
-                error_code.reason
+                error_code.reason,
+                !transaction.active,
             );
         } else {
-            log::debug!("Candidate pair {display_pair} failed without error code");
+            log::debug!(
+                "Candidate pair {display_pair} failed without error code, cancelled={}",
+                !transaction.active
+            );
         }
 
         if error_code.is_some_and(|e| e.number == 487) {
-            let &CandidatePairState::InProgress {
-                controlling: sent_controlling,
-                ..
-            } = &pair.state
-            else {
-                unreachable!()
-            };
-
             let pair_key = (pair.local, pair.remote);
 
-            // Set to Waiting before switching roles, so the pair isn't queued again as an in-progress check
-            pair.state = CandidatePairState::Waiting;
+            // Set to Waiting before switching roles, so the pair isn't queued again as an in-progress check.
+            // A cancelled check has already been superseded by a newer one.
+            if transaction.active {
+                pair.state = CandidatePairState::Waiting;
+            }
 
             // If the Binding request generates a 487 (Role Conflict) error response,
             // and if the ICE agent included an ICE-CONTROLLED attribute in the request,
@@ -908,18 +1074,20 @@ impl IceAgent {
             //
             // The role may already have been switched since the request was sent (by another 487 or an incoming request),
             // in which case it must not be switched back.
-            if sent_controlling == self.is_controlling {
+            if transaction.controlling == self.is_controlling {
                 // The agent MUST change the tiebreaker value.
                 self.control_tie_breaker = rand::random();
-                self.set_role(!sent_controlling);
+                self.set_role(now, !transaction.controlling);
             }
 
             // Once the agent has switched its role, the agent MUST add the
             // candidate pair whose check generated the 487 error response to the
             // triggered-check queue associated with the checklist to which the pair
             // belongs, and set the candidate pair state to Waiting.
-            self.enqueue_triggered_check(pair_key);
-        } else {
+            if transaction.active {
+                self.enqueue_triggered_check(pair_key, false);
+            }
+        } else if transaction.active {
             pair.state = CandidatePairState::Failed;
             pair.nomination = CandidatePairNomination::None;
         }
@@ -954,7 +1122,7 @@ impl IceAgent {
                     return;
                 }
 
-                self.set_role(false);
+                self.set_role(now, false);
             }
         } else if let Some(Ok(ice_controlled)) = pkt.data.attribute::<IceControlled>() {
             if self.control_tie_breaker < ice_controlled.0 {
@@ -963,7 +1131,7 @@ impl IceAgent {
                 return;
             }
 
-            self.set_role(true);
+            self.set_role(now, true);
         }
 
         let local_id = match self
@@ -990,39 +1158,25 @@ impl IceAgent {
             Some((remote, _)) => remote,
             None => {
                 // No remote candidate with the source ip addr, create new peer-reflexive candidate
-                let peer_reflexive_id = self.remote_candidates.insert(Candidate {
+                self.remote_candidates.insert(Candidate {
                     addr: pkt.source,
                     kind: CandidateKind::PeerReflexive,
                     priority: priority.0,
                     foundation: "~".into(),
                     component: pkt.component,
                     base: pkt.source,
-                });
-
-                // Pair it with the local candidate
-                Self::add_candidate_pair(
-                    local_id,
-                    &self.local_candidates[local_id],
-                    peer_reflexive_id,
-                    &self.remote_candidates[peer_reflexive_id],
-                    self.is_controlling,
-                    &mut self.pairs,
-                    false,
-                );
-
-                self.triggered_check_queue
-                    .push_back((local_id, peer_reflexive_id));
-
-                peer_reflexive_id
+                })
             }
         };
 
-        let pair = if let Some(pair) = self
+        let pair_key = (local_id, remote_id);
+
+        let pair_index = if let Some(pair_index) = self
             .pairs
-            .iter_mut()
-            .find(|p| p.local == local_id && p.remote == remote_id)
+            .iter()
+            .position(|p| p.local == local_id && p.remote == remote_id)
         {
-            pair
+            pair_index
         } else {
             log::debug!(
                 "Got STUN request for candidates without pair, local-candidate: {} remote-candidate: {}, adding new pair",
@@ -1038,20 +1192,16 @@ impl IceAgent {
                 &self.remote_candidates[remote_id],
                 self.is_controlling,
                 &mut self.pairs,
-                false,
             );
 
-            self.triggered_check_queue.push_back((local_id, remote_id));
-
             self.pairs
-                .iter_mut()
-                .find(|p| p.local == local_id && p.remote == remote_id)
+                .iter()
+                .position(|p| p.local == local_id && p.remote == remote_id)
                 .expect("just inserted pair")
         };
 
-        if use_candidate && !self.is_controlling {
-            pair.nomination = CandidatePairNomination::Selected;
-        }
+        let pair = &mut self.pairs[pair_index];
+        let component = pair.component;
 
         log::trace!(
             "got connectivity check for pair {}",
@@ -1068,15 +1218,40 @@ impl IceAgent {
         );
 
         self.events.push_back(IceEvent::SendData {
-            component: pair.component,
+            component,
             data: stun_response,
             source: Some(self.local_candidates[local_id].base.ip()),
             target: pkt.source,
         });
 
-        // Check nomination state if we received a use-candidate
-        if use_candidate {
-            self.poll_nomination();
+        // The controlled agent sets the nominated flag once the pair has succeeded
+        let nominated = use_candidate && !self.is_controlling;
+
+        if nominated {
+            pair.remote_nominated = true;
+        }
+
+        // ICE processing of the component has been concluded, no further checks are required unless the peer
+        // nominates another pair
+        if !nominated && self.component_has_nominated_valid_pair(component) {
+            return;
+        }
+
+        match self.pairs[pair_index].state {
+            CandidatePairState::Succeeded => {
+                if nominated {
+                    self.select_pair(pair_index);
+                }
+            }
+            CandidatePairState::InProgress { .. } => {
+                // Validate the pair as soon as possible, instead of waiting for retransmissions of the in-progress check
+                self.cancel_check(now, pair_index);
+                self.enqueue_triggered_check(pair_key, nominated);
+            }
+            CandidatePairState::Waiting | CandidatePairState::Failed => {
+                self.pairs[pair_index].state = CandidatePairState::Waiting;
+                self.enqueue_triggered_check(pair_key, nominated);
+            }
         }
     }
 
@@ -1086,6 +1261,9 @@ impl IceAgent {
         for stun_server_bindings in &mut self.stun_server {
             stun_server_bindings.poll(now, &self.stun_config, |event| self.events.push_back(event));
         }
+
+        // Stop waiting for responses to cancelled checks, once they would have timed out
+        self.cancelled_transactions.retain(|t| t.expires_at > now);
 
         // Handle pending stun retransmissions
         self.poll_retransmit(now);
@@ -1110,32 +1288,53 @@ impl IceAgent {
         // pair from the queue, performs a connectivity check on that pair,
         // puts the candidate pair state to In-Progress, and aborts the
         // subsequent steps.
-        let pair = self
-            .triggered_check_queue
-            .pop_front()
-            .and_then(|(local_id, remote_id)| {
-                self.pairs
-                    .iter_mut()
-                    .find(|p| p.local == local_id && p.remote == remote_id)
-            });
+        let mut pair_index = None;
 
-        let pair = if let Some(pair) = pair {
-            Some(pair)
-        } else if !self.all_components_have_nominated_valid_pair() {
+        while let Some((local_id, remote_id)) = self.triggered_check_queue.pop_front() {
+            let Some(index) = self
+                .pairs
+                .iter()
+                .position(|p| p.local == local_id && p.remote == remote_id)
+            else {
+                // pair has been pruned
+                continue;
+            };
+
+            let pair = &self.pairs[index];
+
+            // Skip entries which have been checked since they were queued. Succeeded pairs are only checked again to
+            // send the nomination.
+            let wants_check = match pair.state {
+                CandidatePairState::Waiting => true,
+                CandidatePairState::Succeeded => {
+                    pair.nomination == CandidatePairNomination::Nominated
+                }
+                CandidatePairState::InProgress { .. } | CandidatePairState::Failed => false,
+            };
+
+            if wants_check {
+                pair_index = Some(index);
+                break;
+            }
+        }
+
+        if pair_index.is_none() && !self.all_components_have_nominated_valid_pair() {
             // If there are one or more candidate pairs in the Waiting state,
             // the agent picks the highest-priority candidate pair (if there are
             // multiple pairs with the same priority, the pair with the lowest
             // component ID is picked) in the Waiting state, performs a
             // connectivity check on that pair, puts the candidate pair state to
             // In-Progress, and aborts the subsequent steps.
-            self.pairs
-                .iter_mut()
-                .find(|p| p.state == CandidatePairState::Waiting)
-        } else {
-            None
-        };
+            pair_index = self
+                .pairs
+                .iter()
+                .position(|p| p.state == CandidatePairState::Waiting);
+        }
 
-        if let Some(pair) = pair {
+        if let Some(pair_index) = pair_index {
+            let pair = &mut self.pairs[pair_index];
+            let use_candidate = pair.nomination == CandidatePairNomination::Nominated;
+
             log::debug!(
                 "start connectivity check for pair {}",
                 DisplayPair(
@@ -1153,7 +1352,7 @@ impl IceAgent {
                 &self.local_candidates[pair.local],
                 self.is_controlling,
                 self.control_tie_breaker,
-                pair.nomination == CandidatePairNomination::Nominated,
+                use_candidate,
             );
 
             let source = self.local_candidates[pair.local].base.ip();
@@ -1167,6 +1366,7 @@ impl IceAgent {
                 source,
                 target,
                 controlling: self.is_controlling,
+                use_candidate,
             };
 
             self.events.push_back(IceEvent::SendData {
@@ -1189,6 +1389,7 @@ impl IceAgent {
                 source,
                 target,
                 controlling: _,
+                use_candidate: _,
             } = &mut pair.state
             else {
                 continue;
@@ -1318,7 +1519,10 @@ impl IceAgent {
                     IceConnectionState::Connected => {
                         self.set_connection_state(IceConnectionState::Disconnected);
                     }
-                    IceConnectionState::Failed => {}
+                    IceConnectionState::Failed => {
+                        // A pair has been revived, e.g. by a check received from the peer
+                        self.set_connection_state(IceConnectionState::Checking);
+                    }
                     IceConnectionState::Disconnected => {}
                 }
             } else {
@@ -1346,76 +1550,41 @@ impl IceAgent {
         }
     }
     /// Progress the candidate nomination for a given component
+    ///
+    /// Only the controlling agent nominates pairs. The controlled agent selects the pairs nominated by its peer once
+    /// they succeeded (see [`select_pair`](Self::select_pair)).
     fn poll_nomination_of_component(&mut self, component: Component) {
-        if self.component_has_nominated_valid_pair(component) {
+        if !self.is_controlling || self.component_has_nominated_valid_pair(component) {
             return;
         }
 
-        if self.is_controlling {
-            // Controlling, select a succeeded pair and send a use-candidate
+        // Controlling, select a succeeded pair and send a use-candidate
+        let best_pair = self
+            .pairs
+            .iter_mut()
+            .filter(|p| {
+                p.component == component && matches!(p.state, CandidatePairState::Succeeded)
+            })
+            .max_by_key(|p| p.priority);
 
-            let best_pair = self
-                .pairs
-                .iter_mut()
-                .filter(|p| {
-                    p.component == component && matches!(p.state, CandidatePairState::Succeeded)
-                })
-                .max_by_key(|p| p.priority);
+        let Some(pair) = best_pair else {
+            // no pair to nominate
+            return;
+        };
 
-            let Some(pair) = best_pair else {
-                // no pair to nominate
-                return;
-            };
+        log::debug!(
+            "nominating {}",
+            DisplayPair(
+                &self.local_candidates[pair.local],
+                &self.remote_candidates[pair.remote]
+            )
+        );
 
-            log::debug!(
-                "nominating {}",
-                DisplayPair(
-                    &self.local_candidates[pair.local],
-                    &self.remote_candidates[pair.remote]
-                )
-            );
+        pair.nomination = CandidatePairNomination::Nominated;
 
-            pair.nomination = CandidatePairNomination::Nominated;
-
-            // Make another binding request with use-candidate as soon as possible, by pushing it to the front of the queue
-            self.triggered_check_queue
-                .push_front((pair.local, pair.remote));
-        } else {
-            // Not controlling, check if we have received a use-candidate for a successful pair
-
-            // Find the highest priority pair that received a use-candidate && was successful
-            let pair = self
-                .pairs
-                .iter_mut()
-                .filter(|p| {
-                    p.component == component
-                        && p.nomination == CandidatePairNomination::Selected
-                        && matches!(p.state, CandidatePairState::Succeeded)
-                })
-                .max_by_key(|p| p.priority);
-
-            let Some(pair) = pair else {
-                // no pair to nominate
-                return;
-            };
-
-            log::debug!(
-                "using pair {}",
-                DisplayPair(
-                    &self.local_candidates[pair.local],
-                    &self.remote_candidates[pair.remote]
-                )
-            );
-
-            self.events.push_back(IceEvent::DiscoveredAddr {
-                component,
-                target: self.remote_candidates[pair.remote].addr,
-            });
-
-            // Remove all triggered checks for this component
-            self.triggered_check_queue
-                .retain(|(local_id, _)| self.local_candidates[*local_id].component != component);
-        }
+        // Make another binding request with use-candidate as soon as possible, by pushing it to the front of the queue
+        let pair_key = (pair.local, pair.remote);
+        self.enqueue_triggered_check(pair_key, true);
     }
 
     fn all_components_have_nominated_valid_pair(&self) -> bool {
@@ -1427,10 +1596,7 @@ impl IceAgent {
         self.pairs.iter().any(|p| {
             p.component == component
                 && p.nomination == CandidatePairNomination::Selected
-                && matches!(
-                    p.state,
-                    CandidatePairState::InProgress { .. } | CandidatePairState::Succeeded
-                )
+                && matches!(p.state, CandidatePairState::Succeeded)
         })
     }
 
@@ -1445,7 +1611,8 @@ impl IceAgent {
     pub fn timeout(&self, now: Instant) -> Option<Duration> {
         // Next TA trigger
         let ta = if self.remote_credentials.is_some()
-            && !self.all_components_have_nominated_valid_pair()
+            && (!self.all_components_have_nominated_valid_pair()
+                || !self.triggered_check_queue.is_empty())
         {
             Some(
                 self.last_ta_trigger

@@ -45,7 +45,7 @@ fn same_network() {
     let mut now = Instant::now();
 
     while a.connection_state() != IceConnectionState::Connected
-        && b.connection_state() != IceConnectionState::Connected
+        || b.connection_state() != IceConnectionState::Connected
     {
         a.poll(now);
         b.poll(now);
@@ -60,8 +60,15 @@ fn same_network() {
             !to_a.is_empty() || !to_b.is_empty()
         } {}
 
-        now += opt_min(a.timeout(now), b.timeout(now)).unwrap();
+        let Some(timeout) = opt_min(a.timeout(now), b.timeout(now)) else {
+            break;
+        };
+
+        now += timeout;
     }
+
+    assert_eq!(a.connection_state(), IceConnectionState::Connected);
+    assert_eq!(b.connection_state(), IceConnectionState::Connected);
 }
 
 fn poll_agent(
