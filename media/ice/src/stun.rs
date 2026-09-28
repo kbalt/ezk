@@ -8,7 +8,7 @@ use std::{
 use stun_types::{
     Class, Message, MessageBuilder, Method, TransactionId,
     attributes::{
-        ErrorCode, Fingerprint, IceControlled, IceControlling, MessageIntegrity,
+        ErrorCode, Fingerprint, IceControlled, IceControlling, MappedAddress, MessageIntegrity,
         MessageIntegrityKey, Priority, UseCandidate, Username, XorMappedAddress,
     },
 };
@@ -325,14 +325,20 @@ impl StunServerBinding {
         stun_config: &StunConfig,
         mut stun_msg: Message,
     ) -> Option<SocketAddr> {
-        let mapped = stun_msg.attribute::<XorMappedAddress>()?.ok()?;
+        let mapped = if let Some(Ok(xor_mapped)) = stun_msg.attribute::<XorMappedAddress>() {
+            xor_mapped.0
+        } else if let Some(Ok(mapped)) = stun_msg.attribute::<MappedAddress>() {
+            mapped.0
+        } else {
+            return None;
+        };
 
         self.state = StunServerBindingState::WaitingForRefresh {
             refresh_at: now + stun_config.binding_refresh_interval,
         };
-        self.last_mapped_addr = Some(mapped.0);
+        self.last_mapped_addr = Some(mapped);
 
-        Some(mapped.0)
+        Some(mapped)
     }
 
     /// Receive a STUN error response
