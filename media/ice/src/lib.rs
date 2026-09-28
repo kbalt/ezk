@@ -153,7 +153,8 @@ enum CandidateKind {
     Host = 126,
     PeerReflexive = 110,
     ServerReflexive = 100,
-    // TODO: Relayed = 0,
+    /// Only used for remote candidates, since local relayed candidates (TURN) aren't supported yet
+    Relayed = 0,
 }
 
 #[derive(Debug)]
@@ -464,7 +465,7 @@ impl IceAgent {
             CandidateKind::Host => (65535 / 4) * 3,
             CandidateKind::PeerReflexive => (65535 / 4) * 2,
             CandidateKind::ServerReflexive => 65535 / 4,
-            // CandidateKind::Relayed => 0,
+            CandidateKind::Relayed => 0,
         };
 
         let local_preference = self
@@ -492,10 +493,17 @@ impl IceAgent {
 
     /// Add a peer's ice-candidate which has been received using an extern signaling protocol
     pub fn add_remote_candidate(&mut self, candidate: &IceCandidate) {
-        let kind = match candidate.typ.as_str() {
-            "host" => CandidateKind::Host,
-            "srflx" => CandidateKind::ServerReflexive,
-            _ => return,
+        let kind = if candidate.typ.eq_ignore_ascii_case("host") {
+            CandidateKind::Host
+        } else if candidate.typ.eq_ignore_ascii_case("srflx") {
+            CandidateKind::ServerReflexive
+        } else if candidate.typ.eq_ignore_ascii_case("prflx") {
+            CandidateKind::PeerReflexive
+        } else if candidate.typ.eq_ignore_ascii_case("relay") {
+            CandidateKind::Relayed
+        } else {
+            log::debug!("Ignoring remote candidate with unknown type candidate:{candidate}");
+            return;
         };
 
         // TODO: currently only udp transport is supported
@@ -525,14 +533,33 @@ impl IceAgent {
             UntaggedAddress::IpAddress(ip_addr) => ip_addr,
         };
 
-        self.remote_candidates.insert(Candidate {
-            addr: SocketAddr::new(ip, candidate.port),
-            kind,
-            priority,
-            foundation: candidate.foundation.to_string(),
-            component,
-            base: SocketAddr::new(ip, candidate.port), // TODO: do I even need this?
-        });
+        let addr = SocketAddr::new(ip, candidate.port);
+
+        if let Some(existing) = self
+            .remote_candidates
+            .values_mut()
+            .find(|c| c.addr == addr && c.component == component)
+        {
+            if existing.kind != CandidateKind::PeerReflexive {
+                log::debug!("Discard duplicate remote candidate candidate:{candidate}");
+                return;
+            }
+
+            existing.kind = kind;
+            existing.priority = priority;
+            existing.foundation = candidate.foundation.to_string();
+
+            self.recompute_pair_priorities();
+        } else {
+            self.remote_candidates.insert(Candidate {
+                addr,
+                kind,
+                priority,
+                foundation: candidate.foundation.to_string(),
+                component,
+                base: addr,
+            });
+        }
 
         self.form_pairs();
     }
@@ -540,7 +567,7 @@ impl IceAgent {
     fn form_pairs(&mut self) {
         for (local_id, local_candidate) in &self.local_candidates {
             for (remote_id, remote_candidate) in &self.remote_candidates {
-                // Remote peer-reflexive candidates are not paired here
+                // Peer-reflexive candidates are already paired with the candidate they were detected on
                 if remote_candidate.kind == CandidateKind::PeerReflexive {
                     continue;
                 }
@@ -1815,7 +1842,8 @@ fn fmt_candidate(f: &mut fmt::Formatter<'_>, c: &Candidate) -> fmt::Result {
         }
         CandidateKind::ServerReflexive => {
             write!(f, "server-reflexive(base:{}, server:{})", c.base, c.addr)
-        } // CandidateKind::Relayed => write!(f, "relayed(base:{}, relay:{})", c.base, c.addr),
+        }
+        CandidateKind::Relayed => write!(f, "relayed(base:{}, relay:{})", c.base, c.addr),
     }
 }
 
