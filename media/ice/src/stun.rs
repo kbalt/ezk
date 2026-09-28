@@ -101,31 +101,17 @@ pub(super) fn make_success_response(
 pub(super) fn make_role_error(
     transaction_id: TransactionId,
     local_credentials: &IceCredentials,
-    remote_credentials: &IceCredentials,
-    source: SocketAddr,
-    is_controlling: bool,
-    control_tie_breaker: u64,
 ) -> Vec<u8> {
     let mut stun_message = MessageBuilder::new(Class::Error, Method::Binding, transaction_id);
-
-    let username = format!("{}:{}", local_credentials.ufrag, remote_credentials.ufrag);
-    stun_message.add_attr(Username::new(&username));
 
     stun_message.add_attr(ErrorCode {
         number: 487,
         reason: "Role Conflict",
     });
 
-    if is_controlling {
-        stun_message.add_attr(IceControlling(control_tie_breaker));
-    } else {
-        stun_message.add_attr(IceControlled(control_tie_breaker));
-    }
-
-    stun_message.add_attr(XorMappedAddress(source));
     stun_message.add_attr_with(
         MessageIntegrity,
-        MessageIntegrityKey::new(&remote_credentials.pwd),
+        MessageIntegrityKey::new(&local_credentials.pwd),
     );
     stun_message.add_attr(Fingerprint);
 

@@ -200,6 +200,8 @@ enum CandidatePairState {
         retransmits: u32,
         source: IpAddr,
         target: SocketAddr,
+        /// If the request was sent with ICE-CONTROLLING (true) or ICE-CONTROLLED (false)
+        controlling: bool,
     },
 
     // A check has been sent for this pair, and it produced a successful result.
@@ -371,8 +373,8 @@ impl IceAgent {
             })
             .map(|pair| {
                 (
-                    self.local_candidates[pair.local].addr,
-                    self.remote_candidates[pair.remote].addr,
+                    self.local_candidates[pair.local].base,
+                    self.remote_candidates[pair.remote].base,
                 )
             })
     }
@@ -586,6 +588,62 @@ impl IceAgent {
             .sort_unstable_by_key(|b| std::cmp::Reverse(b.priority));
     }
 
+    /// Switch the agent's role to resolve a role conflict
+    fn set_role(&mut self, is_controlling: bool) {
+        if self.is_controlling == is_controlling {
+            return;
+        }
+
+        log::debug!(
+            "switching role to {}",
+            if is_controlling {
+                "controlling"
+            } else {
+                "controlled"
+            }
+        );
+
+        self.is_controlling = is_controlling;
+
+        // Nominations belong to the previous role, the (new) controlling agent has to nominate again
+        for pair in &mut self.pairs {
+            pair.nomination = CandidatePairNomination::None;
+        }
+
+        // In-flight checks still carry the previous role, repeat them with the new one
+        let in_progress: Vec<_> = self
+            .pairs
+            .iter()
+            .filter(|p| matches!(p.state, CandidatePairState::InProgress { .. }))
+            .map(|p| (p.local, p.remote))
+            .collect();
+
+        for pair_key in in_progress {
+            self.enqueue_triggered_check(pair_key);
+        }
+
+        // A role switch requires an agent to recompute pair priorities, since the priority values depend on the role.
+        self.recompute_pair_priorities();
+    }
+
+    fn enqueue_triggered_check(&mut self, pair_key: (LocalCandidateId, RemoteCandidateId)) {
+        if !self.triggered_check_queue.contains(&pair_key) {
+            self.triggered_check_queue.push_back(pair_key);
+        }
+    }
+
+    /// Respond to a STUN request with a 487 (Role Conflict) error
+    fn send_role_error(&mut self, pkt: &ReceivedPkt<Message>) {
+        let response = stun::make_role_error(pkt.data.transaction_id(), &self.local_credentials);
+
+        self.events.push_back(IceEvent::SendData {
+            component: pkt.component,
+            data: response,
+            source: Some(pkt.destination.ip()),
+            target: pkt.source,
+        });
+    }
+
     /// Prune the lowest priority pairs until `max_pairs` is reached
     fn prune_pairs(&mut self) {
         let mut to_prune = Vec::new();
@@ -637,7 +695,7 @@ impl IceAgent {
 
         let passed_fingerprint_check = stun_msg
             .attribute::<Fingerprint>()
-            .is_some_and(|r| r.is_ok());
+            .is_none_or(|r| r.is_ok());
 
         if !passed_fingerprint_check {
             log::trace!(
@@ -829,27 +887,38 @@ impl IceAgent {
             log::debug!("Candidate pair {display_pair} failed without error code");
         }
 
-        // If the Binding request generates a 487 (Role Conflict) error response,
-        // and if the ICE agent included an ICE-CONTROLLED attribute in the request,
-        // the agent MUST switch to the controlling role.
-        // If the agent included an ICE-CONTROLLING attribute in the request, the agent MUST switch to the controlled role.
         if error_code.is_some_and(|e| e.number == 487) {
-            if pkt.data.attribute::<IceControlled>().is_some() {
-                self.is_controlling = true;
-            } else if pkt.data.attribute::<IceControlling>().is_some() {
-                self.is_controlling = false;
+            let &CandidatePairState::InProgress {
+                controlling: sent_controlling,
+                ..
+            } = &pair.state
+            else {
+                unreachable!()
+            };
+
+            let pair_key = (pair.local, pair.remote);
+
+            // Set to Waiting before switching roles, so the pair isn't queued again as an in-progress check
+            pair.state = CandidatePairState::Waiting;
+
+            // If the Binding request generates a 487 (Role Conflict) error response,
+            // and if the ICE agent included an ICE-CONTROLLED attribute in the request,
+            // the agent MUST switch to the controlling role.
+            // If the agent included an ICE-CONTROLLING attribute in the request, the agent MUST switch to the controlled role.
+            //
+            // The role may already have been switched since the request was sent (by another 487 or an incoming request),
+            // in which case it must not be switched back.
+            if sent_controlling == self.is_controlling {
+                // The agent MUST change the tiebreaker value.
+                self.control_tie_breaker = rand::random();
+                self.set_role(!sent_controlling);
             }
 
             // Once the agent has switched its role, the agent MUST add the
             // candidate pair whose check generated the 487 error response to the
             // triggered-check queue associated with the checklist to which the pair
             // belongs, and set the candidate pair state to Waiting.
-            pair.state = CandidatePairState::Waiting;
-            self.triggered_check_queue
-                .push_back((pair.local, pair.remote));
-
-            // A role switch requires an agent to recompute pair priorities, since the priority values depend on the role.
-            self.recompute_pair_priorities();
+            self.enqueue_triggered_check(pair_key);
         } else {
             pair.state = CandidatePairState::Failed;
             pair.nomination = CandidatePairNomination::None;
@@ -876,56 +945,25 @@ impl IceAgent {
 
         let use_candidate = pkt.data.attribute::<UseCandidate>().is_some();
 
-        // Detect and handle role conflict
+        // detect role conflict
         if self.is_controlling {
             if let Some(Ok(ice_controlling)) = pkt.data.attribute::<IceControlling>() {
                 if self.control_tie_breaker >= ice_controlling.0 {
-                    let response = stun::make_role_error(
-                        pkt.data.transaction_id(),
-                        &self.local_credentials,
-                        remote_credentials,
-                        pkt.source,
-                        true,
-                        self.control_tie_breaker,
-                    );
-
-                    self.events.push_back(IceEvent::SendData {
-                        component: pkt.component,
-                        data: response,
-                        source: Some(pkt.destination.ip()),
-                        target: pkt.source,
-                    });
-
+                    // retain the controlling role, peer has to switch
+                    self.send_role_error(&pkt);
                     return;
-                } else {
-                    self.is_controlling = false;
-                    self.recompute_pair_priorities();
                 }
-            }
-        } else if !self.is_controlling
-            && let Some(Ok(ice_controlled)) = pkt.data.attribute::<IceControlled>()
-        {
-            if self.control_tie_breaker >= ice_controlled.0 {
-                let response = stun::make_role_error(
-                    pkt.data.transaction_id(),
-                    &self.local_credentials,
-                    remote_credentials,
-                    pkt.source,
-                    false,
-                    self.control_tie_breaker,
-                );
 
-                self.events.push_back(IceEvent::SendData {
-                    component: pkt.component,
-                    data: response,
-                    source: Some(pkt.destination.ip()),
-                    target: pkt.source,
-                });
-                return;
-            } else {
-                self.is_controlling = true;
-                self.recompute_pair_priorities();
+                self.set_role(false);
             }
+        } else if let Some(Ok(ice_controlled)) = pkt.data.attribute::<IceControlled>() {
+            if self.control_tie_breaker < ice_controlled.0 {
+                // retain the controlled role, peer has to switch
+                self.send_role_error(&pkt);
+                return;
+            }
+
+            self.set_role(true);
         }
 
         let local_id = match self
@@ -1128,6 +1166,7 @@ impl IceAgent {
                 retransmits: 0,
                 source,
                 target,
+                controlling: self.is_controlling,
             };
 
             self.events.push_back(IceEvent::SendData {
@@ -1149,6 +1188,7 @@ impl IceAgent {
                 retransmits,
                 source,
                 target,
+                controlling: _,
             } = &mut pair.state
             else {
                 continue;
