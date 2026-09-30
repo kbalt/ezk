@@ -12,7 +12,7 @@ use sip_core::transaction::{ClientInvTsx, TsxResponse};
 use sip_core::transport::OutgoingRequest;
 use sip_core::{Endpoint, Error, Request};
 use sip_types::header::HeaderError;
-use sip_types::header::typed::{CSeq, Contact, RSeq, Refresher, Supported};
+use sip_types::header::typed::{Contact, RSeq, Refresher, Supported};
 use sip_types::uri::{NameAddr, SipUri};
 use sip_types::{Method, Name, StatusCode};
 use std::collections::HashMap;
@@ -105,24 +105,18 @@ impl InviteInitiator {
         Ok(())
     }
 
+    /// Cancel an active INVITE after processing a provisional response with
+    /// [`Self::receive`] (including 100 Trying). Before a provisional response or
+    /// after a final response, cancellation is rejected with an invalid-input error.
+    /// The underlying transaction permits at most one CANCEL send attempt; this
+    /// future is not cancel-safe once sending begins.
     pub async fn cancel(mut self) -> Result<(), sip_core::Error> {
         let transaction = self
             .transaction
             .as_mut()
             .expect("must send invite before calling cancel");
 
-        let invite_cseq = transaction.request().msg.headers.get_named::<CSeq>()?;
-
-        let request = self
-            .dialog_builder
-            .create_request(Method::CANCEL, Some(invite_cseq.cseq));
-
-        self.dialog_builder
-            .endpoint
-            .send_request(request, &mut self.dialog_builder.target_tp_info)
-            .await?
-            .receive_final()
-            .await?;
+        transaction.cancel().await?.receive_final().await?;
 
         loop {
             match self.receive().await? {

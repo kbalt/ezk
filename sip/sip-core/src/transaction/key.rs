@@ -97,6 +97,25 @@ impl TsxKey {
         }))
     }
 
+    /// Returns a client transaction key for another method in this transaction's branch.
+    ///
+    /// SIP CANCEL requests share their INVITE's Via branch, while remaining a separate
+    /// transaction because their CSeq method is CANCEL.
+    pub(crate) fn client_with_method(&self, method: &Method) -> Self {
+        match &self.0 {
+            Repr::RFC3261(Rfc3261 {
+                role: Role::Client,
+                branch,
+                ..
+            }) => TsxKey(Repr::RFC3261(Rfc3261 {
+                role: Role::Client,
+                branch: branch.clone(),
+                method: filter_method(method),
+            })),
+            _ => panic!("client transaction key must use an RFC 3261 branch"),
+        }
+    }
+
     #[inline]
     pub fn branch(&self) -> &BytesStr {
         match &self.0 {
@@ -150,5 +169,19 @@ impl TsxKey {
             MessageLine::Request(_) => Self::from_headers(headers, Role::Server),
             MessageLine::Response(_) => Self::from_headers(headers, Role::Client),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cancel_uses_the_invite_branch_as_a_distinct_client_transaction() {
+        let invite = TsxKey::client(&Method::INVITE);
+        let cancel = invite.client_with_method(&Method::CANCEL);
+
+        assert_eq!(invite.branch(), cancel.branch());
+        assert_ne!(invite, cancel);
     }
 }
