@@ -6,7 +6,7 @@ use sip_core::transaction::TsxResponse;
 use sip_core::transport::TargetTransportInfo;
 use sip_core::{Endpoint, Request};
 use sip_types::header::HeaderError;
-use sip_types::header::typed::{CSeq, CallID, Contact, FromTo, MaxForwards};
+use sip_types::header::typed::{CSeq, CallID, Contact, FromTo, MaxForwards, Routing};
 use sip_types::msg::RequestLine;
 use sip_types::uri::{NameAddr, SipUri};
 use sip_types::{Headers, Method, Name};
@@ -90,7 +90,7 @@ impl ClientDialogBuilder {
             local_contact: self.local_contact.clone(),
             peer_contact: response.headers.get_named()?,
             call_id: self.call_id.clone(),
-            route_set: response.headers.get(Name::RECORD_ROUTE).unwrap_or_default(),
+            route_set: client_route_set(&response.headers),
             secure: self.secure,
             target_tp_info: Mutex::new(self.target_tp_info.clone()),
         };
@@ -103,5 +103,70 @@ impl ClientDialogBuilder {
             .insert(dialog.key(), entry);
 
         Ok(dialog)
+    }
+}
+
+fn client_route_set(headers: &Headers) -> Vec<Routing> {
+    let mut route_set: Vec<Routing> = headers.get(Name::RECORD_ROUTE).unwrap_or_default();
+    route_set.reverse();
+    route_set
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reverses_response_record_route_for_client_dialog() {
+        let mut headers = Headers::new();
+        headers.insert(
+            Name::RECORD_ROUTE,
+            "<sip:callee-proxy.example;lr>, <sip:caller-proxy.example;lr>",
+        );
+
+        let route_set = client_route_set(&headers);
+        let caller_proxy: SipUri = "sip:caller-proxy.example;lr".parse().unwrap();
+        let callee_proxy: SipUri = "sip:callee-proxy.example;lr".parse().unwrap();
+
+        assert_eq!(route_set.len(), 2);
+        assert!(route_set[0].uri.uri.compare(&caller_proxy));
+        assert!(route_set[1].uri.uri.compare(&callee_proxy));
+    }
+
+    #[test]
+    fn reverses_response_record_route_across_header_lines() {
+        let mut headers = Headers::new();
+        headers.insert(
+            Name::RECORD_ROUTE,
+            "<sip:proxy-a.example;lr>, <sip:proxy-b.example;lr>",
+        );
+        headers.insert(Name::RECORD_ROUTE, "<sip:proxy-c.example;lr>");
+
+        let route_set = client_route_set(&headers);
+        let proxy_a: SipUri = "sip:proxy-a.example;lr".parse().unwrap();
+        let proxy_b: SipUri = "sip:proxy-b.example;lr".parse().unwrap();
+        let proxy_c: SipUri = "sip:proxy-c.example;lr".parse().unwrap();
+
+        assert_eq!(route_set.len(), 3);
+        assert!(route_set[0].uri.uri.compare(&proxy_c));
+        assert!(route_set[1].uri.uri.compare(&proxy_b));
+        assert!(route_set[2].uri.uri.compare(&proxy_a));
+    }
+
+    #[test]
+    fn absent_record_route_produces_empty_route_set() {
+        assert!(client_route_set(&Headers::new()).is_empty());
+    }
+
+    #[test]
+    fn preserves_single_response_record_route() {
+        let mut headers = Headers::new();
+        headers.insert(Name::RECORD_ROUTE, "<sip:proxy.example;lr>");
+
+        let route_set = client_route_set(&headers);
+        let proxy: SipUri = "sip:proxy.example;lr".parse().unwrap();
+
+        assert_eq!(route_set.len(), 1);
+        assert!(route_set[0].uri.uri.compare(&proxy));
     }
 }
