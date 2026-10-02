@@ -125,52 +125,43 @@ pub(super) fn make_role_error(
     stun_message.finish()
 }
 
-pub(crate) fn verify_integrity(
+pub(crate) fn verify_request(
     local_credentials: &IceCredentials,
-    remote_credentials: &IceCredentials,
     stun_msg: &mut Message,
-) -> bool {
-    let is_request = match stun_msg.class() {
-        Class::Request | Class::Indication => true,
-        Class::Success | Class::Error => false,
-    };
-
-    let key = if is_request {
-        &local_credentials.pwd
-    } else {
-        &remote_credentials.pwd
-    };
-
+) -> Option<String> {
     let passed_integrity_check = stun_msg
-        .attribute_with::<MessageIntegrity>(MessageIntegrityKey::new(key))
+        .attribute_with::<MessageIntegrity>(MessageIntegrityKey::new(&local_credentials.pwd))
         .is_some_and(|r| r.is_ok());
 
     if !passed_integrity_check {
-        return false;
+        return None;
     }
 
-    if is_request {
-        // STUN requests require the USERNAME attribute to be set, validate that is contains the one we expect
-        let expected_username = format!("{}:{}", local_credentials.ufrag, remote_credentials.ufrag);
-        let username = match stun_msg.attribute::<Username>() {
-            Some(Ok(username)) => username,
-            Some(Err(e)) => {
-                log::debug!("Failed to parse STUN username attribute, {e}");
-                return false;
-            }
-            None => {
-                log::debug!("STUN request is missing the USERNAME attribute");
-                return false;
-            }
-        };
-
-        if username.0 != expected_username {
-            return false;
+    let username = match stun_msg.attribute::<Username>() {
+        Some(Ok(username)) => username,
+        Some(Err(e)) => {
+            log::debug!("Failed to parse STUN username attribute, {e}");
+            return None;
         }
+        None => {
+            log::debug!("STUN request is missing the USERNAME attribute");
+            return None;
+        }
+    };
+
+    let (local_ufrag, remote_ufrag) = username.0.split_once(':')?;
+
+    if local_ufrag != local_credentials.ufrag {
+        return None;
     }
 
-    // All checks passed
-    true
+    Some(remote_ufrag.to_owned())
+}
+
+pub(crate) fn verify_response(remote_credentials: &IceCredentials, stun_msg: &mut Message) -> bool {
+    stun_msg
+        .attribute_with::<MessageIntegrity>(MessageIntegrityKey::new(&remote_credentials.pwd))
+        .is_some_and(|r| r.is_ok())
 }
 
 pub(crate) struct StunServerBinding {

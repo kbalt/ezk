@@ -25,6 +25,8 @@ use stun_types::{
 
 mod stun;
 
+const MAX_EARLY_CHECKS: usize = 64;
+
 /// A message received on a UDP socket
 pub struct ReceivedPkt<D = Vec<u8>> {
     /// The received data
@@ -104,7 +106,7 @@ pub struct IceAgent {
 
     /// STUN Messages that are received before the remote credentials are available.
     /// Capped to prevent unbounded growth from unauthenticated traffic.
-    backlog: Vec<(Instant, ReceivedPkt<Message>)>,
+    backlog: Vec<ReceivedCheck>,
 
     events: VecDeque<IceEvent>,
 }
@@ -245,6 +247,20 @@ struct CancelledTransaction {
     expires_at: Instant,
 }
 
+#[derive(Debug)]
+struct ReceivedCheck {
+    received_at: Instant,
+    remote_ufrag: String,
+    source: SocketAddr,
+    destination: SocketAddr,
+    component: Component,
+    priority: u32,
+    use_candidate: bool,
+    ice_controlling: Option<u64>,
+    ice_controlled: Option<u64>,
+}
+
+/// Connectivity check transaction a STUN response belongs to
 struct MatchedTransaction {
     pair_index: usize,
     source: IpAddr,
@@ -358,8 +374,25 @@ impl IceAgent {
             self.add_remote_candidate(candidate);
         }
 
-        for (instant, pkt) in take(&mut self.backlog) {
-            self.receive_stun(instant, pkt);
+        for early_check in take(&mut self.backlog) {
+            if self
+                .remote_credentials
+                .as_ref()
+                .is_none_or(|c| c.ufrag != early_check.remote_ufrag)
+            {
+                log::debug!(
+                    "Discard connectivity check from {} with unknown username fragment",
+                    early_check.source
+                );
+                continue;
+            }
+
+            let Some(local_id) = self.host_candidate(early_check.destination) else {
+                continue;
+            };
+
+            self.detect_role_conflict(early_check.received_at, &early_check);
+            self.handle_check(early_check.received_at, local_id, early_check);
         }
     }
 
@@ -870,18 +903,6 @@ impl IceAgent {
         }
     }
 
-    /// Respond to a STUN request with a 487 (Role Conflict) error
-    fn send_role_error(&mut self, pkt: &ReceivedPkt<Message>) {
-        let response = stun::make_role_error(pkt.data.transaction_id(), &self.local_credentials);
-
-        self.events.push_back(IceEvent::SendData {
-            component: pkt.component,
-            data: response,
-            source: Some(pkt.destination.ip()),
-            target: pkt.source,
-        });
-    }
-
     /// Prune the lowest priority pairs until `max_pairs` is reached
     fn prune_pairs(&mut self) {
         let mut to_prune = Vec::new();
@@ -992,15 +1013,14 @@ impl IceAgent {
             return;
         }
 
-        // Store messages later if the remote credentials aren't set yet
         let Some(remote_credentials) = &self.remote_credentials else {
-            if self.backlog.len() < 128 {
-                self.backlog.push((now, pkt));
-            }
+            log::debug!(
+                "Got STUN success response before remote credentials are known, discarding"
+            );
             return;
         };
 
-        if !stun::verify_integrity(&self.local_credentials, remote_credentials, &mut pkt.data) {
+        if !stun::verify_response(remote_credentials, &mut pkt.data) {
             log::debug!("Incoming stun success failed the integrity check, discarding");
             return;
         }
@@ -1104,13 +1124,11 @@ impl IceAgent {
         }
 
         let Some(remote_credentials) = &self.remote_credentials else {
-            if self.backlog.len() < 128 {
-                self.backlog.push((now, pkt));
-            }
+            log::debug!("Got STUN error response before remote credentials are known, discarding");
             return;
         };
 
-        if !stun::verify_integrity(&self.local_credentials, remote_credentials, &mut pkt.data) {
+        if !stun::verify_response(remote_credentials, &mut pkt.data) {
             log::debug!("Incoming stun error response failed the integrity check, discarding");
             return;
         }
@@ -1179,64 +1197,147 @@ impl IceAgent {
     }
 
     fn receive_stun_request(&mut self, now: Instant, mut pkt: ReceivedPkt<Message>) {
-        let Some(remote_credentials) = &self.remote_credentials else {
-            if self.backlog.len() < 128 {
-                self.backlog.push((now, pkt));
-            }
-            return;
-        };
-
-        if !stun::verify_integrity(&self.local_credentials, remote_credentials, &mut pkt.data) {
+        let Some(remote_ufrag) = stun::verify_request(&self.local_credentials, &mut pkt.data)
+        else {
             log::debug!("Incoming stun request failed the integrity check, discarding");
             return;
-        }
+        };
 
         let Some(Ok(priority)) = pkt.data.attribute::<Priority>() else {
             log::debug!("Incoming stun request did not contain PRIORITY attribute");
             return;
         };
 
-        let use_candidate = pkt.data.attribute::<UseCandidate>().is_some();
+        let check = ReceivedCheck {
+            received_at: now,
+            remote_ufrag,
+            source: pkt.source,
+            destination: pkt.destination,
+            component: pkt.component,
+            priority: priority.0,
+            use_candidate: pkt.data.attribute::<UseCandidate>().is_some(),
+            ice_controlling: pkt
+                .data
+                .attribute::<IceControlling>()
+                .and_then(|r| r.ok())
+                .map(|a| a.0),
+            ice_controlled: pkt
+                .data
+                .attribute::<IceControlled>()
+                .and_then(|r| r.ok())
+                .map(|a| a.0),
+        };
 
-        // detect role conflict
+        let Some(local_id) = self.host_candidate(pkt.destination) else {
+            log::warn!(
+                "Failed to find matching local candidate for incoming STUN request ({})?",
+                pkt.destination
+            );
+            return;
+        };
+
+        match &self.remote_credentials {
+            None => {
+                self.send_success_response(&pkt, local_id);
+
+                if let Some(existing_early_check) = self.backlog.iter_mut().find(|c| {
+                    c.source == check.source
+                        && c.destination == check.destination
+                        && c.component == check.component
+                        && c.remote_ufrag == check.remote_ufrag
+                }) {
+                    let use_candidate = existing_early_check.use_candidate || check.use_candidate;
+                    *existing_early_check = check;
+                    existing_early_check.use_candidate = use_candidate;
+                } else if self.backlog.len() < MAX_EARLY_CHECKS {
+                    self.backlog.push(check);
+                } else {
+                    log::debug!("Discarding early check, limit reached");
+                }
+
+                return;
+            }
+            Some(remote_credentials) if remote_credentials.ufrag != check.remote_ufrag => {
+                // The request is valid, but doesn't belong to the peer this agent is connecting to
+                log::debug!(
+                    "Got connectivity check from {} with unknown username fragment",
+                    check.source
+                );
+                self.send_success_response(&pkt, local_id);
+                return;
+            }
+            Some(_) => {}
+        }
+
+        if self.detect_role_conflict(now, &check) {
+            let response =
+                stun::make_role_error(pkt.data.transaction_id(), &self.local_credentials);
+
+            self.events.push_back(IceEvent::SendData {
+                component: pkt.component,
+                data: response,
+                source: Some(pkt.destination.ip()),
+                target: pkt.source,
+            });
+
+            return;
+        }
+
+        self.send_success_response(&pkt, local_id);
+        self.handle_check(now, local_id, check);
+    }
+
+    /// Find the host candidate with the given address
+    fn host_candidate(&self, addr: SocketAddr) -> Option<LocalCandidateId> {
+        self.local_candidates
+            .iter()
+            .find(|(_, c)| c.kind == CandidateKind::Host && c.addr == addr)
+            .map(|(id, _)| id)
+    }
+
+    /// Respond to a connectivity check with a success response
+    fn send_success_response(&mut self, pkt: &ReceivedPkt<Message>, local_id: LocalCandidateId) {
+        let local_candidate = &self.local_candidates[local_id];
+
+        let stun_response = stun::make_success_response(
+            pkt.data.transaction_id(),
+            &self.local_credentials,
+            pkt.source,
+        );
+
+        self.events.push_back(IceEvent::SendData {
+            component: local_candidate.component,
+            data: stun_response,
+            source: Some(local_candidate.base.ip()),
+            target: pkt.source,
+        });
+    }
+
+    /// Detect & handle role conflicts, returns if the agent keeps it role
+    fn detect_role_conflict(&mut self, now: Instant, check: &ReceivedCheck) -> bool {
         if self.is_controlling {
-            if let Some(Ok(ice_controlling)) = pkt.data.attribute::<IceControlling>() {
-                if self.control_tie_breaker >= ice_controlling.0 {
-                    // retain the controlling role, peer has to switch
-                    self.send_role_error(&pkt);
-                    return;
+            if let Some(ice_controlling) = check.ice_controlling {
+                if self.control_tie_breaker >= ice_controlling {
+                    return true;
                 }
 
                 self.set_role(now, false);
             }
-        } else if let Some(Ok(ice_controlled)) = pkt.data.attribute::<IceControlled>() {
-            if self.control_tie_breaker < ice_controlled.0 {
-                // retain the controlled role, peer has to switch
-                self.send_role_error(&pkt);
-                return;
+        } else if let Some(ice_controlled) = check.ice_controlled {
+            if self.control_tie_breaker < ice_controlled {
+                return true;
             }
 
             self.set_role(now, true);
         }
 
-        let local_id = match self
-            .local_candidates
-            .iter()
-            .find(|(_, c)| c.kind == CandidateKind::Host && c.addr == pkt.destination)
-        {
-            Some((id, _)) => id,
-            None => {
-                log::warn!(
-                    "Failed to find matching local candidate for incoming STUN request ({})?",
-                    pkt.destination
-                );
-                return;
-            }
-        };
+        false
+    }
 
+    fn handle_check(&mut self, now: Instant, local_id: LocalCandidateId, check: ReceivedCheck) {
         let matching_remote_candidate = self.remote_candidates.iter().find(|(_, c)| {
             // todo: also match protocol
-            c.addr == pkt.source
+            c.addr == check.source
         });
 
         let remote_id = match matching_remote_candidate {
@@ -1244,12 +1345,12 @@ impl IceAgent {
             None => {
                 // No remote candidate with the source ip addr, create new peer-reflexive candidate
                 self.remote_candidates.insert(Candidate {
-                    addr: pkt.source,
+                    addr: check.source,
                     kind: CandidateKind::PeerReflexive,
-                    priority: priority.0,
+                    priority: check.priority,
                     foundation: "~".into(),
-                    component: pkt.component,
-                    base: pkt.source,
+                    component: check.component,
+                    base: check.source,
                 })
             }
         };
@@ -1296,21 +1397,7 @@ impl IceAgent {
             )
         );
 
-        let stun_response = stun::make_success_response(
-            pkt.data.transaction_id(),
-            &self.local_credentials,
-            pkt.source,
-        );
-
-        self.events.push_back(IceEvent::SendData {
-            component,
-            data: stun_response,
-            source: Some(self.local_candidates[local_id].base.ip()),
-            target: pkt.source,
-        });
-
-        // The controlled agent sets the nominated flag once the pair has succeeded
-        let nominated = use_candidate && !self.is_controlling;
+        let nominated = check.use_candidate && !self.is_controlling;
 
         if nominated {
             pair.remote_nominated = true;
