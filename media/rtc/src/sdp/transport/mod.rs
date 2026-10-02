@@ -322,13 +322,16 @@ pub(super) fn create_from_offer(
         .or(media_desc.ice_pwd.as_ref());
 
     let connectivity = if let Some((ufrag, pwd)) = ice_ufrag.zip(ice_pwd) {
+        // The answerer is controlled, unless the offerer is a lite implementation
+        let is_controlling = session_desc.ice_lite;
+
         let mut ice_agent = IceAgent::new_from_answer(
             ice_credentials.clone(),
             IceCredentials {
                 ufrag: ufrag.ufrag.to_string(),
                 pwd: pwd.pwd.to_string(),
             },
-            false,
+            is_controlling,
             media_desc.rtcp_mux,
         );
 

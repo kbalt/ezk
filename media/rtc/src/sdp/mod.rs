@@ -733,16 +733,15 @@ impl SdpSession {
                     *remote_rtp_address == other_remote_rtp_addr
                         && *remote_rtcp_address == other_remote_rtcp_addr
                 }
-                Connectivity::Ice(..) => {
-                    // Test if any of the host candidates have the same address
-                    t.initial_remote_ice_candidates.iter().any(|c| {
-                        c.typ == "host"
-                            && remote_media_desc
-                                .ice_candidates
-                                .iter()
-                                .any(|rc| rc.typ == "host" && c.address == rc.address)
-                    })
-                }
+                Connectivity::Ice(..) => t.initial_remote_ice_candidates.iter().any(|c| {
+                    c.typ.eq_ignore_ascii_case("host")
+                        && remote_media_desc.ice_candidates.iter().any(|rc| {
+                            rc.typ.eq_ignore_ascii_case("host")
+                                && c.component == rc.component
+                                && c.address == rc.address
+                                && c.port == rc.port
+                        })
+                }),
             })
             .map(|(t, _)| t)
     }
