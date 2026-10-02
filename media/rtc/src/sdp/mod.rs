@@ -59,6 +59,8 @@ pub use pending_media::PendingMedia;
 pub use sdp_types::{Direction, MediaType, ParseSessionDescriptionError, SessionDescription};
 pub use transport::ResolveError;
 
+const MAX_UNSENT_MEDIA_AGE: Duration = Duration::from_millis(200);
+
 #[derive(Debug, thiserror::Error)]
 pub enum SdpError {
     #[error(transparent)]
@@ -1662,6 +1664,11 @@ impl SdpSession {
 
             // Poll the associated RTP session only if the transport is connected
             let Some(mut writer) = transport.writer() else {
+                // Media cannot be sent, clear outbound buffers
+                if let Some(before) = now.checked_sub(MAX_UNSENT_MEDIA_AGE) {
+                    rtp_session.discard_outbound_before(before);
+                }
+
                 continue;
             };
 

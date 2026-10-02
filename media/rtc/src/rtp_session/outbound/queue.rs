@@ -184,6 +184,18 @@ impl OutboundQueue {
         });
     }
 
+    pub(crate) fn discard_before(&mut self, before: Instant) {
+        match &mut self.queue {
+            Queue::Generate(queue) => {
+                *queue = queue.split_off(&QueueKey {
+                    send_at: before,
+                    tie_breaker: 0,
+                });
+            }
+            Queue::Forward(queue) => queue.clear(),
+        }
+    }
+
     pub(crate) fn poll(&mut self, now: Instant) -> Option<RtpOutboundStreamEvent> {
         // Check if there are packets queued for retransmissions
         if let Some(rtx) = &mut self.rtx

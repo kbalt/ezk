@@ -341,6 +341,12 @@ impl RtpSession {
         timeout
     }
 
+    pub(crate) fn discard_outbound_before(&mut self, before: Instant) {
+        for tx in self.tx.values_mut() {
+            tx.discard_before(before);
+        }
+    }
+
     /// Poll the session for any new events
     pub fn poll(&mut self, now: Instant, mtu: Mtu) -> Option<RtpSessionPollEvent> {
         let fallback_sender_ssrc = *self.tx.keys().next().unwrap_or(&self.next_tx_ssrc);

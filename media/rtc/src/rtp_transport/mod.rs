@@ -215,18 +215,6 @@ impl RtpTransport {
                     self.events.push_back(event);
                 }
             }
-
-            match ice_agent.connection_state() {
-                IceConnectionState::New => {}
-                IceConnectionState::Checking => {}
-                IceConnectionState::Connected => {}
-                IceConnectionState::Failed => {
-                    self.set_connection_state(TransportConnectionState::Failed);
-                }
-                IceConnectionState::Disconnected => {
-                    // unclear if the transport state should change here, since this state may be temporary
-                }
-            }
         }
 
         // Poll DTLS if RTP addr is known
@@ -250,6 +238,28 @@ impl RtpTransport {
     }
 
     fn evaluate_transport_connection_state(&mut self) {
+        // With ICE the transport can only be used once ICE has found a pair to use
+        if let Connectivity::Ice(ice_agent) = &self.connectivity {
+            match ice_agent.connection_state() {
+                IceConnectionState::New => return,
+                IceConnectionState::Checking => {
+                    self.set_connection_state(TransportConnectionState::Connecting);
+                    return;
+                }
+                IceConnectionState::Failed => {
+                    self.set_connection_state(TransportConnectionState::Failed);
+                    return;
+                }
+                // Data may still be sent while consent checks go unanswered, until consent expires (RFC 7675)
+                IceConnectionState::Connected | IceConnectionState::Disconnected => {
+                    if self.local_and_remote_addrs().is_none() {
+                        self.set_connection_state(TransportConnectionState::Connecting);
+                        return;
+                    }
+                }
+            }
+        }
+
         match &mut self.kind {
             RtpTransportKind::Unencrypted | RtpTransportKind::SdesSrtp(..) => {
                 self.set_connection_state(TransportConnectionState::Connected);

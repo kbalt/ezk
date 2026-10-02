@@ -5,6 +5,11 @@ use ice::{Component, IceConnectionState, IceGatheringState};
 /// Connection state of a transport
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TransportConnectionState {
+    /// # ICE
+    ///
+    /// ICE failed to find a candidate pair to use, or consent to send on the pair in use expired. It may recover if ICE
+    /// does (e.g. a check from the peer revives a pair), except after consent was lost.
+    ///
     /// # DTLS-SRTP
     ///
     /// The transport has failed as the result of an error (such as receipt of an error alert or failure to validate the remote fingerprint).
@@ -13,6 +18,10 @@ pub enum TransportConnectionState {
     /// The transport has just been created
     New,
 
+    /// # ICE
+    ///
+    /// The ICE agent is checking candidate pairs.
+    ///
     /// # DTLS-SRTP
     ///
     /// DTLS is in the process of negotiating a secure connection and verifying the remote fingerprint.
@@ -25,6 +34,10 @@ pub enum TransportConnectionState {
     /// # RTP or SDES-SRTP
     ///
     /// This state is reached as soon as the SDP exchange has concluded or (if used) the ICE agent has established a connection.
+    ///
+    /// # ICE
+    ///
+    /// The transport stays connected while ICE reports `Disconnected`, data may be sent until consent expires.
     Connected,
 }
 

@@ -151,7 +151,11 @@ impl RtpOutboundStream {
         self.queue.push_forward(packet);
     }
 
-    /// Check for a RTP packet that is ready to be sent
+    /// Drop queued packets that should have been sent before `before`
+    pub(crate) fn discard_before(&mut self, before: Instant) {
+        self.queue.discard_before(before);
+    }
+
     pub(crate) fn poll(&mut self, now: Instant) -> Option<RtpOutboundStreamEvent> {
         match self.queue.poll(now)? {
             RtpOutboundStreamEvent::SendRtpPacket { rtp_packet, is_rtx } => {
