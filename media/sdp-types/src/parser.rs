@@ -210,9 +210,6 @@ impl Parser {
                 // TODO error here ?
             }
 
-            "ice-lite" => {
-                self.ice_lite = true;
-            }
             "ice-options" => {
                 let (_, options) = IceOptions::parse(src.as_ref(), value).finish()?;
                 self.ice_options = options;
@@ -361,6 +358,10 @@ impl Parser {
                 }
 
                 // TODO error here?
+            }
+
+            "ice-lite" => {
+                self.ice_lite = true;
             }
             _ => {
                 let attr = UnknownAttribute {
