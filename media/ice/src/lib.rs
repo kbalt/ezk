@@ -26,6 +26,11 @@ use stun_types::{
 mod stun;
 
 const MAX_EARLY_CHECKS: usize = 64;
+const MAX_REMOTE_CANDIDATES: usize = 100;
+const MAX_CANCELLED_TRANSACTIONS: usize = 64;
+
+/// Minimum ICE runtime before timeout as recommended in RFC 8863
+const PAC_TIMEOUT: Duration = Duration::from_millis(39_500);
 
 /// A message received on a UDP socket
 pub struct ReceivedPkt<D = Vec<u8>> {
@@ -228,11 +233,6 @@ enum CandidatePairState {
     /// was never received, or a failure response was received).
     Failed,
 }
-
-const MAX_CANCELLED_TRANSACTIONS: usize = 64;
-
-/// Minimum ICE runtime before timeout as recommended in RFC 8863
-const PAC_TIMEOUT: Duration = Duration::from_millis(39_500);
 
 /// Transaction that has been replaced by a new check of the same pair, kept to match incoming responses
 #[derive(Debug)]
@@ -512,7 +512,7 @@ impl IceAgent {
         let local_preference = local_preference << 8;
         let priority = kind_preference + local_preference + (256 - component as u32);
 
-        self.local_candidates.insert(Candidate {
+        let local_id = self.local_candidates.insert(Candidate {
             addr,
             kind,
             priority,
@@ -521,7 +521,7 @@ impl IceAgent {
             base,
         });
 
-        self.form_pairs();
+        self.form_pairs_for_local(local_id);
     }
 
     /// Add a peer's ice-candidate which has been received using an extern signaling protocol
@@ -568,10 +568,10 @@ impl IceAgent {
 
         let addr = SocketAddr::new(ip, candidate.port);
 
-        if let Some(existing) = self
+        let remote_id = if let Some((remote_id, existing)) = self
             .remote_candidates
-            .values_mut()
-            .find(|c| c.addr == addr && c.component == component)
+            .iter_mut()
+            .find(|(_, c)| c.addr == addr && c.component == component)
         {
             if existing.kind != CandidateKind::PeerReflexive {
                 log::debug!("Discard duplicate remote candidate candidate:{candidate}");
@@ -583,7 +583,16 @@ impl IceAgent {
             existing.foundation = candidate.foundation.to_string();
 
             self.recompute_pair_priorities();
+
+            remote_id
         } else {
+            if self.remote_candidates.len() >= MAX_REMOTE_CANDIDATES {
+                log::debug!(
+                    "Discard remote candidate, too many remote candidates candidate:{candidate}"
+                );
+                return;
+            }
+
             self.remote_candidates.insert(Candidate {
                 addr,
                 kind,
@@ -591,50 +600,17 @@ impl IceAgent {
                 foundation: candidate.foundation.to_string(),
                 component,
                 base: addr,
-            });
-        }
+            })
+        };
 
-        self.form_pairs();
+        self.form_pairs_for_remote(remote_id);
     }
 
-    fn form_pairs(&mut self) {
-        for (local_id, local_candidate) in &self.local_candidates {
-            for (remote_id, remote_candidate) in &self.remote_candidates {
-                // Peer-reflexive candidates are already paired with the candidate they were detected on
-                if remote_candidate.kind == CandidateKind::PeerReflexive {
-                    continue;
-                }
+    fn form_pairs_for_local(&mut self, local_id: LocalCandidateId) {
+        let local_candidate = &self.local_candidates[local_id];
 
-                // Do not pair candidates with different components
-                if local_candidate.component != remote_candidate.component {
-                    continue;
-                }
-
-                // Check if the pair already exists
-                let already_exists = self
-                    .pairs
-                    .iter()
-                    .any(|pair| pair.local == local_id && pair.remote == remote_id);
-
-                if already_exists {
-                    continue;
-                }
-
-                // Exclude pairs with different ip version
-                match (local_candidate.addr.ip(), remote_candidate.addr.ip()) {
-                    (IpAddr::V4(l), IpAddr::V4(r)) if l.is_link_local() == r.is_link_local() => {
-                        /* ok */
-                    }
-                    // Only pair IPv6 addresses when either both or neither are link local addresses
-                    (IpAddr::V6(l), IpAddr::V6(r))
-                        if l.is_unicast_link_local() == r.is_unicast_link_local() =>
-                    { /* ok */ }
-                    _ => {
-                        // Would make an invalid pair, skip
-                        continue;
-                    }
-                }
-
+        for (remote_id, remote_candidate) in &self.remote_candidates {
+            if can_pair(local_candidate, remote_candidate) {
                 Self::add_candidate_pair(
                     local_id,
                     local_candidate,
@@ -646,8 +622,24 @@ impl IceAgent {
             }
         }
 
-        self.pairs
-            .sort_unstable_by_key(|b| std::cmp::Reverse(b.priority));
+        self.prune_pairs();
+    }
+
+    fn form_pairs_for_remote(&mut self, remote_id: RemoteCandidateId) {
+        let remote_candidate = &self.remote_candidates[remote_id];
+
+        for (local_id, local_candidate) in &self.local_candidates {
+            if can_pair(local_candidate, remote_candidate) {
+                Self::add_candidate_pair(
+                    local_id,
+                    local_candidate,
+                    remote_id,
+                    remote_candidate,
+                    self.is_controlling,
+                    &mut self.pairs,
+                );
+            }
+        }
 
         self.prune_pairs();
     }
@@ -676,16 +668,20 @@ impl IceAgent {
             local_candidate.component,
         );
 
-        pairs.push(CandidatePair {
-            local: local_id,
-            remote: remote_id,
-            priority,
-            state: CandidatePairState::Waiting,
-            component: local_candidate.component,
-            nomination: CandidatePairNomination::None,
-            remote_nominated: false,
-        });
-        pairs.sort_unstable_by_key(|b| std::cmp::Reverse(b.priority));
+        let index = pairs.partition_point(|p| p.priority >= priority);
+
+        pairs.insert(
+            index,
+            CandidatePair {
+                local: local_id,
+                remote: remote_id,
+                priority,
+                state: CandidatePairState::Waiting,
+                component: local_candidate.component,
+                nomination: CandidatePairNomination::None,
+                remote_nominated: false,
+            },
+        );
     }
 
     fn recompute_pair_priorities(&mut self) {
@@ -903,31 +899,34 @@ impl IceAgent {
         }
     }
 
-    /// Prune the lowest priority pairs until `max_pairs` is reached
     fn prune_pairs(&mut self) {
-        let mut to_prune = Vec::new();
+        let mut excess = self.pairs.len().saturating_sub(self.max_pairs);
 
-        for (index, pair) in self.pairs.iter().enumerate().rev() {
-            // Stop pruning when no longer exceeding the limit
-            if (self.pairs.len() - to_prune.len()) <= self.max_pairs {
-                break;
-            }
-
-            // Don't prune nominated candidates
-            if pair.nomination != CandidatePairNomination::None {
-                continue;
-            }
-
-            // Don't prune successful or in-flight candidates
-            if matches!(
-                pair.state,
-                CandidatePairState::Succeeded | CandidatePairState::InProgress { .. }
-            ) {
-                continue;
-            }
-
-            to_prune.push(index);
+        if excess == 0 {
+            return;
         }
+
+        let mut to_prune = Vec::with_capacity(excess);
+
+        // Do two passes, prioritize removing failed pairs, then waiting
+        for prunable in [CandidatePairState::Failed, CandidatePairState::Waiting] {
+            for (index, pair) in self.pairs.iter().enumerate().rev() {
+                if excess == 0 {
+                    break;
+                }
+
+                let keep = pair.nomination != CandidatePairNomination::None
+                    || pair.remote_nominated
+                    || pair.state != prunable;
+
+                if !keep {
+                    to_prune.push(index);
+                    excess -= 1;
+                }
+            }
+        }
+
+        to_prune.sort_unstable_by(|a, b| b.cmp(a));
 
         for index in to_prune {
             let pair = self.pairs.remove(index);
@@ -940,6 +939,14 @@ impl IceAgent {
                 )
             );
         }
+
+        // Remove triggered checks of pruned pairs
+        let pairs = &self.pairs;
+        self.triggered_check_queue.retain(|(local_id, remote_id)| {
+            pairs
+                .iter()
+                .any(|p| p.local == *local_id && p.remote == *remote_id)
+        });
     }
 
     /// Receive network packets for this ICE agent
@@ -1342,6 +1349,13 @@ impl IceAgent {
 
         let remote_id = match matching_remote_candidate {
             Some((remote, _)) => remote,
+            None if self.remote_candidates.len() >= MAX_REMOTE_CANDIDATES => {
+                log::debug!(
+                    "Not adding peer-reflexive candidate {}, limit reached",
+                    check.source
+                );
+                return;
+            }
             None => {
                 // No remote candidate with the source ip addr, create new peer-reflexive candidate
                 self.remote_candidates.insert(Candidate {
@@ -1380,10 +1394,18 @@ impl IceAgent {
                 &mut self.pairs,
             );
 
-            self.pairs
+            self.prune_pairs();
+
+            let Some(pair_index) = self
+                .pairs
                 .iter()
                 .position(|p| p.local == local_id && p.remote == remote_id)
-                .expect("just inserted pair")
+            else {
+                // The new pair was pruned
+                return;
+            };
+
+            pair_index
         };
 
         let pair = &mut self.pairs[pair_index];
@@ -1867,6 +1889,23 @@ impl IceAgent {
                 }
             })
             .collect()
+    }
+}
+
+fn can_pair(local_candidate: &Candidate, remote_candidate: &Candidate) -> bool {
+    // Peer-reflexive candidates are only paired with the local candidate a check from them was received on
+    if remote_candidate.kind == CandidateKind::PeerReflexive {
+        return false;
+    }
+
+    if local_candidate.component != remote_candidate.component {
+        return false;
+    }
+
+    match (local_candidate.addr.ip(), remote_candidate.addr.ip()) {
+        (IpAddr::V4(l), IpAddr::V4(r)) => l.is_link_local() == r.is_link_local(),
+        (IpAddr::V6(l), IpAddr::V6(r)) => l.is_unicast_link_local() == r.is_unicast_link_local(),
+        _ => false,
     }
 }
 
