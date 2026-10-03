@@ -211,9 +211,7 @@ impl RtpTransport {
             ice_agent.poll(now);
 
             while let Some(event) = ice_agent.pop_event() {
-                if let Some(event) = ice_to_transport_event(event) {
-                    self.events.push_back(event);
-                }
+                self.events.push_back(ice_to_transport_event(event));
             }
         }
 
@@ -562,29 +560,25 @@ impl RtpTransportPorts {
     }
 }
 
-pub(crate) fn ice_to_transport_event(event: ice::IceEvent) -> Option<RtpTransportEvent> {
+pub(crate) fn ice_to_transport_event(event: ice::IceEvent) -> RtpTransportEvent {
     match event {
         ice::IceEvent::GatheringStateChanged { old, new } => {
-            Some(RtpTransportEvent::IceGatheringState { old, new })
+            RtpTransportEvent::IceGatheringState { old, new }
         }
         ice::IceEvent::ConnectionStateChanged { old, new } => {
-            Some(RtpTransportEvent::IceConnectionState { old, new })
-        }
-        ice::IceEvent::DiscoveredAddr { .. } => {
-            // TODO: currently not using this event
-            None
+            RtpTransportEvent::IceConnectionState { old, new }
         }
         ice::IceEvent::SendData {
             component,
             data,
             source,
             target,
-        } => Some(RtpTransportEvent::SendData {
+        } => RtpTransportEvent::SendData {
             component,
             data,
             source,
             target,
-        }),
+        },
     }
 }
 

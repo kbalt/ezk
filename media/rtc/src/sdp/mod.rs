@@ -25,8 +25,8 @@ use ice::{Component, IceAgent, IceCredentials, ReceivedPkt};
 use rtcp_types::Compound;
 use sdp_types::{
     Connection, Fingerprint, FingerprintAlgorithm, Fmtp, Group, IceCandidate, IceOptions,
-    IcePassword, IceUsernameFragment, MediaDescription, MsId, Origin, Rtcp, RtcpFeedback,
-    RtcpFeedbackKind, RtcpFeedbackPt, RtpMap, Time, TransportProtocol, UnknownAttribute,
+    MediaDescription, MsId, Origin, Rtcp, RtcpFeedback, RtcpFeedbackKind, RtcpFeedbackPt, RtpMap,
+    Time, TransportProtocol, UnknownAttribute,
 };
 use slotmap::{SlotMap, new_key_type};
 use std::{
@@ -144,6 +144,7 @@ enum PendingChange {
     AddMedia(PendingMedia),
     RemoveMedia(MediaId),
     ChangeDirection(MediaId, Direction),
+    RestartIce,
 }
 
 /// Some additional information to create a SDP answer. Must be passed into [`SdpSession::create_sdp_answer`].
@@ -432,6 +433,91 @@ impl SdpSession {
         }
     }
 
+    /// Restart ICE on all transports with the next SDP offer
+    ///
+    /// The offer created by the next call to [`create_sdp_offer`](Self::create_sdp_offer) contains new ICE credentials
+    ///
+    /// Media continues to be sent on the candidate pairs in use until ICE has selected new ones
+    ///
+    /// A restart is required to recover from a failed ICE connection, e.g. after the network changed.
+    pub fn restart_ice(&mut self) {
+        let uses_ice = self
+            .transports
+            .values()
+            .any(|t| matches!(t.transport.connectivity(), Connectivity::Ice(..)));
+
+        let already_pending = self
+            .pending_changes
+            .iter()
+            .any(|c| matches!(c, PendingChange::RestartIce));
+
+        if uses_ice && !already_pending {
+            self.pending_changes.push(PendingChange::RestartIce);
+        }
+    }
+
+    fn restart_ice_agents(&mut self) {
+        self.ice_credentials = IceCredentials::random();
+
+        for transport in self.transports.values_mut() {
+            if let Connectivity::Ice(ice_agent) = transport.transport.connectivity_mut() {
+                ice_agent.restart(self.ice_credentials.clone());
+            }
+        }
+
+        for transport in self.offered_transports.values_mut() {
+            if let Some(ice_agent) = transport.ice_agent() {
+                ice_agent.restart(self.ice_credentials.clone());
+            }
+        }
+    }
+
+    /// Returns if the peer restarted ICE
+    fn update_remote_ice_data(
+        transport: &mut EstablishedTransport,
+        session_desc: &SessionDescription,
+        media_desc: &MediaDescription,
+        restart_credentials: Option<&IceCredentials>,
+    ) -> bool {
+        let Connectivity::Ice(ice_agent) = transport.transport.connectivity_mut() else {
+            return false;
+        };
+
+        let Some(credentials) = transport::remote_ice_credentials(session_desc, media_desc) else {
+            return false;
+        };
+
+        let restarted = match ice_agent.remote_credentials() {
+            Some(current) if *current == credentials => {
+                // Not a restart, but the peer may have added candidates
+                for candidate in &media_desc.ice_candidates {
+                    ice_agent.add_remote_candidate(candidate);
+                }
+
+                return false;
+            }
+            Some(_) => {
+                log::debug!("Peer restarted ICE");
+
+                let local_credentials = restart_credentials
+                    .cloned()
+                    .unwrap_or_else(|| ice_agent.credentials().clone());
+
+                ice_agent.restart(local_credentials);
+
+                true
+            }
+            // Answer to an offer which restarted ICE
+            None => false,
+        };
+
+        ice_agent.set_remote_data(credentials, &media_desc.ice_candidates, media_desc.rtcp_mux);
+
+        transport.initial_remote_ice_candidates = media_desc.ice_candidates.clone();
+
+        restarted
+    }
+
     /// Returns if any media has been added
     pub fn has_media(&self) -> bool {
         let has_pending_media = self
@@ -513,6 +599,9 @@ impl SdpSession {
         let mut new_state = vec![];
         let mut response = vec![];
 
+        // New local credentials of the transports the peer restarts ICE on
+        let restart_credentials = IceCredentials::random();
+
         for (mline, remote_media_desc) in offer.media_descriptions.iter().enumerate() {
             let requested_direction: DirectionBools = remote_media_desc.direction.flipped().into();
 
@@ -524,6 +613,19 @@ impl SdpSession {
 
             if let Some(position) = matched_position {
                 self.update_active_media(requested_direction, self.media[position].id);
+
+                let transport_id = self.media[position].transport_id;
+                let ice_restarted = Self::update_remote_ice_data(
+                    &mut self.transports[transport_id],
+                    &offer,
+                    remote_media_desc,
+                    Some(&restart_credentials),
+                );
+
+                if ice_restarted {
+                    self.ice_credentials = restart_credentials.clone();
+                }
+
                 let media = self.media.remove(position);
                 response.push(SdpResponseEntry::Active(media.id));
                 new_state.push(media);
@@ -778,7 +880,16 @@ impl SdpSession {
 
                 if media.matches(&self.transports, &answer, remote_media_desc) {
                     let media_id = media.id;
+                    let transport_id = media.transport_id;
+
                     self.update_active_media(requested_direction, media_id);
+                    Self::update_remote_ice_data(
+                        &mut self.transports[transport_id],
+                        &answer,
+                        remote_media_desc,
+                        None,
+                    );
+
                     continue 'next_media_desc;
                 }
             }
@@ -795,6 +906,7 @@ impl SdpSession {
                         ),
                         PendingChange::RemoveMedia(..) => false,
                         PendingChange::ChangeDirection(..) => false,
+                        PendingChange::RestartIce => false,
                     });
 
             if let Some(offered_media_index) = offered_media_index {
@@ -1172,6 +1284,14 @@ impl SdpSession {
 
         self.offered_changes = take(&mut self.pending_changes);
 
+        if self
+            .offered_changes
+            .iter()
+            .any(|change| matches!(change, PendingChange::RestartIce))
+        {
+            self.restart_ice_agents();
+        }
+
         let mut media_descriptions = vec![];
 
         // Put the current media sessions in the offer
@@ -1181,7 +1301,7 @@ impl SdpSession {
             // Apply requested changes
             for change in &self.offered_changes {
                 match change {
-                    PendingChange::AddMedia(..) => {}
+                    PendingChange::AddMedia(..) | PendingChange::RestartIce => {}
                     PendingChange::RemoveMedia(media_id) => {
                         if media.id == *media_id {
                             continue 'outer;
@@ -1390,23 +1510,23 @@ impl SdpSession {
     }
 
     fn decorate_session_desc(&mut self, sess_desc: &mut SessionDescription) {
-        let use_ice = self
-            .transports
-            .values()
-            .any(|e| matches!(e.transport.connectivity(), Connectivity::Ice(..)))
-            || self
-                .offered_transports
-                .values_mut()
-                .any(|t| t.ice_agent().is_some());
+        // ICE credentials are put on the session level, unless the transports use different ones (e.g. after the peer
+        // restarted ICE on one of them)
+        let mut ice_credentials = sess_desc
+            .media_descriptions
+            .iter()
+            .filter_map(|desc| desc.ice_ufrag.as_ref().zip(desc.ice_pwd.as_ref()));
 
-        if use_ice {
-            sess_desc.ice_ufrag = Some(IceUsernameFragment {
-                ufrag: self.ice_credentials.ufrag.clone().into(),
-            });
+        if let Some((ufrag, pwd)) = ice_credentials.next()
+            && ice_credentials.all(|(u, p)| u.ufrag == ufrag.ufrag && p.pwd == pwd.pwd)
+        {
+            sess_desc.ice_ufrag = Some(ufrag.clone());
+            sess_desc.ice_pwd = Some(pwd.clone());
 
-            sess_desc.ice_pwd = Some(IcePassword {
-                pwd: self.ice_credentials.pwd.clone().into(),
-            });
+            for media_desc in &mut sess_desc.media_descriptions {
+                media_desc.ice_ufrag = None;
+                media_desc.ice_pwd = None;
+            }
         }
 
         let use_dtls = self

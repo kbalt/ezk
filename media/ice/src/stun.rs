@@ -1,4 +1,4 @@
-use super::{Candidate, IceCredentials, IceEvent};
+use super::{IceCredentials, IceEvent};
 use crate::Component;
 use std::{
     cmp::min,
@@ -56,7 +56,7 @@ pub(super) fn make_binding_request(
     transaction_id: TransactionId,
     local_credentials: &IceCredentials,
     remote_credentials: &IceCredentials,
-    local_candidate: &Candidate,
+    priority: u32,
     is_controlling: bool,
     control_tie_breaker: u64,
     use_candidate: bool,
@@ -65,7 +65,7 @@ pub(super) fn make_binding_request(
 
     let username = format!("{}:{}", remote_credentials.ufrag, local_credentials.ufrag);
     stun_message.add_attr(Username::new(&username));
-    stun_message.add_attr(Priority(local_candidate.priority));
+    stun_message.add_attr(Priority(priority));
 
     if is_controlling {
         stun_message.add_attr(IceControlling(control_tie_breaker));
@@ -129,14 +129,6 @@ pub(crate) fn verify_request(
     local_credentials: &IceCredentials,
     stun_msg: &mut Message,
 ) -> Option<String> {
-    let passed_integrity_check = stun_msg
-        .attribute_with::<MessageIntegrity>(MessageIntegrityKey::new(&local_credentials.pwd))
-        .is_some_and(|r| r.is_ok());
-
-    if !passed_integrity_check {
-        return None;
-    }
-
     let username = match stun_msg.attribute::<Username>() {
         Some(Ok(username)) => username,
         Some(Err(e)) => {
@@ -155,7 +147,13 @@ pub(crate) fn verify_request(
         return None;
     }
 
-    Some(remote_ufrag.to_owned())
+    let remote_ufrag = remote_ufrag.to_owned();
+
+    let passed_integrity_check = stun_msg
+        .attribute_with::<MessageIntegrity>(MessageIntegrityKey::new(&local_credentials.pwd))
+        .is_some_and(|r| r.is_ok());
+
+    passed_integrity_check.then_some(remote_ufrag)
 }
 
 pub(crate) fn verify_response(remote_credentials: &IceCredentials, stun_msg: &mut Message) -> bool {

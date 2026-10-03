@@ -70,11 +70,6 @@ pub enum IceEvent {
         old: IceConnectionState,
         new: IceConnectionState,
     },
-    DiscoveredAddr {
-        component: Component,
-        source: SocketAddr,
-        target: SocketAddr,
-    },
     SendData {
         component: Component,
         data: Vec<u8>,
@@ -107,8 +102,8 @@ pub struct IceAgent {
     gathering_state: IceGatheringState,
     connection_state: IceConnectionState,
 
-    /// Pair last reported as used for each component (index = component - 1)
-    selected_pairs: [Option<(LocalCandidateId, RemoteCandidateId)>; 2],
+    /// Pairs of the previous generation which are still in use during an ICE restart
+    previous_pairs: Vec<PreviousPair>,
 
     /// Consent to send on a pair in use has been lost, due to 403 error
     consent_lost: bool,
@@ -232,6 +227,62 @@ impl ConsentState {
     fn random_check_interval() -> Duration {
         CONSENT_CHECK_INTERVAL.mul_f64(rand::random_range(0.8..=1.2))
     }
+
+    fn is_expired(&self, now: Instant) -> bool {
+        now >= self.last_response + CONSENT_TIMEOUT
+    }
+
+    fn is_missing(&self) -> bool {
+        self.missed >= CONSENT_CHECKS_MISSED_UNTIL_DISCONNECTED
+    }
+
+    fn deadline(&self) -> Instant {
+        min(self.next_check_at, self.last_response + CONSENT_TIMEOUT)
+    }
+
+    /// Returns the transaction id of the consent check to send, if one is due
+    fn poll(&mut self, now: Instant) -> Option<TransactionId> {
+        if now < self.next_check_at {
+            return None;
+        }
+
+        if self.answered {
+            self.missed = 0;
+        } else {
+            self.missed += 1;
+        }
+
+        self.answered = false;
+        self.next_check_at = now + Self::random_check_interval();
+
+        // Consent checks are only sent once, with a new transaction id
+        let transaction_id = TransactionId::random();
+
+        if self.pending.len() >= MAX_PENDING_CONSENT_CHECKS {
+            self.pending.pop_front();
+        }
+
+        self.pending.push_back(transaction_id);
+
+        Some(transaction_id)
+    }
+
+    fn receive_response(&mut self, now: Instant) {
+        self.last_response = now;
+        self.answered = true;
+        self.missed = 0;
+    }
+}
+
+/// Pair of a previous ICE generation, still in use during an ICE restart
+struct PreviousPair {
+    component: Component,
+    local_credentials: IceCredentials,
+    remote_credentials: IceCredentials,
+    priority: u32,
+    local: SocketAddr,
+    remote: SocketAddr,
+    consent: ConsentState,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -311,7 +362,7 @@ struct MatchedTransaction {
 /// Credentials of an ICE agent
 ///
 /// These must be exchanges using some external signaling protocol like SDP
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct IceCredentials {
     pub ufrag: String,
     pub pwd: String,
@@ -351,7 +402,7 @@ impl IceAgent {
             max_pairs: 100,
             gathering_state: IceGatheringState::New,
             connection_state: IceConnectionState::New,
-            selected_pairs: [None; 2],
+            previous_pairs: Vec::new(),
             consent_lost: false,
             pac_deadline: None,
             last_ta_trigger: None,
@@ -381,7 +432,7 @@ impl IceAgent {
             max_pairs: 100,
             gathering_state: IceGatheringState::New,
             connection_state: IceConnectionState::New,
-            selected_pairs: [None; 2],
+            previous_pairs: Vec::new(),
             consent_lost: false,
             pac_deadline: None,
             last_ta_trigger: None,
@@ -405,6 +456,8 @@ impl IceAgent {
             self.stun_server.retain(|s| s.component() == Component::Rtp);
             self.local_candidates
                 .retain(|_, c| c.component == Component::Rtp);
+            self.previous_pairs
+                .retain(|pair| pair.component == Component::Rtp);
         }
 
         self.remote_credentials = Some(credentials);
@@ -438,6 +491,71 @@ impl IceAgent {
     /// Return the ice-agent's ice credentials
     pub fn credentials(&self) -> &IceCredentials {
         &self.local_credentials
+    }
+
+    /// Return the peer's ice credentials, if they are known
+    pub fn remote_credentials(&self) -> Option<&IceCredentials> {
+        self.remote_credentials.as_ref()
+    }
+
+    /// Restart ICE using new local credentials
+    ///
+    /// The remote credentials and candidates and all candidate pairs are discarded. The peer's new credentials and
+    /// candidates must be set using [`set_remote_data`](Self::set_remote_data).
+    ///
+    /// Currently used pairs from before the restart stay valid until the restart is completed.
+    pub fn restart(&mut self, local_credentials: IceCredentials) {
+        let mut previous_pairs = Vec::new();
+
+        for &component in self.components() {
+            if let Some(pair_index) = self.selected_pair_index(component)
+                && let Some(remote_credentials) = &self.remote_credentials
+                && let Some(consent) = self.pairs[pair_index].consent.take()
+            {
+                let pair = &self.pairs[pair_index];
+                let local_candidate = &self.local_candidates[pair.local];
+
+                previous_pairs.push(PreviousPair {
+                    component,
+                    local_credentials: self.local_credentials.clone(),
+                    remote_credentials: remote_credentials.clone(),
+                    priority: local_candidate.priority,
+                    local: local_candidate.base,
+                    remote: self.remote_candidates[pair.remote].addr,
+                    consent,
+                });
+            } else if let Some(index) = self
+                .previous_pairs
+                .iter()
+                .position(|pair| pair.component == component)
+            {
+                // Try to keep using previous pair
+                previous_pairs.push(self.previous_pairs.swap_remove(index));
+            }
+        }
+
+        log::debug!(
+            "restarting ICE, previous pairs in use: {}",
+            previous_pairs.len()
+        );
+
+        self.previous_pairs = previous_pairs;
+        self.local_credentials = local_credentials;
+        self.remote_credentials = None;
+        self.remote_candidates.clear();
+        self.pairs.clear();
+        self.triggered_check_queue.clear();
+        self.cancelled_transactions.clear();
+        self.backlog.clear();
+        self.consent_lost = false;
+        self.pac_deadline = None;
+
+        // ICE processing starts over, unless data can still be sent on the previous pairs
+        if self.connection_state != IceConnectionState::New
+            && self.state_of_pairs_in_use().is_none()
+        {
+            self.set_connection_state(IceConnectionState::Checking);
+        }
     }
 
     /// Register a host address for a given ICE component. This will be used to create a host candidate.
@@ -492,12 +610,18 @@ impl IceAgent {
             component = Component::Rtp;
         }
 
-        self.selected_pair(component).map(|pair| {
-            (
+        if let Some(pair) = self.selected_pair(component) {
+            return Some((
                 self.local_candidates[pair.local].base,
                 self.remote_candidates[pair.remote].base,
-            )
-        })
+            ));
+        }
+
+        // During an ICE restart data is sent on the previous pair, until a new one has been selected
+        self.previous_pairs
+            .iter()
+            .find(|pair| pair.component == component)
+            .map(|pair| (pair.local, pair.remote))
     }
 
     /// The pair used for a component: the highest priority pair that has been selected and succeeded
@@ -536,7 +660,7 @@ impl IceAgent {
             let pair = &mut self.pairs[pair_index];
             let consent = pair.consent.get_or_insert_with(|| ConsentState::new(now));
 
-            if now >= consent.last_response + CONSENT_TIMEOUT {
+            if consent.is_expired(now) {
                 log::warn!(
                     "consent expired for pair {}",
                     DisplayPair(
@@ -549,27 +673,9 @@ impl IceAgent {
                 return;
             }
 
-            if now < consent.next_check_at {
+            let Some(transaction_id) = consent.poll(now) else {
                 continue;
-            }
-
-            if consent.answered {
-                consent.missed = 0;
-            } else {
-                consent.missed += 1;
-            }
-
-            consent.answered = false;
-            consent.next_check_at = now + ConsentState::random_check_interval();
-
-            // Consent checks are only sent once, with a new transaction id
-            let transaction_id = TransactionId::random();
-
-            if consent.pending.len() >= MAX_PENDING_CONSENT_CHECKS {
-                consent.pending.pop_front();
-            }
-
-            consent.pending.push_back(transaction_id);
+            };
 
             let local_candidate = &self.local_candidates[pair.local];
 
@@ -577,7 +683,7 @@ impl IceAgent {
                 transaction_id,
                 &self.local_credentials,
                 remote_credentials,
-                local_candidate,
+                local_candidate.priority,
                 self.is_controlling,
                 self.control_tie_breaker,
                 false,
@@ -592,6 +698,45 @@ impl IceAgent {
         }
     }
 
+    fn poll_previous_pairs(&mut self, now: Instant) {
+        self.previous_pairs.retain(|pair| {
+            let expired = pair.consent.is_expired(now);
+
+            if expired {
+                log::warn!(
+                    "consent expired for previous pair {} <-> {}",
+                    pair.local,
+                    pair.remote
+                );
+            }
+
+            !expired
+        });
+
+        for pair in &mut self.previous_pairs {
+            let Some(transaction_id) = pair.consent.poll(now) else {
+                continue;
+            };
+
+            let request = stun::make_binding_request(
+                transaction_id,
+                &pair.local_credentials,
+                &pair.remote_credentials,
+                pair.priority,
+                self.is_controlling,
+                self.control_tie_breaker,
+                false,
+            );
+
+            self.events.push_back(IceEvent::SendData {
+                component: pair.component,
+                data: request,
+                source: Some(pair.local.ip()),
+                target: pair.remote,
+            });
+        }
+    }
+
     fn handle_lost_consent(&mut self, pair_index: usize) {
         let pair = &mut self.pairs[pair_index];
 
@@ -602,6 +747,27 @@ impl IceAgent {
 
         self.consent_lost = true;
         self.triggered_check_queue.clear();
+        self.previous_pairs.clear();
+    }
+
+    fn check_if_response_belongs_to_previous_pair(&mut self, msg: &mut Message) -> Option<usize> {
+        let transaction_id = msg.transaction_id();
+
+        let index = self
+            .previous_pairs
+            .iter()
+            .position(|pair| pair.consent.pending.contains(&transaction_id))?;
+
+        let pair = &mut self.previous_pairs[index];
+
+        if !stun::verify_response(&pair.remote_credentials, msg) {
+            log::debug!("Response to consent check of previous pair failed the integrity check");
+            return None;
+        }
+
+        pair.consent.pending.retain(|id| *id != transaction_id);
+
+        Some(index)
     }
 
     /// Find the pair which sent the consent check a response belongs to
@@ -643,9 +809,7 @@ impl IceAgent {
         }
 
         if let Some(consent) = &mut pair.consent {
-            consent.last_response = now;
-            consent.answered = true;
-            consent.missed = 0;
+            consent.receive_response(now);
         }
 
         true
@@ -1053,31 +1217,10 @@ impl IceAgent {
                 .get(*local_id)
                 .is_some_and(|c| c.component != component)
         });
-    }
 
-    /// Emit a [`IceEvent::DiscoveredAddr`] when the pair used by a component changed
-    fn report_selected_pairs(&mut self) {
-        for &component in self.components() {
-            let selected = self
-                .selected_pair(component)
-                .map(|pair| (pair.local, pair.remote));
-
-            let reported = &mut self.selected_pairs[component as usize - 1];
-
-            if *reported == selected {
-                continue;
-            }
-
-            *reported = selected;
-
-            if let Some((local, remote)) = selected {
-                self.events.push_back(IceEvent::DiscoveredAddr {
-                    component,
-                    source: self.local_candidates[local].base,
-                    target: self.remote_candidates[remote].addr,
-                });
-            }
-        }
+        // Remove previous pair for the component
+        self.previous_pairs
+            .retain(|pair| pair.component != component);
     }
 
     fn prune_pairs(&mut self) {
@@ -1201,6 +1344,19 @@ impl IceAgent {
             return;
         }
 
+        // Previous pairs might get responses while the remote_credentials are not set due to to a restart
+        if let Some(index) = self.check_if_response_belongs_to_previous_pair(&mut pkt.data) {
+            let pair = &mut self.previous_pairs[index];
+
+            if pkt.source == pair.remote && pkt.destination.ip() == pair.local.ip() {
+                pair.consent.receive_response(now);
+            } else {
+                log::debug!("Got consent success response with invalid source address, discarding");
+            }
+
+            return;
+        }
+
         let Some(remote_credentials) = &self.remote_credentials else {
             log::debug!(
                 "Got STUN success response before remote credentials are known, discarding"
@@ -1315,6 +1471,24 @@ impl IceAgent {
             return;
         }
 
+        if let Some(index) = self.check_if_response_belongs_to_previous_pair(&mut pkt.data) {
+            let error_code = pkt
+                .data
+                .attribute::<ErrorCode>()
+                .and_then(|r| r.ok())
+                .map(|e| e.number);
+
+            // 403 response revokes consent
+            if error_code == Some(403) {
+                log::warn!("consent on previous pair revoked by peer");
+                self.previous_pairs.remove(index);
+            } else {
+                log::debug!("Got error response to consent check, code={error_code:?}");
+            }
+
+            return;
+        }
+
         let Some(remote_credentials) = &self.remote_credentials else {
             log::debug!("Got STUN error response before remote credentials are known, discarding");
             return;
@@ -1410,7 +1584,7 @@ impl IceAgent {
     fn receive_stun_request(&mut self, now: Instant, mut pkt: ReceivedPkt<Message>) {
         let Some(remote_ufrag) = stun::verify_request(&self.local_credentials, &mut pkt.data)
         else {
-            log::debug!("Incoming stun request failed the integrity check, discarding");
+            self.receive_stun_request_for_possibly_previous_pair(&mut pkt);
             return;
         };
 
@@ -1502,6 +1676,29 @@ impl IceAgent {
 
         self.send_success_response(&pkt, local_id);
         self.handle_check(now, local_id, check);
+    }
+
+    fn receive_stun_request_for_possibly_previous_pair(&mut self, pkt: &mut ReceivedPkt<Message>) {
+        let credentials = self
+            .previous_pairs
+            .iter()
+            .map(|pair| &pair.local_credentials)
+            .find(|credentials| stun::verify_request(credentials, &mut pkt.data).is_some());
+
+        let Some(credentials) = credentials else {
+            log::debug!("Incoming stun request failed the integrity check, discarding");
+            return;
+        };
+
+        let response =
+            stun::make_success_response(pkt.data.transaction_id(), credentials, pkt.source);
+
+        self.events.push_back(IceEvent::SendData {
+            component: pkt.component,
+            data: response,
+            source: Some(pkt.destination.ip()),
+            target: pkt.source,
+        });
     }
 
     /// Find the host candidate with the given address
@@ -1677,6 +1874,7 @@ impl IceAgent {
         // Handle pending stun retransmissions
         self.poll_retransmit(now);
         self.poll_consent(now);
+        self.poll_previous_pairs(now);
         self.poll_state(now);
 
         if self.consent_lost {
@@ -1764,7 +1962,7 @@ impl IceAgent {
                 transaction_id,
                 &self.local_credentials,
                 remote_credentials,
-                &self.local_candidates[pair.local],
+                self.local_candidates[pair.local].priority,
                 self.is_controlling,
                 self.control_tie_breaker,
                 use_candidate,
@@ -1874,8 +2072,17 @@ impl IceAgent {
             self.gathering_state = IceGatheringState::Gathering;
         }
 
-        // Don't try to evaluate connection state when the remote data hasn't been set yet
+        // The pairs in use decide the state, during an ICE restart these may be pairs of the previous generation
+        let state_of_pairs_in_use = self.state_of_pairs_in_use();
+
         if self.remote_credentials.is_none() {
+            // The remote data hasn't been set yet. After an ICE restart only the previous pairs are left to evaluate
+            if self.connection_state != IceConnectionState::New {
+                self.set_connection_state(
+                    state_of_pairs_in_use.unwrap_or(IceConnectionState::Checking),
+                );
+            }
+
             return;
         }
 
@@ -1883,27 +2090,19 @@ impl IceAgent {
 
         if self.consent_lost {
             self.set_connection_state(IceConnectionState::Failed);
-            self.report_selected_pairs();
             return;
         }
 
-        // Check connection state
-        let mut has_rtp_nomination = false;
-        let mut has_rtcp_nomination = false;
+        if let Some(state) = state_of_pairs_in_use {
+            self.set_connection_state(state);
+            return;
+        }
 
+        // Check if ICE processing can still succeed
         let mut rtp_in_progress = false;
         let mut rtcp_in_progress = false;
 
         for pair in &self.pairs {
-            if pair.nomination == CandidatePairNomination::Selected
-                && matches!(pair.state, CandidatePairState::Succeeded)
-            {
-                match pair.component {
-                    Component::Rtp => has_rtp_nomination = true,
-                    Component::Rtcp => has_rtcp_nomination = true,
-                }
-            }
-
             if matches!(
                 pair.state,
                 CandidatePairState::Waiting
@@ -1917,59 +2116,61 @@ impl IceAgent {
             }
         }
 
-        let has_nomination_for_all_components = if self.rtcp_mux {
-            has_rtp_nomination
-        } else {
-            has_rtp_nomination && has_rtcp_nomination
-        };
-
         let still_possible = if self.rtcp_mux {
             rtp_in_progress
         } else {
             rtp_in_progress && rtcp_in_progress
         };
 
-        if has_nomination_for_all_components {
-            let is_consent_missing = self.components().iter().any(|&component| {
-                self.selected_pair(component)
-                    .and_then(|pair| pair.consent.as_ref())
-                    .is_some_and(|consent| {
-                        consent.missed >= CONSENT_CHECKS_MISSED_UNTIL_DISCONNECTED
-                    })
-            });
-
-            if is_consent_missing {
-                self.set_connection_state(IceConnectionState::Disconnected);
-            } else {
-                self.set_connection_state(IceConnectionState::Connected);
-            }
-        } else {
-            if still_possible {
-                match self.connection_state {
-                    IceConnectionState::New => {
-                        self.set_connection_state(IceConnectionState::Checking);
-                    }
-                    IceConnectionState::Checking => {}
-                    IceConnectionState::Connected => {
-                        self.set_connection_state(IceConnectionState::Disconnected);
-                    }
-                    IceConnectionState::Failed => {
-                        // A pair has been revived, e.g. by a check received from the peer
-                        self.set_connection_state(IceConnectionState::Checking);
-                    }
-                    IceConnectionState::Disconnected => {}
+        if still_possible {
+            match self.connection_state {
+                IceConnectionState::New => {
+                    self.set_connection_state(IceConnectionState::Checking);
                 }
-            } else if now < pac_deadline {
-                // PAC deadline not hit, so not failed yet
-                if self.connection_state == IceConnectionState::Connected {
+                IceConnectionState::Checking => {}
+                IceConnectionState::Connected => {
                     self.set_connection_state(IceConnectionState::Disconnected);
                 }
-            } else {
-                self.set_connection_state(IceConnectionState::Failed);
+                IceConnectionState::Failed => {
+                    // A pair has been revived, e.g. by a check received from the peer
+                    self.set_connection_state(IceConnectionState::Checking);
+                }
+                IceConnectionState::Disconnected => {}
             }
+        } else if now < pac_deadline {
+            // PAC deadline not hit, so not failed yet
+            if self.connection_state == IceConnectionState::Connected {
+                self.set_connection_state(IceConnectionState::Disconnected);
+            }
+        } else {
+            self.set_connection_state(IceConnectionState::Failed);
+        }
+    }
+
+    fn state_of_pairs_in_use(&self) -> Option<IceConnectionState> {
+        let mut is_consent_missing = false;
+
+        for &component in self.components() {
+            let consent = match self.selected_pair(component) {
+                Some(pair) => pair.consent.as_ref(),
+
+                None => Some(
+                    &self
+                        .previous_pairs
+                        .iter()
+                        .find(|pair| pair.component == component)?
+                        .consent,
+                ),
+            };
+
+            is_consent_missing |= consent.is_some_and(ConsentState::is_missing);
         }
 
-        self.report_selected_pairs();
+        if is_consent_missing {
+            Some(IceConnectionState::Disconnected)
+        } else {
+            Some(IceConnectionState::Connected)
+        }
     }
 
     fn set_connection_state(&mut self, new: IceConnectionState) {
@@ -2095,13 +2296,8 @@ impl IceAgent {
             .components()
             .iter()
             .filter_map(|&component| self.selected_pair(component)?.consent.as_ref())
-            .map(|consent| {
-                min(
-                    consent.next_check_at,
-                    consent.last_response + CONSENT_TIMEOUT,
-                )
-                .saturating_duration_since(now)
-            })
+            .chain(self.previous_pairs.iter().map(|pair| &pair.consent))
+            .map(|consent| consent.deadline().saturating_duration_since(now))
             .min();
 
         // Expiry of the PAC timer, after which ICE processing may fail

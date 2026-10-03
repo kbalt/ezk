@@ -12,7 +12,8 @@ use ice::{IceAgent, IceCredentials, ReceivedPkt};
 use resolve::resolve_rtp_and_rtcp_address;
 use sdes_srtp::{SdesSrtpNegotiationError, SdesSrtpOffer};
 use sdp_types::{
-    FingerprintAlgorithm, MediaDescription, SessionDescription, Setup, TransportProtocol,
+    FingerprintAlgorithm, IcePassword, IceUsernameFragment, MediaDescription, SessionDescription,
+    Setup, TransportProtocol,
 };
 use std::{
     collections::VecDeque,
@@ -138,6 +139,7 @@ impl OfferedTransport {
         }
 
         if let Some(ice_agent) = &self.ice_agent {
+            set_ice_credentials(desc, ice_agent.credentials());
             desc.ice_candidates.extend(ice_agent.ice_candidates());
             desc.ice_end_of_candidates = true;
         }
@@ -158,24 +160,13 @@ impl OfferedTransport {
             ports.rtcp = None;
         }
 
-        let ice_ufrag = remote_session_desc
-            .ice_ufrag
-            .as_ref()
-            .or(remote_media_desc.ice_ufrag.as_ref());
+        let remote_ice_credentials = remote_ice_credentials(remote_session_desc, remote_media_desc);
 
-        let ice_pwd = remote_session_desc
-            .ice_pwd
-            .as_ref()
-            .or(remote_media_desc.ice_pwd.as_ref());
-
-        let connectivity = if let Some((mut ice_agent, (ufrag, pwd))) =
-            self.ice_agent.zip(ice_ufrag.zip(ice_pwd))
+        let connectivity = if let Some((mut ice_agent, remote_ice_credentials)) =
+            self.ice_agent.zip(remote_ice_credentials)
         {
             ice_agent.set_remote_data(
-                IceCredentials {
-                    ufrag: ufrag.ufrag.to_string(),
-                    pwd: pwd.pwd.to_string(),
-                },
+                remote_ice_credentials,
                 &remote_media_desc.ice_candidates,
                 remote_media_desc.rtcp_mux,
             );
@@ -266,7 +257,7 @@ impl OfferedTransport {
     pub(crate) fn pop_event(&mut self) -> Option<RtpTransportEvent> {
         self.ice_agent()
             .and_then(|ice_agent| ice_agent.pop_event())
-            .and_then(ice_to_transport_event)
+            .map(ice_to_transport_event)
     }
 
     pub(crate) fn receive(&mut self, now: Instant, pkt: ReceivedPkt) {
@@ -294,6 +285,36 @@ fn peer_supports_cryptex(session_desc: &SessionDescription, media_desc: &MediaDe
     session_desc.cryptex || media_desc.cryptex
 }
 
+pub(super) fn remote_ice_credentials(
+    session_desc: &SessionDescription,
+    media_desc: &MediaDescription,
+) -> Option<IceCredentials> {
+    let ufrag = media_desc
+        .ice_ufrag
+        .as_ref()
+        .or(session_desc.ice_ufrag.as_ref())?;
+
+    let pwd = media_desc
+        .ice_pwd
+        .as_ref()
+        .or(session_desc.ice_pwd.as_ref())?;
+
+    Some(IceCredentials {
+        ufrag: ufrag.ufrag.to_string(),
+        pwd: pwd.pwd.to_string(),
+    })
+}
+
+fn set_ice_credentials(media_desc: &mut MediaDescription, credentials: &IceCredentials) {
+    media_desc.ice_ufrag = Some(IceUsernameFragment {
+        ufrag: credentials.ufrag.clone().into(),
+    });
+
+    media_desc.ice_pwd = Some(IcePassword {
+        pwd: credentials.pwd.clone().into(),
+    });
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn create_from_offer(
     dtls_context: &DtlsContext,
@@ -311,26 +332,15 @@ pub(super) fn create_from_offer(
         changes.push_back(TransportChange::CreateSocketPair(id));
     }
 
-    let ice_ufrag = session_desc
-        .ice_ufrag
-        .as_ref()
-        .or(media_desc.ice_ufrag.as_ref());
+    let remote_ice_credentials = remote_ice_credentials(session_desc, media_desc);
 
-    let ice_pwd = session_desc
-        .ice_pwd
-        .as_ref()
-        .or(media_desc.ice_pwd.as_ref());
-
-    let connectivity = if let Some((ufrag, pwd)) = ice_ufrag.zip(ice_pwd) {
+    let connectivity = if let Some(remote_ice_credentials) = remote_ice_credentials {
         // The answerer is controlled, unless the offerer is a lite implementation
         let is_controlling = session_desc.ice_lite;
 
         let mut ice_agent = IceAgent::new_from_answer(
             ice_credentials.clone(),
-            IceCredentials {
-                ufrag: ufrag.ufrag.to_string(),
-                pwd: pwd.pwd.to_string(),
-            },
+            remote_ice_credentials,
             is_controlling,
             media_desc.rtcp_mux,
         );
@@ -429,6 +439,7 @@ pub(super) fn populate_desc(transport: &RtpTransport, media_desc: &mut MediaDesc
     }
 
     if let Connectivity::Ice(ice_agent) = &transport.connectivity() {
+        set_ice_credentials(media_desc, ice_agent.credentials());
         media_desc.ice_candidates.extend(ice_agent.ice_candidates());
         media_desc.ice_end_of_candidates = true;
     }
