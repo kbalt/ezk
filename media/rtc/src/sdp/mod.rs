@@ -35,7 +35,7 @@ use std::{
     net::{IpAddr, SocketAddr},
     time::{Duration, Instant},
 };
-use transport::{OfferedTransport, TransportCreateError};
+use transport::OfferedTransport;
 
 mod codecs;
 mod config;
@@ -57,7 +57,7 @@ pub use local_media::LocalMediaId;
 pub use media::{Media, MediaId};
 pub use pending_media::PendingMedia;
 pub use sdp_types::{Direction, MediaType, ParseSessionDescriptionError, SessionDescription};
-pub use transport::ResolveError;
+pub use transport::{ResolveError, TransportCreateError};
 
 const MAX_UNSENT_MEDIA_AGE: Duration = Duration::from_millis(200);
 
@@ -772,6 +772,7 @@ impl SdpSession {
             &mut self.transport_changes,
             id,
             self.config.enable_cryptex,
+            matches!(self.config.rtcp_mux_policy, RtcpMuxPolicy::Require),
             session_desc,
             remote_media_desc,
         )?;

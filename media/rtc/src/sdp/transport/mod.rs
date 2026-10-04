@@ -39,6 +39,8 @@ pub enum TransportCreateError {
     Resolve(#[from] ResolveError),
     #[error("Unknown transport type")]
     UnknownTransportType,
+    #[error("Offer does not contain required rtcp-mux")]
+    RtcpMuxRequired,
 }
 
 pub(crate) struct OfferedTransport {
@@ -153,6 +155,11 @@ impl OfferedTransport {
         remote_media_desc: &MediaDescription,
     ) -> Result<(RtpTransport, Vec<(Instant, RtpOrRtcp)>), TransportCreateError> {
         let mut ports = *self.require_ports();
+
+        // Without an RTCP socket the answer must accept rtcp-mux
+        if ports.rtcp.is_none() && !remote_media_desc.rtcp_mux {
+            return Err(TransportCreateError::RtcpMuxRequired);
+        }
 
         // Remove RTCP socket if the answer has rtcp-mux set
         if remote_media_desc.rtcp_mux && ports.rtcp.is_some() {
@@ -323,9 +330,14 @@ pub(super) fn create_from_offer(
     changes: &mut VecDeque<TransportChange>,
     id: TransportId,
     allow_cryptex: bool,
+    require_rtcp_mux: bool,
     session_desc: &SessionDescription,
     media_desc: &MediaDescription,
 ) -> Result<RtpTransport, TransportCreateError> {
+    if require_rtcp_mux && !media_desc.rtcp_mux {
+        return Err(TransportCreateError::RtcpMuxRequired);
+    }
+
     if media_desc.rtcp_mux {
         changes.push_back(TransportChange::CreateSocket(id));
     } else {

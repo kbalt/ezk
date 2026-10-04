@@ -435,8 +435,12 @@ impl RtpTransport {
     /// Packets written to the writer will be turned into [`SendData`](RtpTransportEvent::SendData) events.
     pub fn writer(&mut self) -> Option<RtpTransportWriter<'_>> {
         // Check that all addresses are known
-        let (local_rtp_addr, local_rtcp_addr, remote_rtp_addr, remote_rtcp_addr) =
-            self.local_and_remote_addrs_if_transport_is_ready()?;
+        let TransportAddrs {
+            local_rtp_addr,
+            local_rtcp_addr,
+            remote_rtp_addr,
+            remote_rtcp_addr,
+        } = self.local_and_remote_addrs_if_transport_is_ready()?;
 
         Some(RtpTransportWriter {
             transport: self,
@@ -448,17 +452,14 @@ impl RtpTransport {
     }
 
     // TODO: used to detect if the transport is ready to send/receive, so naming isn't quite right
-    pub(crate) fn local_and_remote_addrs_if_transport_is_ready(
-        &self,
-    ) -> Option<(
-        Option<SocketAddr>,
-        Option<SocketAddr>,
-        SocketAddr,
-        SocketAddr,
-    )> {
+    pub(crate) fn local_and_remote_addrs_if_transport_is_ready(&self) -> Option<TransportAddrs> {
         // Test that connectivity is setup (primarily ICE)
-        let (local_rtp_addr, local_rtcp_addr, remote_rtp_addr, remote_rtcp_addr) =
-            self.local_and_remote_addrs()?;
+        let TransportAddrs {
+            local_rtp_addr,
+            local_rtcp_addr,
+            remote_rtp_addr,
+            remote_rtcp_addr,
+        } = self.local_and_remote_addrs()?;
 
         // Underlying transport must be connected as well
         match &self.kind {
@@ -470,60 +471,59 @@ impl RtpTransport {
             }
         }
 
-        Some((
+        Some(TransportAddrs {
             local_rtp_addr,
             local_rtcp_addr,
             remote_rtp_addr,
             remote_rtcp_addr,
-        ))
+        })
     }
 
-    fn local_and_remote_addrs(
-        &self,
-    ) -> Option<(
-        Option<SocketAddr>,
-        Option<SocketAddr>,
-        SocketAddr,
-        SocketAddr,
-    )> {
-        let (local_rtp_addr, local_rtcp_addr, remote_rtp_addr, remote_rtcp_addr) =
-            match &self.connectivity {
-                Connectivity::Static {
-                    remote_rtp_address,
-                    remote_rtcp_address,
-                } => (None, None, *remote_rtp_address, *remote_rtcp_address),
-                Connectivity::Ice(ice_agent) => {
-                    let (local_rtp_address, remote_rtp_address) = ice_agent
-                        .discovered_addr(Component::Rtp)
+    fn local_and_remote_addrs(&self) -> Option<TransportAddrs> {
+        match &self.connectivity {
+            Connectivity::Static {
+                remote_rtp_address,
+                remote_rtcp_address,
+            } => Some(TransportAddrs {
+                local_rtp_addr: None,
+                local_rtcp_addr: None,
+                remote_rtp_addr: *remote_rtp_address,
+                remote_rtcp_addr: Some(*remote_rtcp_address),
+            }),
+            Connectivity::Ice(ice_agent) => {
+                let (local_rtp_address, remote_rtp_address) = ice_agent
+                    .discovered_addr(Component::Rtp)
+                    .map(|(local, remote)| (Some(local), remote))?;
+
+                if self.rtcp_mux {
+                    Some(TransportAddrs {
+                        local_rtp_addr: local_rtp_address,
+                        local_rtcp_addr: local_rtp_address,
+                        remote_rtp_addr: remote_rtp_address,
+                        remote_rtcp_addr: Some(remote_rtp_address),
+                    })
+                } else if ice_agent.components().contains(&Component::Rtcp) {
+                    let (local_rtcp_address, remote_rtcp_address) = ice_agent
+                        .discovered_addr(Component::Rtcp)
                         .map(|(local, remote)| (Some(local), remote))?;
 
-                    if self.rtcp_mux {
-                        (
-                            local_rtp_address,
-                            local_rtp_address,
-                            remote_rtp_address,
-                            remote_rtp_address,
-                        )
-                    } else {
-                        let (local_rtcp_address, remote_rtcp_address) = ice_agent
-                            .discovered_addr(Component::Rtcp)
-                            .map(|(local, remote)| (Some(local), remote))?;
-
-                        (
-                            local_rtp_address,
-                            local_rtcp_address,
-                            remote_rtp_address,
-                            remote_rtcp_address,
-                        )
-                    }
+                    Some(TransportAddrs {
+                        local_rtp_addr: local_rtp_address,
+                        local_rtcp_addr: local_rtcp_address,
+                        remote_rtp_addr: remote_rtp_address,
+                        remote_rtcp_addr: Some(remote_rtcp_address),
+                    })
+                } else {
+                    // The peer provided no RTCP candidates and doesn't use RTCP
+                    Some(TransportAddrs {
+                        local_rtp_addr: local_rtp_address,
+                        local_rtcp_addr: None,
+                        remote_rtp_addr: remote_rtp_address,
+                        remote_rtcp_addr: None,
+                    })
                 }
-            };
-        Some((
-            local_rtp_addr,
-            local_rtcp_addr,
-            remote_rtp_addr,
-            remote_rtcp_addr,
-        ))
+            }
+        }
     }
 }
 
@@ -588,7 +588,7 @@ pub struct RtpTransportWriter<'a> {
     local_rtp_addr: Option<IpAddr>,
     local_rtcp_addr: Option<IpAddr>,
     remote_rtp_addr: SocketAddr,
-    remote_rtcp_addr: SocketAddr,
+    remote_rtcp_addr: Option<SocketAddr>,
 }
 
 impl RtpTransportWriter<'_> {
@@ -624,7 +624,14 @@ impl RtpTransportWriter<'_> {
     }
 
     /// Send a RTCP packet using the transport
+    ///
+    /// The packet is dropped if the peer doesn't use RTCP.
     pub fn send_rctp(&mut self, mut rtcp_packet: Vec<u8>) -> Result<(), SrtpError> {
+        let Some(remote_rtcp_addr) = self.remote_rtcp_addr else {
+            // no RTCP address advertised, discard
+            return Ok(());
+        };
+
         match &mut self.transport.kind {
             RtpTransportKind::Unencrypted => {}
             RtpTransportKind::SdesSrtp(rtp_sdes_srtp_transport) => rtp_sdes_srtp_transport
@@ -650,9 +657,16 @@ impl RtpTransportWriter<'_> {
                 },
                 data: rtcp_packet,
                 source: self.local_rtcp_addr,
-                target: self.remote_rtcp_addr,
+                target: remote_rtcp_addr,
             });
 
         Ok(())
     }
+}
+
+pub(crate) struct TransportAddrs {
+    local_rtp_addr: Option<SocketAddr>,
+    local_rtcp_addr: Option<SocketAddr>,
+    remote_rtp_addr: SocketAddr,
+    remote_rtcp_addr: Option<SocketAddr>,
 }

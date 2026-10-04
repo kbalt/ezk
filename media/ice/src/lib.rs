@@ -26,6 +26,8 @@ use stun_types::{
 mod stun;
 
 const MAX_EARLY_CHECKS: usize = 64;
+
+const MAX_STUN_MESSAGE_SIZE: usize = 1280;
 const MAX_REMOTE_CANDIDATES: usize = 100;
 const MAX_CANCELLED_TRANSACTIONS: usize = 64;
 
@@ -448,14 +450,22 @@ impl IceAgent {
         candidates: &[IceCandidate],
         rtcp_mux: bool,
     ) {
-        // TODO: assert that we can't change from rtcp-mux: true -> false
-        self.rtcp_mux = rtcp_mux;
+        if self.rtcp_mux && !rtcp_mux {
+            log::warn!("rtcp-mux cannot be disabled once enabled");
+        }
 
-        // Remove all rtcp candidates and stun server bindings rtcp-mux is enabled
-        if rtcp_mux {
+        self.rtcp_mux |= rtcp_mux;
+
+        // Remove everything of the RTCP component when rtcp-mux is enabled
+        if self.rtcp_mux {
             self.stun_server.retain(|s| s.component() == Component::Rtp);
             self.local_candidates
                 .retain(|_, c| c.component == Component::Rtp);
+            self.remote_candidates
+                .retain(|_, c| c.component == Component::Rtp);
+            self.pairs.retain(|pair| pair.component == Component::Rtp);
+            self.triggered_check_queue
+                .retain(|(local_id, _)| self.local_candidates.contains_key(*local_id));
             self.previous_pairs
                 .retain(|pair| pair.component == Component::Rtp);
         }
@@ -639,11 +649,23 @@ impl IceAgent {
         })
     }
 
-    fn components(&self) -> &'static [Component] {
-        if self.rtcp_mux {
-            &[Component::Rtp]
-        } else {
+    /// Returns the components ICE connects
+    pub fn components(&self) -> &'static [Component] {
+        let uses_rtcp = !self.rtcp_mux
+            && self
+                .local_candidates
+                .values()
+                .any(|c| c.component == Component::Rtcp)
+            && (self.remote_candidates.is_empty()
+                || self
+                    .remote_candidates
+                    .values()
+                    .any(|c| c.component == Component::Rtcp));
+
+        if uses_rtcp {
             &[Component::Rtp, Component::Rtcp]
+        } else {
+            &[Component::Rtp]
         }
     }
 
@@ -911,6 +933,11 @@ impl IceAgent {
         };
 
         let addr = SocketAddr::new(ip, candidate.port);
+
+        if !is_valid_remote_addr(addr) {
+            log::debug!("Discard remote candidate with invalid address candidate:{candidate}");
+            return;
+        }
 
         let remote_id = if let Some((remote_id, existing)) = self
             .remote_candidates
@@ -1275,6 +1302,14 @@ impl IceAgent {
 
     /// Receive network packets for this ICE agent
     pub fn receive(&mut self, now: Instant, pkt: ReceivedPkt) {
+        if pkt.data.len() > MAX_STUN_MESSAGE_SIZE {
+            log::debug!(
+                "Discarding too large STUN message of {} bytes",
+                pkt.data.len()
+            );
+            return;
+        }
+
         let mut stun_msg = match Message::parse(pkt.data) {
             Ok(stun_msg) => stun_msg,
             Err(e) => {
@@ -2099,28 +2134,17 @@ impl IceAgent {
         }
 
         // Check if ICE processing can still succeed
-        let mut rtp_in_progress = false;
-        let mut rtcp_in_progress = false;
-
-        for pair in &self.pairs {
-            if matches!(
-                pair.state,
-                CandidatePairState::Waiting
-                    | CandidatePairState::InProgress { .. }
-                    | CandidatePairState::Succeeded
-            ) {
-                match pair.component {
-                    Component::Rtp => rtp_in_progress = true,
-                    Component::Rtcp => rtcp_in_progress = true,
-                }
-            }
-        }
-
-        let still_possible = if self.rtcp_mux {
-            rtp_in_progress
-        } else {
-            rtp_in_progress && rtcp_in_progress
-        };
+        let still_possible = self.components().iter().all(|&component| {
+            self.pairs.iter().any(|pair| {
+                pair.component == component
+                    && matches!(
+                        pair.state,
+                        CandidatePairState::Waiting
+                            | CandidatePairState::InProgress { .. }
+                            | CandidatePairState::Succeeded
+                    )
+            })
+        });
 
         if still_possible {
             match self.connection_state {
@@ -2185,10 +2209,8 @@ impl IceAgent {
 
     /// Progress the nomination state of the agent.
     fn poll_nomination(&mut self) {
-        self.poll_nomination_of_component(Component::Rtp);
-
-        if !self.rtcp_mux {
-            self.poll_nomination_of_component(Component::Rtcp);
+        for &component in self.components() {
+            self.poll_nomination_of_component(component);
         }
     }
     /// Progress the candidate nomination for a given component
@@ -2230,8 +2252,9 @@ impl IceAgent {
     }
 
     fn all_components_have_nominated_valid_pair(&self) -> bool {
-        self.component_has_nominated_valid_pair(Component::Rtp)
-            && (self.rtcp_mux || self.component_has_nominated_valid_pair(Component::Rtcp))
+        self.components()
+            .iter()
+            .all(|&component| self.component_has_nominated_valid_pair(component))
     }
 
     fn component_has_nominated_valid_pair(&self, component: Component) -> bool {
@@ -2364,10 +2387,33 @@ fn can_pair(local_candidate: &Candidate, remote_candidate: &Candidate) -> bool {
         return false;
     }
 
+    // Addresses are only paired within the same family and scope
     match (local_candidate.addr.ip(), remote_candidate.addr.ip()) {
-        (IpAddr::V4(l), IpAddr::V4(r)) => l.is_link_local() == r.is_link_local(),
-        (IpAddr::V6(l), IpAddr::V6(r)) => l.is_unicast_link_local() == r.is_unicast_link_local(),
+        (IpAddr::V4(l), IpAddr::V4(r)) => {
+            l.is_link_local() == r.is_link_local() && l.is_loopback() == r.is_loopback()
+        }
+        (IpAddr::V6(l), IpAddr::V6(r)) => {
+            l.is_unicast_link_local() == r.is_unicast_link_local()
+                && l.is_loopback() == r.is_loopback()
+        }
         _ => false,
+    }
+}
+
+/// Returns if connectivity checks may be sent to the address of a remote candidate
+fn is_valid_remote_addr(addr: SocketAddr) -> bool {
+    if addr.port() == 0 {
+        return false;
+    }
+
+    match addr.ip() {
+        IpAddr::V4(ip) => !(ip.is_unspecified() || ip.is_multicast() || ip.is_broadcast()),
+        IpAddr::V6(ip) => {
+            // IPv4-mapped and IPv4-compatible addresses are not used by ICE
+            let embeds_ipv4 = ip.to_ipv4().is_some() && !ip.is_loopback();
+
+            !(ip.is_unspecified() || ip.is_multicast() || embeds_ipv4)
+        }
     }
 }
 
