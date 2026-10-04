@@ -852,21 +852,25 @@ impl IceAgent {
 
         log::debug!("add local candidate {component:?} {kind:?} {addr}");
 
-        // Calculate the candidate priority using offsets + count of candidates of the same type
+        // Calculate the candidate priority using a range of local preferences per type
         // (trick that I have stolen from str0m's implementation)
-        let local_preference_offset = match kind {
+        let local_preference_offset: u32 = match kind {
             CandidateKind::Host => (65535 / 4) * 3,
             CandidateKind::PeerReflexive => (65535 / 4) * 2,
             CandidateKind::ServerReflexive => 65535 / 4,
             CandidateKind::Relayed => 0,
         };
 
-        let local_preference = self
+        let rank_in_family = self
             .local_candidates
             .values()
-            .filter(|c| c.component == component && c.kind == kind)
-            .count() as u32
-            + local_preference_offset;
+            .filter(|c| {
+                c.component == component && c.kind == kind && c.addr.is_ipv4() == addr.is_ipv4()
+            })
+            .count() as u32;
+
+        let local_preference = (local_preference_offset + 65535 / 4)
+            .saturating_sub(rank_in_family * 2 + u32::from(addr.is_ipv4()));
 
         let kind_preference = (kind as u32) << 24;
         let local_preference = local_preference << 8;
