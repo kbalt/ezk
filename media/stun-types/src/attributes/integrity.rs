@@ -101,17 +101,11 @@ where
             // Get all bytes before the integrity attribute to calculate the hmac over
             let message = &msg.buffer()[..attr.begin - ATTRIBUTE_HEADER_LEN];
 
-            // Calculate the expected digest,
+            // Calculate the expected digest and compare it to the received one
             Update::update(&mut hmac, message);
-            let calculated_digest = hmac.finalize().into_bytes();
 
-            // Compare the received and calculated digest
-            #[allow(deprecated)] // See https://github.com/fizyk20/generic-array/issues/158
-            if calculated_digest.as_slice() != received_digest {
-                return Err(Error::InvalidData("failed to verify message integrity"));
-            }
-
-            Ok(())
+            hmac.verify_slice(received_digest)
+                .map_err(|_| Error::InvalidData("failed to verify message integrity"))
         },
     )
 }
