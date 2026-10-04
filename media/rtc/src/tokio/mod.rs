@@ -4,7 +4,7 @@ use crate::{
 };
 use ice::{Component, ReceivedPkt};
 use quinn_udp::RecvMeta;
-use socket::Socket;
+use socket::{ComponentSockets, Socket};
 use std::{
     collections::HashMap,
     future::poll_fn,
@@ -15,10 +15,7 @@ use std::{
     task::{Context, Poll},
     time::{Duration, Instant},
 };
-use tokio::{
-    net::UdpSocket,
-    time::{Sleep, sleep_until},
-};
+use tokio::time::{Sleep, sleep_until};
 
 mod socket;
 
@@ -28,7 +25,7 @@ const RECV_BUFFER_SIZE: usize = 65535;
 /// IO implementation to be used alongside [`SdpSession`]
 pub struct TokioIoState {
     ips: Vec<IpAddr>,
-    sockets: HashMap<(TransportId, Component), Socket, BuildTransportHasher>,
+    sockets: HashMap<(TransportId, Component), ComponentSockets, BuildTransportHasher>,
     sleep: Option<Pin<Box<Sleep>>>,
 
     bufs: Box<[[u8; RECV_BUFFER_SIZE]; BATCH_SIZE]>,
@@ -52,9 +49,22 @@ impl TokioIoState {
         let ips = local_ip_address::list_afinet_netifas()?
             .into_iter()
             .map(|(_, addr)| addr)
+            .filter(is_usable_local_ip)
             .collect();
 
         Ok(Self::new(ips))
+    }
+
+    fn uses_ipv6(&self) -> bool {
+        self.ips.iter().any(IpAddr::is_ipv6)
+    }
+
+    fn ips_for_sockets(&self, sockets: &ComponentSockets) -> Vec<IpAddr> {
+        self.ips
+            .iter()
+            .copied()
+            .filter(|ip| ip.is_ipv4() || sockets.v6.is_some())
+            .collect()
     }
 
     /// Handle all changes to transport resources as requested by the `SdpSession`
@@ -65,34 +75,36 @@ impl TokioIoState {
         while let Some(change) = session.pop_transport_change() {
             match change {
                 TransportChange::CreateSocket(transport_id) => {
-                    let socket = UdpSocket::bind("0.0.0.0:0").await?;
+                    let sockets = ComponentSockets::bind(self.uses_ipv6()).await?;
 
                     session.set_transport_ports(
                         transport_id,
-                        &self.ips,
-                        RtpTransportPorts::mux(socket.local_addr()?.port()),
+                        &self.ips_for_sockets(&sockets),
+                        RtpTransportPorts::mux(sockets.port()),
                     );
 
-                    self.sockets
-                        .insert((transport_id, Component::Rtp), Socket::new(socket)?);
+                    self.sockets.insert((transport_id, Component::Rtp), sockets);
                 }
                 TransportChange::CreateSocketPair(transport_id) => {
-                    let rtp_socket = UdpSocket::bind("0.0.0.0:0").await?;
-                    let rtcp_socket = UdpSocket::bind("0.0.0.0:0").await?;
+                    let mut rtp_sockets = ComponentSockets::bind(self.uses_ipv6()).await?;
+                    let mut rtcp_sockets = ComponentSockets::bind(self.uses_ipv6()).await?;
+
+                    // Both components must be reachable using the same addresses
+                    if rtp_sockets.v6.is_none() || rtcp_sockets.v6.is_none() {
+                        rtp_sockets.v6 = None;
+                        rtcp_sockets.v6 = None;
+                    }
 
                     session.set_transport_ports(
                         transport_id,
-                        &self.ips,
-                        RtpTransportPorts::new(
-                            rtp_socket.local_addr()?.port(),
-                            rtcp_socket.local_addr()?.port(),
-                        ),
+                        &self.ips_for_sockets(&rtp_sockets),
+                        RtpTransportPorts::new(rtp_sockets.port(), rtcp_sockets.port()),
                     );
 
                     self.sockets
-                        .insert((transport_id, Component::Rtp), Socket::new(rtp_socket)?);
+                        .insert((transport_id, Component::Rtp), rtp_sockets);
                     self.sockets
-                        .insert((transport_id, Component::Rtcp), Socket::new(rtcp_socket)?);
+                        .insert((transport_id, Component::Rtcp), rtcp_sockets);
                 }
                 TransportChange::Remove(transport_id) => {
                     self.sockets.remove(&(transport_id, Component::Rtp));
@@ -116,11 +128,16 @@ impl TokioIoState {
         source: Option<IpAddr>,
         target: SocketAddr,
     ) {
-        if let Some(socket) = self.sockets.get_mut(&(transport_id, component)) {
+        let socket = self
+            .sockets
+            .get_mut(&(transport_id, component))
+            .and_then(|sockets| sockets.for_target(target));
+
+        if let Some(socket) = socket {
             socket.enqueue(data, source, target);
         } else {
             log::error!(
-                "Tried to send packet using a non existent socket {transport_id:?} {component:?}"
+                "Tried to send packet to {target} using a non existent socket {transport_id:?} {component:?}"
             );
         }
     }
@@ -147,33 +164,37 @@ impl TokioIoState {
         let now = Instant::now();
 
         // Poll sockets
-        for ((transport_id, component), socket) in self.sockets.iter_mut() {
-            socket.send_pending(cx);
+        for ((transport_id, component), sockets) in self.sockets.iter_mut() {
+            for socket in sockets.iter_mut() {
+                socket.send_pending(cx);
 
-            while let Poll::Ready(result) = {
-                let mut slices = self.bufs.each_mut().map(|buf| IoSliceMut::new(buf));
+                while let Poll::Ready(result) = {
+                    let mut slices = self.bufs.each_mut().map(|buf| IoSliceMut::new(buf));
 
-                socket.poll_recv_from(cx, &mut slices, &mut *self.meta)
-            } {
-                let num_msg = result?;
+                    socket.poll_recv_from(cx, &mut slices, &mut *self.meta)
+                } {
+                    let num_msg = result?;
 
-                for i in 0..num_msg {
-                    let len = self.meta[i].len;
-                    let stride = self.meta[i].stride;
+                    for i in 0..num_msg {
+                        let len = self.meta[i].len;
+                        let stride = self.meta[i].stride;
 
-                    let packet = &self.bufs[i][..len];
+                        let packet = &self.bufs[i][..len];
 
-                    for packet in packet.chunks(stride) {
-                        let pkt = ReceivedPkt {
-                            data: packet.to_vec(),
-                            source: self.meta[i].addr,
-                            destination: self.meta[i].dst_ip.map_or(socket.local_addr(), |ip| {
-                                (ip, socket.local_addr().port()).into()
-                            }),
-                            component: *component,
-                        };
+                        for packet in packet.chunks(stride) {
+                            let pkt = ReceivedPkt {
+                                data: packet.to_vec(),
+                                source: self.meta[i].addr,
+                                destination: self.meta[i]
+                                    .dst_ip
+                                    .map_or(socket.local_addr(), |ip| {
+                                        (ip, socket.local_addr().port()).into()
+                                    }),
+                                component: *component,
+                            };
 
-                        session.receive(now, *transport_id, pkt);
+                            session.receive(now, *transport_id, pkt);
+                        }
                     }
                 }
             }
@@ -182,8 +203,8 @@ impl TokioIoState {
         // Don't attempt to poll the session if theres too many outbound packets queued
         if self
             .sockets
-            .iter()
-            .any(|(_, socket)| socket.queue_is_full())
+            .values()
+            .any(|sockets| sockets.iter().any(Socket::queue_is_full))
         {
             return Poll::Pending;
         }
@@ -254,5 +275,12 @@ impl Hasher for TransportHasher {
 
     fn write_u8(&mut self, i: u8) {
         self.1 = i;
+    }
+}
+
+fn is_usable_local_ip(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => !ip.is_loopback(),
+        IpAddr::V6(ip) => !(ip.is_loopback() || ip.is_unicast_link_local()),
     }
 }

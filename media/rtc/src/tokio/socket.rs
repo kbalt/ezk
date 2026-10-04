@@ -1,13 +1,97 @@
 use quinn_udp::{RecvMeta, Transmit, UdpSockRef, UdpSocketState};
+use socket2::{Domain, Protocol, Type};
 use std::{
     collections::VecDeque,
     io::{self, ErrorKind, IoSliceMut},
-    net::{IpAddr, SocketAddr},
+    iter::once,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     task::{Context, Poll, ready},
 };
 use tokio::{io::Interest, net::UdpSocket};
 
 const QUEUE_MAX_SIZE: usize = 200;
+const BIND_ATTEMPTS: usize = 5;
+
+pub(super) struct ComponentSockets {
+    pub(super) v4: Socket,
+    pub(super) v6: Option<Socket>,
+}
+
+impl ComponentSockets {
+    pub(super) async fn bind(ipv6: bool) -> io::Result<ComponentSockets> {
+        if ipv6 {
+            ComponentSockets::bind_ipv6().await
+        } else {
+            Ok(ComponentSockets {
+                v4: Socket::new(UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?)?,
+                v6: None,
+            })
+        }
+    }
+
+    async fn bind_ipv6() -> io::Result<Self> {
+        let mut attempts = 0;
+
+        loop {
+            attempts += 1;
+
+            let v4 = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
+
+            let port = v4.local_addr()?.port();
+
+            match bind_ipv6_only(port) {
+                Ok(v6) => {
+                    return Ok(Self {
+                        v4: Socket::new(v4)?,
+                        v6: Some(Socket::new(v6)?),
+                    });
+                }
+                Err(e) if e.kind() == ErrorKind::AddrInUse && attempts < BIND_ATTEMPTS => {
+                    // port is in use
+                }
+                Err(e) => {
+                    log::warn!("Failed to bind IPv6 socket to port {port}, using IPv4 only: {e}");
+
+                    return Ok(Self {
+                        v4: Socket::new(v4)?,
+                        v6: None,
+                    });
+                }
+            }
+        }
+    }
+
+    pub(super) fn port(&self) -> u16 {
+        self.v4.local_addr().port()
+    }
+
+    pub(super) fn for_target(&mut self, target: SocketAddr) -> Option<&mut Socket> {
+        if target.is_ipv4() {
+            Some(&mut self.v4)
+        } else {
+            self.v6.as_mut()
+        }
+    }
+
+    pub(super) fn iter(&self) -> impl Iterator<Item = &Socket> {
+        once(&self.v4).chain(self.v6.as_ref())
+    }
+
+    pub(super) fn iter_mut(&mut self) -> impl Iterator<Item = &mut Socket> {
+        once(&mut self.v4).chain(self.v6.as_mut())
+    }
+}
+
+fn bind_ipv6_only(port: u16) -> io::Result<UdpSocket> {
+    let socket = socket2::Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
+
+    // Not dual-stack, since IPv4 uses its own socket on the same port
+    socket.set_only_v6(true)?;
+    socket.set_nonblocking(true)?;
+    socket.bind(&SocketAddr::from((Ipv6Addr::UNSPECIFIED, port)).into())?;
+
+    UdpSocket::from_std(socket.into())
+}
 
 pub(super) struct Socket {
     state: UdpSocketState,

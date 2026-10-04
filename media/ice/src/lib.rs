@@ -571,15 +571,9 @@ impl IceAgent {
     /// Register a host address for a given ICE component. This will be used to create a host candidate.
     /// For the ICE agent to work properly, all available ip addresses of the host system should be provided.
     pub fn add_host_addr(&mut self, component: Component, addr: SocketAddr) {
-        if addr.ip().is_unspecified() {
+        if !is_valid_host_addr(addr) {
+            log::debug!("Ignoring invalid host address {addr}");
             return;
-        }
-
-        if let SocketAddr::V6(v6) = addr {
-            let ip = v6.ip();
-            if ip.to_ipv4().is_some() || ip.to_ipv4_mapped().is_some() {
-                return;
-            }
         }
 
         self.add_local_candidate(component, CandidateKind::Host, addr, addr, None);
@@ -2413,6 +2407,25 @@ fn is_valid_remote_addr(addr: SocketAddr) -> bool {
             let embeds_ipv4 = ip.to_ipv4().is_some() && !ip.is_loopback();
 
             !(ip.is_unspecified() || ip.is_multicast() || embeds_ipv4)
+        }
+    }
+}
+
+fn is_valid_host_addr(addr: SocketAddr) -> bool {
+    if !is_valid_remote_addr(addr) {
+        return false;
+    }
+
+    match addr {
+        SocketAddr::V4(..) => true,
+        SocketAddr::V6(addr) => {
+            let site_local = (addr.ip().segments()[0] & 0xffc0) == 0xfec0;
+
+            // Link-local addresses cannot be used without knowing the interface
+            let link_local_without_scope =
+                addr.ip().is_unicast_link_local() && addr.scope_id() == 0;
+
+            !(site_local || link_local_without_scope)
         }
     }
 }

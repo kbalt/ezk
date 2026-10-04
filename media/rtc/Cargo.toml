@@ -35,11 +35,12 @@ dimpl = { version = "0.7", default-features = false, features = ["rust-crypto"] 
 
 tokio = { version = "1", features = ["net", "macros", "time"], optional = true }
 quinn-udp = { version = "0.6", optional = true }
+socket2 = { version = "0.6", optional = true }
 local-ip-address = { version = "0.6", optional = true }
 
 [features]
 default = ["tokio"]
-tokio = ["dep:tokio", "dep:quinn-udp", "dep:local-ip-address"]
+tokio = ["dep:tokio", "dep:quinn-udp", "dep:socket2", "dep:local-ip-address"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt"] }
