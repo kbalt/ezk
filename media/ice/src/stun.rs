@@ -1,4 +1,4 @@
-use super::{IceCredentials, IceEvent};
+use super::{CandidateKind, IceCredentials, IceEvent};
 use crate::Component;
 use std::{
     cmp::min,
@@ -9,7 +9,7 @@ use stun_types::{
     Class, Message, MessageBuilder, Method, TransactionId,
     attributes::{
         ErrorCode, Fingerprint, IceControlled, IceControlling, MappedAddress, MessageIntegrity,
-        MessageIntegrityKey, Priority, UseCandidate, Username, XorMappedAddress,
+        MessageIntegrityKey, Priority, UnknownAttributes, UseCandidate, Username, XorMappedAddress,
     },
 };
 
@@ -52,6 +52,7 @@ impl StunConfig {
     }
 }
 
+/// Create a connectivity check, `priority` is the local candidate's priority
 pub(super) fn make_binding_request(
     transaction_id: TransactionId,
     local_credentials: &IceCredentials,
@@ -65,7 +66,13 @@ pub(super) fn make_binding_request(
 
     let username = format!("{}:{}", remote_credentials.ufrag, local_credentials.ufrag);
     stun_message.add_attr(Username::new(&username));
-    stun_message.add_attr(Priority(priority));
+
+    // The PRIORITY attribute MUST be included in a Binding request and be
+    // set to the value computed by the algorithm in Section 5.1.2 for the
+    // local candidate, but with the candidate type preference of peer-reflexive candidate
+    stun_message.add_attr(Priority(
+        (CandidateKind::PeerReflexive as u32) << 24 | (priority & 0x00FF_FFFF),
+    ));
 
     if is_controlling {
         stun_message.add_attr(IceControlling(control_tie_breaker));
@@ -109,12 +116,44 @@ pub(super) fn make_role_error(
     transaction_id: TransactionId,
     local_credentials: &IceCredentials,
 ) -> Vec<u8> {
+    make_error_response(transaction_id, local_credentials, 487, "Role Conflict", &[])
+}
+
+pub(super) fn make_bad_request_error(
+    transaction_id: TransactionId,
+    local_credentials: &IceCredentials,
+) -> Vec<u8> {
+    make_error_response(transaction_id, local_credentials, 400, "Bad Request", &[])
+}
+
+pub(super) fn make_unknown_attributes_error(
+    transaction_id: TransactionId,
+    local_credentials: &IceCredentials,
+    unknown_attributes: &[u16],
+) -> Vec<u8> {
+    make_error_response(
+        transaction_id,
+        local_credentials,
+        420,
+        "Unknown Attribute",
+        unknown_attributes,
+    )
+}
+
+fn make_error_response(
+    transaction_id: TransactionId,
+    local_credentials: &IceCredentials,
+    number: u32,
+    reason: &str,
+    unknown_attributes: &[u16],
+) -> Vec<u8> {
     let mut stun_message = MessageBuilder::new(Class::Error, Method::Binding, transaction_id);
 
-    stun_message.add_attr(ErrorCode {
-        number: 487,
-        reason: "Role Conflict",
-    });
+    stun_message.add_attr(ErrorCode { number, reason });
+
+    if !unknown_attributes.is_empty() {
+        stun_message.add_attr(UnknownAttributes(unknown_attributes.to_vec()));
+    }
 
     stun_message.add_attr_with(
         MessageIntegrity,

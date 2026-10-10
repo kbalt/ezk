@@ -53,6 +53,10 @@ impl Message {
         self.transaction_id
     }
 
+    pub fn attribute_types(&self) -> impl Iterator<Item = u16> + '_ {
+        self.attributes.iter().map(|attr| attr.typ)
+    }
+
     pub(crate) fn id(&self) -> u128 {
         self.id
     }

@@ -16,10 +16,10 @@ use std::{
 };
 use stun::{StunConfig, StunServerBinding};
 use stun_types::{
-    Class, Message, TransactionId,
+    Class, Message, Method, TransactionId,
     attributes::{
-        ErrorCode, Fingerprint, IceControlled, IceControlling, Priority, UseCandidate,
-        XorMappedAddress,
+        Attribute, ErrorCode, Fingerprint, IceControlled, IceControlling, MessageIntegrity,
+        MessageIntegritySha256, Priority, UseCandidate, Username, XorMappedAddress,
     },
 };
 
@@ -33,6 +33,18 @@ const MAX_CANCELLED_TRANSACTIONS: usize = 64;
 
 /// Minimum ICE runtime before timeout as recommended in RFC 8863
 const PAC_TIMEOUT: Duration = Duration::from_millis(39_500);
+
+/// How long to wait with nomination for checks of pairs with a higher priority, after the first pair of a component succeeded
+const NOMINATION_DELAY: Duration = Duration::from_millis(300);
+
+/// Comprehension-required attributes of STUN connectivity checks which are known to the agent
+const KNOWN_REQUEST_ATTRIBUTES: [u16; 5] = [
+    Username::TYPE,
+    MessageIntegrity::TYPE,
+    MessageIntegritySha256::TYPE,
+    Priority::TYPE,
+    UseCandidate::TYPE,
+];
 
 const CONSENT_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 const CONSENT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -111,6 +123,9 @@ pub struct IceAgent {
     consent_lost: bool,
 
     pac_deadline: Option<Instant>,
+
+    /// When the first pair of each component succeeded (index = component - 1)
+    first_success_at: [Option<Instant>; 2],
 
     last_ta_trigger: Option<Instant>,
 
@@ -407,6 +422,7 @@ impl IceAgent {
             previous_pairs: Vec::new(),
             consent_lost: false,
             pac_deadline: None,
+            first_success_at: [None; 2],
             last_ta_trigger: None,
             backlog: vec![],
             events: VecDeque::new(),
@@ -437,6 +453,7 @@ impl IceAgent {
             previous_pairs: Vec::new(),
             consent_lost: false,
             pac_deadline: None,
+            first_success_at: [None; 2],
             last_ta_trigger: None,
             backlog: vec![],
             events: VecDeque::new(),
@@ -559,6 +576,7 @@ impl IceAgent {
         self.backlog.clear();
         self.consent_lost = false;
         self.pac_deadline = None;
+        self.first_success_at = [None; 2];
 
         // ICE processing starts over, unless data can still be sent on the previous pairs
         if self.connection_state != IceConnectionState::New
@@ -1243,6 +1261,14 @@ impl IceAgent {
                 .is_some_and(|c| c.component != component)
         });
 
+        // ICE processing concluded for the component, its other pairs are not checked anymore
+        // Pairs nominated by the peer are kept, since a later nomination with a higher priority takes precedence.
+        self.pairs.retain(|pair| {
+            pair.component != component
+                || pair.nomination != CandidatePairNomination::None
+                || pair.remote_nominated
+        });
+
         // Remove previous pair for the component
         self.previous_pairs
             .retain(|pair| pair.component != component);
@@ -1342,6 +1368,15 @@ impl IceAgent {
     }
 
     fn receive_stun(&mut self, now: Instant, pkt: ReceivedPkt<Message>) {
+        // ICE only uses Binding messages, others are silently discarded
+        if pkt.data.method() != Method::Binding {
+            log::debug!(
+                "Discarding STUN message with method {:?}",
+                pkt.data.method()
+            );
+            return;
+        }
+
         match pkt.data.class() {
             Class::Request => self.receive_stun_request(now, pkt),
             Class::Indication => { /* ignore */ }
@@ -1418,6 +1453,12 @@ impl IceAgent {
 
         let pair_index = transaction.pair_index;
 
+        // Selecting the pair may remove pairs, so the index must not be used afterwards
+        let (local_id, component) = (
+            self.pairs[pair_index].local,
+            self.pairs[pair_index].component,
+        );
+
         if pkt.source == transaction.target && pkt.destination.ip() == transaction.source {
             let pair = &self.pairs[pair_index];
 
@@ -1439,6 +1480,10 @@ impl IceAgent {
 
             let pair = &mut self.pairs[pair_index];
             pair.state = CandidatePairState::Succeeded;
+
+            if let first_success_at @ None = &mut self.first_success_at[component as usize - 1] {
+                *first_success_at = Some(now);
+            }
 
             // This request was a nomination for this pair (controlling), or the peer nominated this pair (controlled)
             let nominated = if self.is_controlling {
@@ -1473,12 +1518,9 @@ impl IceAgent {
             log::debug!("got success response with invalid source address for a cancelled check");
         }
 
-        let pair = &self.pairs[pair_index];
-
         // Check if we discover a new peer-reflexive candidate here
         if let Some(Ok(mapped_addr)) = pkt.data.attribute::<XorMappedAddress>() {
-            if mapped_addr.0 != self.local_candidates[pair.local].addr {
-                let component = pair.component;
+            if mapped_addr.0 != self.local_candidates[local_id].addr {
                 self.add_local_candidate(
                     component,
                     CandidateKind::PeerReflexive,
@@ -1621,8 +1663,45 @@ impl IceAgent {
             return;
         };
 
+        // Unknown comprehension-required attributes are rejected
+        let unknown_attributes: Vec<u16> = pkt
+            .data
+            .attribute_types()
+            .filter(|typ| *typ < 0x8000 && !KNOWN_REQUEST_ATTRIBUTES.contains(typ))
+            .collect();
+
+        if !unknown_attributes.is_empty() {
+            log::debug!("Incoming stun request has unknown attributes {unknown_attributes:x?}");
+
+            let response = stun::make_unknown_attributes_error(
+                pkt.data.transaction_id(),
+                &self.local_credentials,
+                &unknown_attributes,
+            );
+
+            self.events.push_back(IceEvent::SendData {
+                component: pkt.component,
+                data: response,
+                source: Some(pkt.destination.ip()),
+                target: pkt.source,
+            });
+
+            return;
+        }
+
         let Some(Ok(priority)) = pkt.data.attribute::<Priority>() else {
-            log::debug!("Incoming stun request did not contain PRIORITY attribute");
+            log::debug!("Incoming stun request did not contain a valid PRIORITY attribute");
+
+            let response =
+                stun::make_bad_request_error(pkt.data.transaction_id(), &self.local_credentials);
+
+            self.events.push_back(IceEvent::SendData {
+                component: pkt.component,
+                data: response,
+                source: Some(pkt.destination.ip()),
+                target: pkt.source,
+            });
+
             return;
         };
 
@@ -1914,7 +1993,7 @@ impl IceAgent {
             return;
         }
 
-        self.poll_nomination();
+        self.poll_nomination(now);
 
         // Skip anything beyond this before we received the remote credentials & candidates
         let Some(remote_credentials) = &self.remote_credentials else {
@@ -1927,7 +2006,6 @@ impl IceAgent {
         {
             return;
         }
-        self.last_ta_trigger = Some(now);
 
         // If the triggered-check queue associated with the checklist
         // contains one or more candidate pairs, the agent removes the top
@@ -1964,20 +2042,14 @@ impl IceAgent {
             }
         }
 
-        if pair_index.is_none() && !self.all_components_have_nominated_valid_pair() {
-            // If there are one or more candidate pairs in the Waiting state,
-            // the agent picks the highest-priority candidate pair (if there are
-            // multiple pairs with the same priority, the pair with the lowest
-            // component ID is picked) in the Waiting state, performs a
-            // connectivity check on that pair, puts the candidate pair state to
-            // In-Progress, and aborts the subsequent steps.
-            pair_index = self
-                .pairs
-                .iter()
-                .position(|p| p.state == CandidatePairState::Waiting);
+        if pair_index.is_none() {
+            pair_index = self.next_ordinary_check();
         }
 
         if let Some(pair_index) = pair_index {
+            // Only checks that are sent count for pacing
+            self.last_ta_trigger = Some(now);
+
             let pair = &mut self.pairs[pair_index];
             let use_candidate = pair.nomination == CandidatePairNomination::Nominated;
 
@@ -2022,6 +2094,25 @@ impl IceAgent {
                 target,
             });
         }
+    }
+
+    /// The pair for the next ordinary check, if there is one
+    ///
+    /// If there are one or more candidate pairs in the Waiting state, the agent picks the highest-priority candidate pair
+    /// (if there are multiple pairs with the same priority, the pair with the lowest component ID is picked) in the
+    /// Waiting state. Components with a selected pair are not checked anymore.
+    fn next_ordinary_check(&self) -> Option<usize> {
+        let rtp_concluded = self.component_has_nominated_valid_pair(Component::Rtp);
+        let rtcp_concluded = self.component_has_nominated_valid_pair(Component::Rtcp);
+
+        self.pairs.iter().position(|pair| {
+            let concluded = match pair.component {
+                Component::Rtp => rtp_concluded,
+                Component::Rtcp => rtcp_concluded,
+            };
+
+            pair.state == CandidatePairState::Waiting && !concluded
+        })
     }
 
     /// Check all pending STUN transactions for pending retransmits
@@ -2206,28 +2297,29 @@ impl IceAgent {
     }
 
     /// Progress the nomination state of the agent.
-    fn poll_nomination(&mut self) {
+    fn poll_nomination(&mut self, now: Instant) {
         for &component in self.components() {
-            self.poll_nomination_of_component(component);
+            self.poll_nomination_of_component(now, component);
         }
     }
+
     /// Progress the candidate nomination for a given component
     ///
     /// Only the controlling agent nominates pairs. The controlled agent selects the pairs nominated by its peer once
     /// they succeeded (see [`select_pair`](Self::select_pair)).
-    fn poll_nomination_of_component(&mut self, component: Component) {
-        if !self.is_controlling || self.component_has_nominated_valid_pair(component) {
+    fn poll_nomination_of_component(&mut self, now: Instant, component: Component) {
+        if self
+            .nomination_deadline(component)
+            .is_none_or(|deadline| deadline > now)
+        {
             return;
         }
 
-        // Controlling, select a succeeded pair and send a use-candidate
+        // Controlling, nominate the best succeeded pair (pairs are sorted by priority)
         let best_pair = self
             .pairs
             .iter_mut()
-            .filter(|p| {
-                p.component == component && matches!(p.state, CandidatePairState::Succeeded)
-            })
-            .max_by_key(|p| p.priority);
+            .find(|p| p.component == component && matches!(p.state, CandidatePairState::Succeeded));
 
         let Some(pair) = best_pair else {
             // no pair to nominate
@@ -2249,10 +2341,44 @@ impl IceAgent {
         self.enqueue_triggered_check(pair_key, true);
     }
 
-    fn all_components_have_nominated_valid_pair(&self) -> bool {
-        self.components()
+    /// When the controlling agent nominates a pair for the component, if it has to nominate one
+    ///
+    /// It waits for the checks of pairs with a higher priority than the best succeeded pair, but at most
+    /// [`NOMINATION_DELAY`] after the first pair of the component succeeded.
+    fn nomination_deadline(&self, component: Component) -> Option<Instant> {
+        if !self.is_controlling {
+            return None;
+        }
+
+        if self
+            .pairs
             .iter()
-            .all(|&component| self.component_has_nominated_valid_pair(component))
+            .any(|p| p.component == component && p.nomination != CandidatePairNomination::None)
+        {
+            return None;
+        }
+
+        // Pairs are sorted by priority
+        let best_index = self.pairs.iter().position(|p| {
+            p.component == component && matches!(p.state, CandidatePairState::Succeeded)
+        })?;
+
+        // Recorded when a pair of the component succeeds
+        let first_success_at = self.first_success_at[component as usize - 1]?;
+
+        let better_pair_pending = self.pairs[..best_index].iter().any(|p| {
+            p.component == component
+                && matches!(
+                    p.state,
+                    CandidatePairState::Waiting | CandidatePairState::InProgress { .. }
+                )
+        });
+
+        if better_pair_pending {
+            Some(first_success_at + NOMINATION_DELAY)
+        } else {
+            Some(first_success_at)
+        }
     }
 
     fn component_has_nominated_valid_pair(&self, component: Component) -> bool {
@@ -2282,10 +2408,9 @@ impl IceAgent {
             return stun_bindings;
         }
 
-        // Next TA trigger
+        // Next TA trigger, only if a check is due
         let ta = if self.remote_credentials.is_some()
-            && (!self.all_components_have_nominated_valid_pair()
-                || !self.triggered_check_queue.is_empty())
+            && (!self.triggered_check_queue.is_empty() || self.next_ordinary_check().is_some())
         {
             Some(
                 self.last_ta_trigger
@@ -2321,6 +2446,14 @@ impl IceAgent {
             .map(|consent| consent.deadline().saturating_duration_since(now))
             .min();
 
+        // Nomination of a pair by the controlling agent
+        let nomination = self
+            .components()
+            .iter()
+            .filter_map(|&component| self.nomination_deadline(component))
+            .map(|deadline| deadline.saturating_duration_since(now))
+            .min();
+
         // Expiry of the PAC timer, after which ICE processing may fail
         let pac = self
             .pac_deadline
@@ -2329,7 +2462,7 @@ impl IceAgent {
             })
             .map(|deadline| deadline - now);
 
-        [ta, pair_retransmit, stun_bindings, pac, consent]
+        [ta, pair_retransmit, stun_bindings, pac, consent, nomination]
             .into_iter()
             .flatten()
             .min()
