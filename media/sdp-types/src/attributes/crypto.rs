@@ -97,14 +97,14 @@ macro_rules! suite {
                 move |i| {
                     context(
                         "parsing srtp suite",
-                        alt((
-                            $(
-                            map(tag(stringify!($suite)), |_| Self::$suite),
-                            )*
-                            map(take_while1(is_alphanumeric_or_underscore), move |suite| {
-                                Self::Ext(BytesStr::from_parse(src, suite))
-                            }),
-                        )),
+                        // The whole name is read before it is matched, so a known suite
+                        // never matches the start of a longer one such as AEAD_AES_256_GCM_8.
+                        map(take_while1(is_alphanumeric_or_underscore), move |suite: &str| {
+                            match suite {
+                                $(stringify!($suite) => Self::$suite,)*
+                                _ => Self::Ext(BytesStr::from_parse(src, suite)),
+                            }
+                        }),
                     )(i)
                 }
             }
@@ -360,6 +360,41 @@ fn number(i: &str) -> IResult<&str, u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn srtp_suite_known() {
+        let i = BytesStr::from_static("AEAD_AES_256_GCM");
+        let (rem, suite) = SrtpSuite::parse(i.as_ref())(&i).unwrap();
+
+        assert!(rem.is_empty(), "rem is not empty: {rem:?}");
+        assert_eq!(suite, SrtpSuite::AEAD_AES_256_GCM);
+    }
+
+    #[test]
+    fn srtp_suite_starting_with_a_known_suite() {
+        let i = BytesStr::from_static("AEAD_AES_256_GCM_8");
+        let (rem, suite) = SrtpSuite::parse(i.as_ref())(&i).unwrap();
+
+        assert!(rem.is_empty(), "rem is not empty: {rem:?}");
+        let SrtpSuite::Ext(ext) = &suite else {
+            panic!("expected Ext got {suite:?}")
+        };
+        assert_eq!(ext.as_str(), "AEAD_AES_256_GCM_8");
+        assert_eq!(suite.to_string(), "AEAD_AES_256_GCM_8");
+    }
+
+    #[test]
+    fn srtp_crypto_with_a_suite_starting_with_a_known_suite() {
+        let i = BytesStr::from_static(
+            "2 AEAD_AES_256_GCM_8 inline:d0RmdmcmVCspeEc3QGZiNWpVLFJhQX1cfHAwJSoj",
+        );
+        let (rem, crypto) = SrtpCrypto::parse(i.as_ref(), &i).unwrap();
+
+        assert!(rem.is_empty(), "rem is not empty: {rem:?}");
+        assert_eq!(crypto.tag, 2);
+        assert_eq!(crypto.suite.as_str(), "AEAD_AES_256_GCM_8");
+        assert_eq!(crypto.keys.len(), 1);
+    }
 
     #[test]
     fn srtp_session_param_kdr() {
