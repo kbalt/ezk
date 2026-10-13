@@ -39,3 +39,43 @@ pub use outbound_call::{MakeCallCompletionError, MakeCallError, OutboundCall};
 pub use refer::{ReferEvent, ReferEventFromNotifyError};
 pub use registration::{RegisterError, RegistrarConfig, Registration};
 pub use subscription::EventSubscriptionReceiver;
+
+fn append_headers(destination: &mut sip_types::Headers, headers: &sip_types::Headers) {
+    destination.extend(
+        headers
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone())),
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use sip_types::{Headers, Name};
+
+    use super::append_headers;
+
+    #[test]
+    fn appends_supplied_headers_without_replacing_existing_headers() {
+        let mut destination = Headers::new();
+        destination.insert(Name::CALL_ID, "generated-call-id");
+        let mut supplied = Headers::new();
+        supplied.insert("X-Custom-Header", "custom-value");
+
+        append_headers(&mut destination, &supplied);
+
+        assert_eq!(
+            destination
+                .get_raw(&Name::CALL_ID)
+                .next()
+                .map(|value| value.as_str()),
+            Some("generated-call-id")
+        );
+        assert_eq!(
+            destination
+                .get_raw(&Name::from("X-Custom-Header"))
+                .next()
+                .map(|value| value.as_str()),
+            Some("custom-value")
+        );
+    }
+}
