@@ -1,5 +1,5 @@
 use smallvec::SmallVec;
-use std::{collections::VecDeque, ffi::c_void, pin::Pin, ptr::null, time::Instant};
+use std::{cmp, collections::VecDeque, ffi::c_void, pin::Pin, ptr::null, time::Instant};
 use vulkan::{
     Device, PhysicalDevice, VulkanError,
     ash::vk,
@@ -101,8 +101,29 @@ impl VkAV1Encoder {
     pub fn new(
         device: &Device,
         caps: &VulkanEncoderCapabilities<AV1>,
-        config: VulkanAV1EncoderConfig,
+        mut config: VulkanAV1EncoderConfig,
     ) -> Result<VkAV1Encoder, VulkanError> {
+        config.rate_control = clamp_rate_control(config.rate_control, caps);
+
+        if !caps
+            .codec
+            .flags
+            .contains(vk::VideoEncodeAV1CapabilityFlagsKHR::FRAME_SIZE_OVERRIDE)
+            && config.encoder.initial_encode_resolution != config.encoder.max_encode_resolution
+        {
+            log::info!(
+                "Encoder does not support frame size override, using max_encode_resolution as initial_encode_resolution"
+            );
+            config.encoder.initial_encode_resolution = config.encoder.max_encode_resolution;
+        }
+
+        let use_128x128_superblock = u32::from(
+            !caps
+                .codec
+                .superblock_sizes
+                .contains(vk::VideoEncodeAV1SuperblockSizeFlagsKHR::TYPE_64),
+        );
+
         let profile = match config.profile {
             AV1Profile::Main => vk::native::StdVideoAV1Profile_STD_VIDEO_AV1_PROFILE_MAIN,
             AV1Profile::High => vk::native::StdVideoAV1Profile_STD_VIDEO_AV1_PROFILE_HIGH,
@@ -118,7 +139,7 @@ impl VkAV1Encoder {
                     vk::native::StdVideoAV1SequenceHeaderFlags::new_bitfield_1(
                         0, // still_picture
                         0, // reduced_still_picture_header
-                        0, // use_128x128_superblock
+                        use_128x128_superblock,
                         0, // enable_filter_intra
                         0, // enable_intra_edge_filter
                         0, // enable_interintra_compound
@@ -158,11 +179,14 @@ impl VkAV1Encoder {
             vk::VideoEncodeAV1SessionParametersCreateInfoKHR::default()
                 .std_sequence_header(&std_sequence_header);
 
+        let max_active_references = cmp::min(caps.video.max_active_reference_pictures, 7);
+        let num_dpb_slots = cmp::min(caps.video.max_dpb_slots, 8);
+
         let encoder_config = VulkanEncoderImplConfig {
             user: config.encoder,
             num_encode_slots: 4,
-            max_active_references: 7,
-            num_dpb_slots: 8,
+            max_active_references,
+            num_dpb_slots,
         };
 
         let av1_profile_info = vk::VideoEncodeAV1ProfileInfoKHR::default().std_profile(profile);
@@ -172,13 +196,13 @@ impl VkAV1Encoder {
             encoder_config,
             av1_profile_info,
             vk::VideoEncodeAV1SessionCreateInfoKHR::default()
-                .max_level(map_level(config.level))
+                .max_level(cmp::min(map_level(config.level), caps.codec.max_level))
                 .use_max_level(true),
             video_encode_av1_session_parameters_create_info,
             Some(rate_control_from_config(&config, caps)),
         )?;
 
-        let free_dpb_slots = (0..8)
+        let free_dpb_slots = (0..num_dpb_slots as usize)
             .map(|index| DpbSlot {
                 index,
                 order_hint: 0,
@@ -216,13 +240,29 @@ impl VkAV1Encoder {
         self.encoder.current_encode_extent()
     }
 
+    /// Does the encoder support changing the output resolution
+    pub fn supports_update_output_extent(&self) -> bool {
+        self.caps
+            .codec
+            .flags
+            .contains(vk::VideoEncodeAV1CapabilityFlagsKHR::FRAME_SIZE_OVERRIDE)
+    }
+
     /// Change the output resolution of the encoder
     ///
     /// # Panics
     ///
-    /// If the given extent is larger than the configured `max_encode_resolution`
+    /// If the given extent is larger than the configured `max_encode_resolution` or smaller than the minimum
+    /// supported coded extent
     pub fn update_output_extent(&mut self, new_extent: vk::Extent2D) {
         if new_extent == self.encoder.current_encode_extent() {
+            return;
+        }
+
+        if new_extent != self.encoder.max_encode_extent() && !self.supports_update_output_extent() {
+            log::warn!(
+                "Encoder does not support frame size override, ignoring output extent update"
+            );
             return;
         }
 
@@ -234,7 +274,7 @@ impl VkAV1Encoder {
     /// Update the encoders rate control config
     pub fn update_rate_control(&mut self, rate_control: VulkanAV1RateControlConfig) {
         unsafe {
-            self.config.rate_control = rate_control;
+            self.config.rate_control = clamp_rate_control(rate_control, &self.caps);
 
             self.encoder
                 .update_rc(rate_control_from_config(&self.config, &self.caps));
@@ -303,16 +343,20 @@ impl VkAV1Encoder {
 
         let caps = &self.caps.codec;
 
+        // TODO: Only group 1 reference names (LAST..GOLDEN) are used, so this is sufficient for now (no BIDIRECTIONAL references)
+        let max_compound_references = caps
+            .max_unidirectional_compound_reference_count
+            .min(caps.max_unidirectional_compound_group1_reference_count)
+            .min(cmp::min(self.caps.video.max_active_reference_pictures, 7));
+
         let (prediction_mode, max_reference_frames, name_mask) = if frame_info.is_key {
             // INTRA Frame for Keyframes
             (vk::VideoEncodeAV1PredictionModeKHR::INTRA_ONLY, 0, 0)
-        } else if self.active_dpb_slots.len() >= 2
-            && caps.max_unidirectional_compound_group1_reference_count >= 2
-        {
+        } else if self.active_dpb_slots.len() >= 2 && max_compound_references >= 2 {
             // When 2 or more references are active & UNIDIRECTIONAL_COMPOUND allows for 2 or more
             (
                 vk::VideoEncodeAV1PredictionModeKHR::UNIDIRECTIONAL_COMPOUND,
-                caps.max_unidirectional_compound_group1_reference_count,
+                max_compound_references,
                 caps.unidirectional_compound_reference_name_mask,
             )
         } else {
@@ -530,6 +574,56 @@ fn map_level(profile: AV1Level) -> vk::native::StdVideoAV1Level {
     }
 }
 
+fn clamp_rate_control(
+    mut rate_control: VulkanAV1RateControlConfig,
+    caps: &VulkanEncoderCapabilities<AV1>,
+) -> VulkanAV1RateControlConfig {
+    let mode = match rate_control.mode {
+        VulkanAV1RateControlMode::Default => vk::VideoEncodeRateControlModeFlagsKHR::DEFAULT,
+        VulkanAV1RateControlMode::ConstantBitrate { .. } => {
+            vk::VideoEncodeRateControlModeFlagsKHR::CBR
+        }
+        VulkanAV1RateControlMode::VariableBitrate { .. } => {
+            vk::VideoEncodeRateControlModeFlagsKHR::VBR
+        }
+        VulkanAV1RateControlMode::ConstantQuality { .. } => {
+            vk::VideoEncodeRateControlModeFlagsKHR::DISABLED
+        }
+    };
+
+    if !caps.supports_rate_control_mode(mode) {
+        log::warn!("Rate control mode {mode:?} is not supported, falling back to Default");
+        rate_control.mode = VulkanAV1RateControlMode::Default;
+    }
+
+    rate_control.mode = match rate_control.mode {
+        VulkanAV1RateControlMode::Default => VulkanAV1RateControlMode::Default,
+        VulkanAV1RateControlMode::ConstantBitrate { bitrate } => {
+            VulkanAV1RateControlMode::ConstantBitrate {
+                bitrate: caps.clamp_bitrate(bitrate),
+            }
+        }
+        VulkanAV1RateControlMode::VariableBitrate {
+            average_bitrate,
+            max_bitrate,
+        } => {
+            let max_bitrate = caps.clamp_bitrate(max_bitrate);
+
+            VulkanAV1RateControlMode::VariableBitrate {
+                average_bitrate: average_bitrate.min(max_bitrate),
+                max_bitrate,
+            }
+        }
+        VulkanAV1RateControlMode::ConstantQuality { q_index } => {
+            VulkanAV1RateControlMode::ConstantQuality {
+                q_index: q_index.clamp(caps.codec.min_q_index, caps.codec.max_q_index),
+            }
+        }
+    };
+
+    rate_control
+}
+
 fn rate_control_from_config(
     config: &VulkanAV1EncoderConfig,
     caps: &VulkanEncoderCapabilities<AV1>,
@@ -544,7 +638,6 @@ fn rate_control_from_config(
     this.layer.p_next = (&raw const this.codec_layer) as *const c_void;
     this.info.p_next = (&raw const this.codec_info) as *const c_void;
     this.info.p_layers = &raw const this.layer;
-    this.info.layer_count = 1;
 
     this.codec_info.key_frame_period = config.frame_pattern.keyframe_interval.into();
     this.codec_info.gop_frame_count = config.frame_pattern.keyframe_interval.into();
@@ -615,6 +708,7 @@ fn rate_control_from_config(
         }
         VulkanAV1RateControlMode::ConstantBitrate { bitrate } => {
             this.info.rate_control_mode = vk::VideoEncodeRateControlModeFlagsKHR::CBR;
+            this.info.layer_count = 1;
             this.layer.average_bitrate = bitrate.into();
             this.layer.max_bitrate = bitrate.into();
         }
@@ -623,6 +717,7 @@ fn rate_control_from_config(
             max_bitrate,
         } => {
             this.info.rate_control_mode = vk::VideoEncodeRateControlModeFlagsKHR::VBR;
+            this.info.layer_count = 1;
             this.layer.average_bitrate = average_bitrate.into();
             this.layer.max_bitrate = max_bitrate.into();
         }

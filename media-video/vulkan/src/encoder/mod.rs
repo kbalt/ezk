@@ -82,6 +82,7 @@ pub struct VulkanEncoderConfig {
 #[derive(Debug)]
 pub struct VulkanEncoder<C: VulkanEncCodec> {
     max_input_extent: vk::Extent2D,
+    min_encode_extent: vk::Extent2D,
     max_encode_extent: vk::Extent2D,
     current_encode_extent: vk::Extent2D,
 
@@ -181,10 +182,12 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
     ///
     /// # Panics
     ///
-    /// If the given extent is larger than [`Self::max_extent`]
+    /// If the given extent is larger than [`Self::max_extent`] or smaller than the minimum supported coded extent
     pub fn set_current_encode_extent(&mut self, extent: vk::Extent2D) {
         assert!(extent.width <= self.max_encode_extent.width);
         assert!(extent.height <= self.max_encode_extent.height);
+        assert!(extent.width >= self.min_encode_extent.width);
+        assert!(extent.height >= self.min_encode_extent.height);
 
         self.current_encode_extent = extent;
     }
@@ -194,7 +197,7 @@ impl<C: VulkanEncCodec> VulkanEncoder<C> {
     ///
     /// # Panics
     ///
-    /// If the given extent is larger than [`Self::max_extent`]
+    /// If the given extent is larger than [`Self::max_extent`] or smaller than the minimum supported coded extent
     pub fn update_current_encode_extent<'a>(
         &mut self,
         extent: vk::Extent2D,

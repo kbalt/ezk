@@ -55,6 +55,56 @@ impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
         })
     }
 
+    pub fn supports_rate_control_mode(&self, mode: vk::VideoEncodeRateControlModeFlagsKHR) -> bool {
+        mode == vk::VideoEncodeRateControlModeFlagsKHR::DEFAULT
+            || self.encode.rate_control_modes.contains(mode)
+    }
+
+    pub fn clamp_bitrate(&self, bitrate: u32) -> u32 {
+        u32::try_from(self.encode.max_bitrate).map_or(bitrate, |max| bitrate.min(max))
+    }
+
+    fn validate_config(&self, config: &VulkanEncoderImplConfig) -> Result<(), VulkanError> {
+        let min = self.video.min_coded_extent;
+        let max = self.video.max_coded_extent;
+        let max_encode = config.user.max_encode_resolution;
+        let initial_encode = config.user.initial_encode_resolution;
+
+        if max_encode.width < min.width
+            || max_encode.height < min.height
+            || max_encode.width > max.width
+            || max_encode.height > max.height
+        {
+            return Err(VulkanError::InvalidArgument {
+                message: "max_encode_resolution is outside the supported coded extent",
+            });
+        }
+
+        if initial_encode.width < min.width
+            || initial_encode.height < min.height
+            || initial_encode.width > max_encode.width
+            || initial_encode.height > max_encode.height
+        {
+            return Err(VulkanError::InvalidArgument {
+                message: "initial_encode_resolution must be between the minimum supported coded extent and max_encode_resolution",
+            });
+        }
+
+        if config.max_active_references > self.video.max_active_reference_pictures {
+            return Err(VulkanError::InvalidArgument {
+                message: "max_active_references exceeds max_active_reference_pictures",
+            });
+        }
+
+        if config.num_dpb_slots > self.video.max_dpb_slots {
+            return Err(VulkanError::InvalidArgument {
+                message: "num_dpb_slots exceeds max_dpb_slots",
+            });
+        }
+
+        Ok(())
+    }
+
     pub fn create_encoder(
         &self,
         device: &Device,
@@ -64,6 +114,8 @@ impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
         parameters: C::ParametersCreateInfo<'_>,
         rate_control: Option<Pin<Box<RateControlInfos<C>>>>,
     ) -> Result<VulkanEncoder<C>, VulkanError> {
+        self.validate_config(&config)?;
+
         let mut video_encode_usage_info = vk::VideoEncodeUsageInfoKHR::default()
             .video_usage_hints(config.user.usage_hints)
             .video_content_hints(config.user.content_hints)
@@ -248,6 +300,7 @@ impl<C: VulkanEncCodec> VulkanEncoderCapabilities<C> {
 
         Ok(VulkanEncoder {
             max_input_extent: config.user.max_input_resolution,
+            min_encode_extent: self.video.min_coded_extent,
             max_encode_extent: config.user.max_encode_resolution,
             current_encode_extent: config.user.initial_encode_resolution,
             output_buffer_size,

@@ -70,6 +70,8 @@ pub struct VkH264Encoder {
     state: H264EncoderState,
     encoder: VulkanEncoder<H264>,
 
+    caps: VulkanEncoderCapabilities<H264>,
+
     seq_params: vk::native::StdVideoH264SequenceParameterSet,
     pic_params: vk::native::StdVideoH264PictureParameterSet,
 
@@ -105,12 +107,23 @@ impl VkH264Encoder {
     pub fn new(
         device: &Device,
         capabilities: &VulkanEncoderCapabilities<H264>,
-        config: VulkanH264EncoderConfig,
+        mut config: VulkanH264EncoderConfig,
     ) -> Result<VkH264Encoder, VulkanError> {
-        let state = H264EncoderState::new(config.frame_pattern);
-
         let caps = capabilities.video;
         let h264_caps = capabilities.codec;
+
+        config.rate_control = clamp_rate_control(config.rate_control, capabilities);
+
+        let encoder_supports_b_frames =
+            h264_caps.max_b_picture_l0_reference_count > 0 || h264_caps.max_l1_reference_count > 0;
+
+        if !config.profile.support_b_frames() || !encoder_supports_b_frames {
+            config.frame_pattern.ip_period = 1;
+        }
+
+        let state = H264EncoderState::new(config.frame_pattern);
+
+        let level_idc = cmp::min(map_level(config.level), h264_caps.max_level_idc);
         let max_references = cmp::max(
             h264_caps.max_p_picture_l0_reference_count,
             h264_caps.max_b_picture_l0_reference_count + h264_caps.max_l1_reference_count,
@@ -152,7 +165,7 @@ impl VkH264Encoder {
                 __bindgen_padding_0: 0,
             },
             profile_idc: profile_idc.into(),
-            level_idc: map_level(config.level),
+            level_idc,
             chroma_format_idc:
                 vk::native::StdVideoH264ChromaFormatIdc_STD_VIDEO_H264_CHROMA_FORMAT_IDC_420,
             seq_parameter_set_id: 0,
@@ -235,7 +248,7 @@ impl VkH264Encoder {
             h264_profile_info,
             vk::VideoEncodeH264SessionCreateInfoKHR::default()
                 .use_max_level_idc(true)
-                .max_level_idc(map_level(config.level)),
+                .max_level_idc(level_idc),
             video_encode_h264_session_parameters_create_info,
             Some(rate_control_from_config(&config)),
         )?;
@@ -252,6 +265,7 @@ impl VkH264Encoder {
             config,
             state,
             encoder,
+            caps: capabilities.clone(),
             seq_params,
             pic_params,
             max_l0_p_ref_images: h264_caps.max_p_picture_l0_reference_count as usize,
@@ -348,7 +362,7 @@ impl VkH264Encoder {
     /// Update the encoders rate control config
     pub fn update_rate_control(&mut self, rate_control: VulkanH264RateControlConfig) {
         unsafe {
-            self.config.rate_control = rate_control;
+            self.config.rate_control = clamp_rate_control(rate_control, &self.caps);
 
             self.encoder
                 .update_rc(rate_control_from_config(&self.config));
@@ -478,26 +492,37 @@ impl VkH264Encoder {
 
         let vk::Extent2D { width, height } = self.encoder.current_encode_extent();
 
-        let total_macroblocks = (width / 16) * (height / 16);
+        let width_in_mbs = width.div_ceil(16);
+        let total_macroblocks = width_in_mbs * height.div_ceil(16);
 
-        match self.config.slice_mode {
-            SliceMode::Picture => {
-                std_slice_headers.push(slice_header(&frame_info, 0));
-            }
-            SliceMode::Rows(num_rows) => {
-                for row in (0..height / 16).step_by(num_rows.get() as usize) {
-                    let first_macroblock = (width / 16) * row;
+        let max_slice_count = self.caps.codec.max_slice_count.max(1);
+        let row_unaligned_slices = self
+            .caps
+            .codec
+            .flags
+            .contains(vk::VideoEncodeH264CapabilityFlagsKHR::ROW_UNALIGNED_SLICE);
 
-                    std_slice_headers.push(slice_header(&frame_info, first_macroblock));
-                }
+        let align_slice = |num_mbs: u32| {
+            if row_unaligned_slices {
+                num_mbs
+            } else {
+                num_mbs.next_multiple_of(width_in_mbs)
             }
-            SliceMode::MacroBlocks(config_num_mbs) => {
-                for first_macroblock in
-                    (0..total_macroblocks).step_by(config_num_mbs.get() as usize)
-                {
-                    std_slice_headers.push(slice_header(&frame_info, first_macroblock));
-                }
-            }
+        };
+
+        let macroblocks_per_slice = match self.config.slice_mode {
+            SliceMode::Picture => total_macroblocks,
+            SliceMode::Rows(num_rows) => num_rows.get() * width_in_mbs,
+            SliceMode::MacroBlocks(num_mbs) => align_slice(num_mbs.get()),
+        };
+
+        let macroblocks_per_slice = cmp::max(
+            macroblocks_per_slice,
+            align_slice(total_macroblocks.div_ceil(max_slice_count)),
+        );
+
+        for first_macroblock in (0..total_macroblocks).step_by(macroblocks_per_slice as usize) {
+            std_slice_headers.push(slice_header(&frame_info, first_macroblock));
         }
 
         let mut nalu_slices: SmallVec<[_; 1]> = std_slice_headers
@@ -645,6 +670,59 @@ fn map_level(profile: H264Level) -> vk::native::StdVideoH264LevelIdc {
     }
 }
 
+fn clamp_rate_control(
+    mut rate_control: VulkanH264RateControlConfig,
+    caps: &VulkanEncoderCapabilities<H264>,
+) -> VulkanH264RateControlConfig {
+    let clamp_qp = |qp: u8| i32::from(qp).clamp(caps.codec.min_qp, caps.codec.max_qp) as u8;
+
+    let mode = match rate_control.mode {
+        VulkanH264RateControlMode::Default => vk::VideoEncodeRateControlModeFlagsKHR::DEFAULT,
+        VulkanH264RateControlMode::ConstantBitrate { .. } => {
+            vk::VideoEncodeRateControlModeFlagsKHR::CBR
+        }
+        VulkanH264RateControlMode::VariableBitrate { .. } => {
+            vk::VideoEncodeRateControlModeFlagsKHR::VBR
+        }
+        VulkanH264RateControlMode::ConstantQuality { .. } => {
+            vk::VideoEncodeRateControlModeFlagsKHR::DISABLED
+        }
+    };
+
+    if !caps.supports_rate_control_mode(mode) {
+        log::warn!("Rate control mode {mode:?} is not supported, falling back to the default mode");
+        rate_control.mode = VulkanH264RateControlMode::Default;
+    }
+
+    rate_control.mode = match rate_control.mode {
+        VulkanH264RateControlMode::Default => VulkanH264RateControlMode::Default,
+        VulkanH264RateControlMode::ConstantBitrate { bitrate } => {
+            VulkanH264RateControlMode::ConstantBitrate {
+                bitrate: caps.clamp_bitrate(bitrate),
+            }
+        }
+        VulkanH264RateControlMode::VariableBitrate {
+            average_bitrate,
+            max_bitrate,
+        } => {
+            let max_bitrate = caps.clamp_bitrate(max_bitrate);
+
+            VulkanH264RateControlMode::VariableBitrate {
+                average_bitrate: average_bitrate.min(max_bitrate),
+                max_bitrate,
+            }
+        }
+        VulkanH264RateControlMode::ConstantQuality { qp } => {
+            VulkanH264RateControlMode::ConstantQuality { qp: clamp_qp(qp) }
+        }
+    };
+
+    rate_control.min_qp = rate_control.min_qp.map(clamp_qp);
+    rate_control.max_qp = rate_control.max_qp.map(clamp_qp);
+
+    rate_control
+}
+
 fn rate_control_from_config(config: &VulkanH264EncoderConfig) -> Pin<Box<RateControlInfos<H264>>> {
     let mut this = Box::pin(RateControlInfos::<H264> {
         codec_layer: vk::VideoEncodeH264RateControlLayerInfoKHR::default(),
@@ -661,7 +739,6 @@ fn rate_control_from_config(config: &VulkanH264EncoderConfig) -> Pin<Box<RateCon
     this.codec_info.idr_period = config.frame_pattern.intra_idr_period.into();
     this.codec_info.gop_frame_count = config.frame_pattern.intra_period.into();
     this.info.virtual_buffer_size_in_ms = 100;
-    this.info.layer_count = 1;
 
     if let Some(Framerate { num, denom }) = config.rate_control.framerate {
         this.layer.frame_rate_numerator = num;
@@ -695,12 +772,14 @@ fn rate_control_from_config(config: &VulkanH264EncoderConfig) -> Pin<Box<RateCon
         this.codec_layer.use_max_qp = vk::FALSE;
     }
 
+    // Rate control layers must only be set for CBR & VBR
     match config.rate_control.mode {
         VulkanH264RateControlMode::Default => {
             this.info.rate_control_mode = vk::VideoEncodeRateControlModeFlagsKHR::DEFAULT;
         }
         VulkanH264RateControlMode::ConstantBitrate { bitrate } => {
             this.info.rate_control_mode = vk::VideoEncodeRateControlModeFlagsKHR::CBR;
+            this.info.layer_count = 1;
             this.layer.average_bitrate = bitrate.into();
             this.layer.max_bitrate = bitrate.into();
         }
@@ -709,6 +788,7 @@ fn rate_control_from_config(config: &VulkanH264EncoderConfig) -> Pin<Box<RateCon
             max_bitrate,
         } => {
             this.info.rate_control_mode = vk::VideoEncodeRateControlModeFlagsKHR::VBR;
+            this.info.layer_count = 1;
             this.layer.average_bitrate = average_bitrate.into();
             this.layer.max_bitrate = max_bitrate.into();
         }
