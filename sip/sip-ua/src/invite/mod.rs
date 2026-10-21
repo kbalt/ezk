@@ -244,10 +244,9 @@ impl Usage for InviteUsage {
                 }
             }
             Method::BYE => {
-                // TODO respond to BYE with 200 before actually handling it
-                let mut state = self.inner.state.lock().await;
+                let state = self.inner.state.lock().await.set_terminated();
 
-                match state.set_terminated() {
+                match state {
                     InviteSessionState::UasProvisional {
                         dialog,
                         tsx,
@@ -268,30 +267,25 @@ impl Usage for InviteUsage {
                             log::warn!("Failed to handle bye request in provisional state: {e:?}");
                         }
                     }
-                    InviteSessionState::Established { evt_sink } => {
-                        let bye = request.inner().take().unwrap();
-
-                        if let Err(SendError(UsageEvent::Bye(bye))) =
-                            evt_sink.send(UsageEvent::Bye(bye)).await
-                        {
-                            *request.inner() = Some(bye);
-                        }
-                    }
-                    InviteSessionState::Cancelled => {
-                        // This dialog was never established.
-                    }
-                    InviteSessionState::Terminated => {
-                        // A local BYE may have crossed this incoming BYE. While the
-                        // dialog usage still exists, acknowledge the incoming BYE.
-                        drop(state);
-
+                    state @ (InviteSessionState::Established { .. }
+                    | InviteSessionState::Terminated) => {
+                        // In the Terminated state a local BYE crossed this one. While
+                        // the dialog usage still exists, answer it as well.
                         let mut bye = request.take();
                         let response = endpoint.create_response(&bye, StatusCode::OK, None);
                         let transaction = endpoint.create_server_tsx(&mut bye);
 
                         if let Err(e) = transaction.respond(response).await {
-                            log::warn!("Failed to respond to BYE in terminated state: {e:?}");
+                            log::warn!("Failed to respond to BYE: {e:?}");
                         }
+
+                        if let InviteSessionState::Established { evt_sink } = state {
+                            // The BYE response is already handled, so a dropped receiver is fine.
+                            let _ = evt_sink.send(UsageEvent::Bye(bye)).await;
+                        }
+                    }
+                    InviteSessionState::Cancelled => {
+                        // This dialog was never established.
                     }
                 }
             }

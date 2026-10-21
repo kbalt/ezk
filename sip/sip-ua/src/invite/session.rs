@@ -2,7 +2,7 @@ use super::Inner;
 use super::timer::SessionTimer;
 use crate::dialog::{Dialog, UsageGuard};
 use crate::invite::AwaitedAck;
-use sip_core::transaction::{ServerInvTsx, ServerTsx, TsxResponse};
+use sip_core::transaction::{ServerInvTsx, TsxResponse};
 use sip_core::transport::OutgoingResponse;
 use sip_core::{Endpoint, IncomingRequest, Result};
 use sip_types::header::typed::Refresher;
@@ -48,7 +48,9 @@ pub enum InviteSessionEvent {
     RefreshNeeded,
     Notify(IncomingRequest),
     ReInviteReceived(ReInviteReceived),
-    Bye(ByeEvent),
+    /// The BYE has already been answered with 200 OK,
+    /// the request is provided for inspection only.
+    Bye(IncomingRequest),
     Terminated,
 }
 
@@ -75,11 +77,6 @@ impl ReInviteReceived {
 
         super::receive_ack(accepted, ack_recv).await
     }
-}
-
-pub struct ByeEvent {
-    bye: IncomingRequest,
-    transaction: ServerTsx,
 }
 
 impl InviteSession {
@@ -151,14 +148,7 @@ impl InviteSession {
 
                 Ok(InviteSessionEvent::Notify(incoming_request))
             }
-            UsageEvent::Bye(mut request) => {
-                let transaction = self.endpoint.create_server_tsx(&mut request);
-
-                Ok(InviteSessionEvent::Bye(ByeEvent {
-                    bye: request,
-                    transaction,
-                }))
-            }
+            UsageEvent::Bye(request) => Ok(InviteSessionEvent::Bye(request)),
             UsageEvent::ReInvite(mut invite) => {
                 self.session_timer.reset();
 
@@ -230,16 +220,6 @@ impl InviteSession {
                 _ => return Err(SessionRefreshError::UnexpectedStatus(response.line.code)),
             }
         }
-
-        Ok(())
-    }
-
-    pub async fn handle_bye(&mut self, event: ByeEvent) -> Result<()> {
-        let response = self
-            .dialog
-            .create_response(&event.bye, StatusCode::OK, None)?;
-
-        event.transaction.respond(response).await?;
 
         Ok(())
     }

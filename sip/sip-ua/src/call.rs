@@ -138,10 +138,8 @@ impl<M: MediaBackend> Call<M> {
             InviteSessionEvent::ReInviteReceived(event) => {
                 self.handle_reinvite(event).await?;
             }
-            InviteSessionEvent::Bye(event) => {
+            InviteSessionEvent::Bye(_) => {
                 self.terminated = true;
-                invite_session.handle_bye(event).await?;
-
                 self.backlog.push_back(CallEvent::Terminated);
             }
             InviteSessionEvent::Terminated => {

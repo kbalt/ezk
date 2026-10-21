@@ -5,7 +5,7 @@ use ezk_sip_ua::{
     invite::{
         InviteLayer, create_ack,
         initiator::{InviteInitiator, Response},
-        session::InviteSession,
+        session::{InviteSession, InviteSessionEvent},
     },
 };
 use sip_core::{Endpoint, IncomingRequest, Layer, MayTake, transaction::TsxResponse};
@@ -18,6 +18,25 @@ use std::time::Duration;
 use tokio::{sync::mpsc, time::timeout};
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+#[tokio::test(flavor = "current_thread")]
+async fn answers_remote_bye_before_application_polls_events() -> TestResult {
+    timeout(Duration::from_secs(10), async {
+        let (mut session, peer) = establish_call().await?;
+
+        // The peer must get its 200 OK before run() is ever polled.
+        let response = peer.send_bye().await?;
+        assert_eq!(response.line.code, StatusCode::OK);
+
+        assert!(matches!(session.run().await?, InviteSessionEvent::Bye(_)));
+        assert!(matches!(
+            session.run().await?,
+            InviteSessionEvent::Terminated
+        ));
+        Ok(())
+    })
+    .await?
+}
 
 #[tokio::test(flavor = "current_thread")]
 async fn answers_crossed_bye_before_local_bye_completes() -> TestResult {
