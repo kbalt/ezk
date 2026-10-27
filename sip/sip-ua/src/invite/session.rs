@@ -2,6 +2,7 @@ use super::Inner;
 use super::timer::SessionTimer;
 use crate::dialog::{Dialog, UsageGuard};
 use crate::invite::AwaitedAck;
+use sip_core::transaction::consts::T4;
 use sip_core::transaction::{ServerInvTsx, TsxResponse};
 use sip_core::transport::OutgoingResponse;
 use sip_core::{Endpoint, IncomingRequest, Result};
@@ -31,7 +32,10 @@ pub struct InviteSession {
     pub session_timer: SessionTimer,
 
     // drop usage before dialog
-    _usage_guard: UsageGuard,
+    //
+    // Shared so `terminate()` can keep the usage registered after the session
+    // is dropped (see `linger_after_bye`).
+    usage_guard: Arc<UsageGuard>,
     pub dialog: Arc<Dialog>,
 }
 
@@ -95,7 +99,7 @@ impl InviteSession {
             role,
             usage_events,
             session_timer,
-            _usage_guard: usage_guard,
+            usage_guard: Arc::new(usage_guard),
             dialog: Arc::new(dialog),
         }
     }
@@ -125,7 +129,35 @@ impl InviteSession {
 
         drop(target_tp_info);
 
-        transaction.receive_final().await
+        let response = transaction.receive_final().await?;
+
+        if transaction.request().parts.transport.is_udp() {
+            self.linger_after_bye();
+        }
+
+        Ok(response)
+    }
+
+    /// Keep the dialog and INVITE usage alive after our BYE transaction completed.
+    ///
+    /// Over unreliable transports the BYE client transaction stays in its
+    /// Completed state for T4 (RFC 3261 §17.1.2.2, Timer K). RFC 5407 §2 calls
+    /// this the Mortal state, in which a BYE "can be accepted".
+    /// We keep the dialog until then so a crossed BYE gets that 200 OK even if
+    /// the application drops the session right after `terminate()` returns.
+    /// Otherwise it would get a 481, or a 404 if the application still holds
+    /// the dialog.
+    fn linger_after_bye(&self) {
+        let usage_guard = self.usage_guard.clone();
+        let dialog = self.dialog.clone();
+
+        tokio::spawn(async move {
+            tokio::time::sleep(T4).await;
+
+            // drop usage before dialog
+            drop(usage_guard);
+            drop(dialog);
+        });
     }
 
     async fn handle_usage_event(&mut self, evt: Option<UsageEvent>) -> Result<InviteSessionEvent> {

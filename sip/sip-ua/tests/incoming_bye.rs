@@ -74,6 +74,47 @@ async fn answers_crossed_bye_before_local_bye_completes() -> TestResult {
     .await?
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn answers_crossed_bye_after_session_drop() -> TestResult {
+    // `Call::terminate` consumes the call, so every `Call` user drops the
+    // session right after sending the BYE.
+    assert_eq!(crossed_bye_after_terminate(false).await?, StatusCode::OK);
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn answers_crossed_bye_after_usage_drop() -> TestResult {
+    // Keeping a reference to the dialog while dropping the INVITE usage used
+    // to answer the crossed BYE with 404.
+    assert_eq!(crossed_bye_after_terminate(true).await?, StatusCode::OK);
+    Ok(())
+}
+
+/// Terminates the call, drops the session, then lets the peer send a crossed
+/// BYE while our BYE client transaction is still in its UDP Completed state.
+async fn crossed_bye_after_terminate(keep_dialog: bool) -> TestResult<StatusCode> {
+    timeout(Duration::from_secs(10), async {
+        let (mut session, mut peer) = establish_call().await?;
+
+        let peer_side = async {
+            let mut bye = peer.recv(Method::BYE).await;
+            let response = peer.dialog.create_response(&bye, StatusCode::OK, None)?;
+            peer.endpoint
+                .create_server_tsx(&mut bye)
+                .respond(response)
+                .await
+        };
+        let (response, ()) = tokio::try_join!(session.terminate(), peer_side)?;
+        assert_eq!(response.line.code, StatusCode::OK);
+
+        let _dialog = keep_dialog.then(|| session.dialog.clone());
+        drop(session);
+
+        Ok(peer.send_bye().await?.line.code)
+    })
+    .await?
+}
+
 /// Hands every incoming request to the scripted peer instead of dialog dispatch.
 struct CaptureRequests(mpsc::UnboundedSender<IncomingRequest>);
 
