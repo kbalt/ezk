@@ -328,7 +328,7 @@ impl InviteUsage {
         invite: IncomingRequest,
         mut bye: IncomingRequest,
     ) -> Result<()> {
-        let bye_response = dialog.create_response(&invite, StatusCode::OK, None)?;
+        let bye_response = dialog.create_response(&bye, StatusCode::OK, None)?;
         let bye_tsx = endpoint.create_server_tsx(&mut bye);
 
         let invite_response =
