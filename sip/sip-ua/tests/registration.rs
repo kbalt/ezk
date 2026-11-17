@@ -52,6 +52,29 @@ async fn respond_ok(socket: &mut BufStream<TcpStream>, request: &str, expires: u
     socket.flush().await.unwrap();
 }
 
+async fn respond_with_contact_expiry(
+    socket: &mut BufStream<TcpStream>,
+    request: &str,
+    expires: u32,
+    header_expiry: Option<u32>,
+) {
+    let mut response = String::from("SIP/2.0 200 OK\r\n");
+    for name in ["Via", "From", "Call-ID", "CSeq"] {
+        response.push_str(&format!("{name}: {}\r\n", header(request, name)));
+    }
+    response.push_str(&format!(
+        "To: {};tag=registrar\r\nContact: {};expires={expires}\r\n",
+        header(request, "To"),
+        header(request, "Contact"),
+    ));
+    if let Some(expires) = header_expiry {
+        response.push_str(&format!("Expires: {expires}\r\n"));
+    }
+    response.push_str("Content-Length: 0\r\n\r\n");
+    socket.write_all(response.as_bytes()).await.unwrap();
+    socket.flush().await.unwrap();
+}
+
 async fn accept_and_register(listener: &TcpListener) -> (BufStream<TcpStream>, String) {
     let (socket, _) = listener.accept().await.unwrap();
     let mut socket = BufStream::new(socket);
@@ -114,4 +137,55 @@ async fn tcp_closure_fails_registration_and_retry_reconnects() {
     })
     .await
     .expect("TCP registration lifecycle must complete within 60 seconds");
+}
+
+#[tokio::test]
+async fn contact_lifetime_drives_registration_refresh() {
+    timeout(Duration::from_secs(15), async {
+        for header_expiry in [None, Some(EXPIRY)] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let registrar = format!("sip:{};transport=tcp", listener.local_addr().unwrap())
+                .parse()
+                .unwrap();
+            let config = RegistrarConfig::new("alice".into(), registrar);
+            let mut endpoint = Endpoint::builder();
+            endpoint.add_allow(sip_types::Method::REGISTER);
+            let endpoint = endpoint.build();
+
+            let (mut socket, result) = tokio::join!(
+                async {
+                    let (socket, _) = listener.accept().await.unwrap();
+                    let mut socket = BufStream::new(socket);
+                    let request = receive_register(&mut socket).await;
+                    assert_eq!(header(&request, "Expires"), "300");
+                    respond_with_contact_expiry(&mut socket, &request, 2, header_expiry).await;
+                    socket
+                },
+                Registration::register(
+                    endpoint,
+                    config,
+                    DigestAuthenticator::new(Default::default())
+                ),
+            );
+            let mut registration = result.unwrap();
+            assert!(registration.is_registered());
+
+            // Contact-only and conflicting top-level Expires must both refresh
+            // before the two-second binding expires, not after 290/3590 seconds.
+            for _ in 0..2 {
+                let request = timeout(Duration::from_millis(1800), receive_register(&mut socket))
+                    .await
+                    .expect("must refresh before Contact expires");
+                assert_eq!(header(&request, "Expires"), "2");
+                respond_with_contact_expiry(&mut socket, &request, 2, header_expiry).await;
+            }
+
+            drop(registration);
+            let unregister = receive_register(&mut socket).await;
+            assert_eq!(header(&unregister, "Expires"), "0");
+            respond_ok(&mut socket, &unregister, 0).await;
+        }
+    })
+    .await
+    .expect("Contact lifetime regression test must complete within 15 seconds");
 }

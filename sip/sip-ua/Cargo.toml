@@ -37,6 +37,7 @@ bytes = "1"
 
 [dev-dependencies]
 md5 = "0.7"
+tokio = { version = "1", features = ["test-util"] }
 
 [features]
 default = ["rtc"]
