@@ -42,7 +42,7 @@ impl HeaderParse for SessionExpires {
                 Params::<CPS>::parse(src),
             )),
             |(delta_secs, mut params)| -> Self {
-                let refresher = if let Some(param) = params.take("refresher") {
+                let refresher = if let Some(param) = params.take_ignore_ascii_case("refresher") {
                     match param.as_str() {
                         "uas" => Refresher::Uas,
                         "uac" => Refresher::Uac,

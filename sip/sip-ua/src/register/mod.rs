@@ -89,7 +89,7 @@ impl Registration {
                     .into_iter()
                     .find(|contact| contact.uri.uri.compare(&self.contact.uri.uri))
             })
-            .and_then(|contact| contact.params.get_val("expires").cloned());
+            .and_then(|contact| contact.params.get_val_ignore_ascii_case("expires").cloned());
         let expires = match contact_expiry {
             Some(expires) => expires.parse::<u32>().ok(),
             None => headers.get_named::<Expires>().ok().map(|expires| expires.0),
@@ -208,6 +208,30 @@ mod tests {
                 expected,
                 "{contacts:?}, {expires:?}"
             );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn contact_expiry_name_is_case_insensitive() {
+        for name in ["expires", "Expires", "ExPiReS"] {
+            for header_expiry in [None, Some(300)] {
+                let mut registration = registration();
+                let mut headers = Headers::new();
+                headers.insert(
+                    Name::CONTACT,
+                    format!("<sip:alice@127.0.0.1:5060>;{name}=10"),
+                );
+                if let Some(expires) = header_expiry {
+                    headers.insert_named(&Expires(expires));
+                }
+
+                registration.update_expiry(&headers);
+
+                assert_eq!(registration.expires, Duration::from_secs(10), "{name}");
+                let start = Instant::now();
+                registration.wait_for_expiry().await;
+                assert_eq!(start.elapsed(), Duration::from_secs(5), "{name}");
+            }
         }
     }
 

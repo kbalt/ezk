@@ -103,6 +103,45 @@ impl<S: ParamsSpec> Params<S> {
             .and_then(|p| p.value.as_ref())
     }
 
+    /// Returns the first matching parameter mutably, ignoring ASCII name case.
+    #[inline]
+    pub fn get_mut_ignore_ascii_case<N>(&mut self, name: N) -> Option<&mut Param>
+    where
+        N: AsRef<str>,
+    {
+        self.params
+            .iter_mut()
+            .find(|p| p.name.eq_ignore_ascii_case(name.as_ref()))
+    }
+
+    /// Removes the first matching parameter and returns its value, ignoring ASCII name case.
+    #[inline]
+    pub fn take_ignore_ascii_case<N>(&mut self, name: N) -> Option<BytesStr>
+    where
+        N: AsRef<str>,
+    {
+        let pos = self
+            .params
+            .iter()
+            .position(|p| p.name.eq_ignore_ascii_case(name.as_ref()))?;
+        self.params.remove(pos).value
+    }
+
+    /// Updates the first matching parameter or appends one, ignoring ASCII name case.
+    /// Existing name spelling and the supplied value's casing are preserved.
+    #[inline]
+    pub fn push_or_edit_ignore_ascii_case<N, V>(&mut self, name: N, value: V)
+    where
+        N: Into<BytesStr> + AsRef<str>,
+        V: Into<BytesStr>,
+    {
+        if let Some(param) = self.get_mut_ignore_ascii_case(name.as_ref()) {
+            param.value = Some(value.into());
+        } else {
+            self.push(Param::value(name, value));
+        }
+    }
+
     #[inline]
     pub fn take<N>(&mut self, name: N) -> Option<BytesStr>
     where
@@ -362,7 +401,7 @@ macro_rules! impl_with_params {
             N: Into<bytesstr::BytesStr> + AsRef<str>,
             V: Into<bytesstr::BytesStr> + AsRef<str>,
         {
-            self.$field.push_or_edit(name, value);
+            self.$field.push_or_edit_ignore_ascii_case(name, value);
             self
         }
     };
@@ -372,6 +411,28 @@ macro_rules! impl_with_params {
 mod test {
     use super::*;
     use bytesstr::BytesStr;
+
+    #[test]
+    fn case_insensitive_mutation_preserves_names_and_values() {
+        let mut params = Params::<CPS>::new()
+            .with(Param::value("TaG", "AbC"))
+            .with(Param::name("RPORT"));
+        assert!(params.get_mut("tag").is_none());
+        params.get_mut_ignore_ascii_case("rport").unwrap().value = Some("5060".into());
+        params.push_or_edit_ignore_ascii_case("tag", "DeF");
+        params.push_or_edit_ignore_ascii_case("received", "EXAMPLE.com");
+        assert_eq!(
+            params.to_string(),
+            ";TaG=DeF;RPORT=5060;received=EXAMPLE.com"
+        );
+        assert!(params.take("tag").is_none());
+        assert_eq!(params.take_ignore_ascii_case("TAG").unwrap(), "DeF");
+        assert!(params.get_ignore_ascii_case("tag").is_none());
+        assert!(params.take_ignore_ascii_case("missing").is_none());
+        params.push(Param::name("FLAG"));
+        assert!(params.take_ignore_ascii_case("flag").is_none());
+        assert!(params.get_ignore_ascii_case("flag").is_none());
+    }
 
     #[test]
     fn value_lookup_can_explicitly_ignore_ascii_case() {

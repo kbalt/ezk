@@ -335,7 +335,7 @@ impl Transports {
     ) -> Result<(TpHandle, SocketAddr)> {
         log::trace!("select transport for {:?}", uri);
 
-        if let Some(transport) = uri.uri_params.get_val("transport") {
+        if let Some(transport) = uri.uri_params.get_val_ignore_ascii_case("transport") {
             return self
                 .select_transport_by_uri_param(endpoint, uri, transport)
                 .await;

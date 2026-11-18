@@ -133,7 +133,7 @@ impl HeaderParse for SubscriptionState {
                         _ => bail!("Received invalid state in Subscription-State header"),
                     },
                     reason: {
-                        if let Some(r) = params.take("reason") {
+                        if let Some(r) = params.take_ignore_ascii_case("reason") {
                             use EventReasonValue::*;
                             Some(match r.as_ref() {
                                 "deactivated" => Deactivated,
@@ -150,11 +150,11 @@ impl HeaderParse for SubscriptionState {
                         }
                     },
                     expires: params
-                        .take("expires")
+                        .take_ignore_ascii_case("expires")
                         .as_ref()
                         .and_then(|e| u32::from_str(e).ok()),
                     retry_after: params
-                        .take("retry-after")
+                        .take_ignore_ascii_case("retry-after")
                         .as_ref()
                         .and_then(|after| u32::from_str(after).ok()),
                     params,

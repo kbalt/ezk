@@ -126,18 +126,22 @@ impl Print for SipUri {
             (Some(UriContext::ReqUri), _) => write!(f, "{}", self.uri_params),
             (Some(UriContext::FromTo), _) => self
                 .uri_params
-                .filtered_print(|name| !matches!(name, "maddr" | "ttl" | "transport" | "lr"))
+                .filtered_print(|name| {
+                    !["maddr", "ttl", "transport", "lr"]
+                        .iter()
+                        .any(|excluded| name.eq_ignore_ascii_case(excluded))
+                })
                 .fmt(f),
             (Some(UriContext::Contact), &Some(&Method::REGISTER /* TODO: METHOD::REDIRECT */)) => {
                 self.uri_params
-                    .filtered_print(|name| !matches!(name, "lr"))
+                    .filtered_print(|name| !name.eq_ignore_ascii_case("lr"))
                     .fmt(f)?;
 
                 self.header_params.fmt(f)
             }
             (Some(UriContext::Contact | UriContext::Routing), _) => self
                 .uri_params
-                .filtered_print(|name| !matches!(name, "ttl"))
+                .filtered_print(|name| !name.eq_ignore_ascii_case("ttl"))
                 .fmt(f),
             _ => {
                 self.uri_params.fmt(f)?;

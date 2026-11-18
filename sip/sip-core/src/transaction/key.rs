@@ -110,7 +110,7 @@ impl TsxKey {
             sent_by, params, ..
         } = &headers.via[0];
 
-        let branch = params.get_val("branch").unwrap_or(&EMPTY);
+        let branch = params.get_val_ignore_ascii_case("branch").unwrap_or(&EMPTY);
 
         let CSeq { method, cseq } = &headers.cseq;
         let method = filter_method(method);
@@ -150,5 +150,30 @@ impl TsxKey {
             MessageLine::Request(_) => Self::from_headers(headers, Role::Server),
             MessageLine::Response(_) => Self::from_headers(headers, Role::Client),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sip_types::Headers;
+
+    #[test]
+    fn branch_name_ignores_case_but_branch_value_does_not() {
+        let key = |name: &str, value: &str| {
+            let mut headers = Headers::new();
+            headers.insert(Name::VIA, format!("SIP/2.0/UDP 127.0.0.1;{name}={value}"));
+            headers.insert(Name::FROM, "<sip:alice@example.com>;TaG=AbC");
+            headers.insert(Name::TO, "<sip:bob@example.com>");
+            headers.insert(Name::CALL_ID, "CallID");
+            headers.insert(Name::CSEQ, "1 INVITE");
+            let headers = BaseHeaders::extract_from(&headers).unwrap();
+            TsxKey::from_headers(&headers, Role::Server).unwrap()
+        };
+        let lower = key("branch", "z9hG4bK-AbC");
+        let mixed = key("BrAnCh", "z9hG4bK-AbC");
+        assert_eq!(lower, mixed);
+        assert_eq!(mixed.branch(), "z9hG4bK-AbC");
+        assert_ne!(lower, key("BRANCH", "z9hG4bK-abc"));
     }
 }
