@@ -29,6 +29,10 @@ impl<S> Clone for Params<S> {
 }
 
 impl<S: ParamsSpec> Params<S> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &Param> {
+        self.params.iter()
+    }
+
     pub fn new() -> Params<S> {
         Params {
             params: Vec::new(),
@@ -74,6 +78,29 @@ impl<S: ParamsSpec> Params<S> {
         N: AsRef<str>,
     {
         self.get(name.as_ref()).and_then(|p| p.value.as_ref())
+    }
+
+    /// Returns the first matching parameter, ignoring ASCII case in its name.
+    ///
+    /// Unlike `get`, this explicitly opts into case-insensitive name matching.
+    #[inline]
+    pub fn get_ignore_ascii_case<N>(&self, name: N) -> Option<&Param>
+    where
+        N: AsRef<str>,
+    {
+        self.params
+            .iter()
+            .find(|p| p.name.eq_ignore_ascii_case(name.as_ref()))
+    }
+
+    /// Returns the first matching parameter's value, ignoring ASCII case in its name.
+    #[inline]
+    pub fn get_val_ignore_ascii_case<N>(&self, name: N) -> Option<&BytesStr>
+    where
+        N: AsRef<str>,
+    {
+        self.get_ignore_ascii_case(name)
+            .and_then(|p| p.value.as_ref())
     }
 
     #[inline]
@@ -345,6 +372,42 @@ macro_rules! impl_with_params {
 mod test {
     use super::*;
     use bytesstr::BytesStr;
+
+    #[test]
+    fn value_lookup_can_explicitly_ignore_ascii_case() {
+        for name in ["expires", "Expires", "ExPiReS"] {
+            let params = Params::<CPS>::new().with(Param::value(name, "10"));
+
+            assert_eq!(
+                params
+                    .get_val_ignore_ascii_case("expires")
+                    .map(BytesStr::as_ref),
+                Some("10")
+            );
+            assert_eq!(params.get_val("expires").is_some(), name == "expires");
+            assert!(params.get_val_ignore_ascii_case("missing").is_none());
+        }
+    }
+
+    #[test]
+    fn case_insensitive_value_lookup_uses_first_match() {
+        let params = Params::<CPS>::new()
+            .with(Param::value("Expires", "10"))
+            .with(Param::value("expires", "20"));
+        assert_eq!(
+            params
+                .get_val_ignore_ascii_case("expires")
+                .map(BytesStr::as_ref),
+            Some("10")
+        );
+
+        let params = Params::<CPS>::new()
+            .with(Param::name("Expires"))
+            .with(Param::value("expires", "20"));
+        assert!(params.get_val_ignore_ascii_case("expires").is_none());
+        assert!(params.get_ignore_ascii_case("expires").is_some());
+        assert!(params.get_ignore_ascii_case("missing").is_none());
+    }
 
     #[test]
     fn common_params_parse() {

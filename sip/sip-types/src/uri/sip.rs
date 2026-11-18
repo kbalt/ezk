@@ -16,6 +16,8 @@ use std::borrow::Cow;
 use std::fmt;
 use std::str::Utf8Error;
 
+mod comparison;
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct SipUriUserPassword {
     pub user: BytesStr,
@@ -74,10 +76,16 @@ impl SipUri {
         self
     }
 
+    /// Compare using rules from RFC 3261 section 19.1.4, without DNS lookups.
+    ///
+    /// This relation is not transitive: extension parameters present in only
+    /// one URI are ignored. It must not be used to implement `Eq` or `Hash`.
+    /// Unsupported embedded headers are compared as case-sensitive text.
+    ///
+    /// Users and parameters are already percent-decoded by the parser; the
+    /// original spelling of reserved escapes in those components is not retained.
     pub fn compare(&self, other: &Self) -> bool {
-        self.sips == other.sips
-            && self.user_part == other.user_part
-            && self.host_port == other.host_port
+        comparison::compare(self, other)
     }
 }
 
