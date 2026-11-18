@@ -16,6 +16,8 @@ use std::borrow::Cow;
 use std::fmt;
 use std::str::Utf8Error;
 
+mod comparison;
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct SipUriUserPassword {
     pub user: BytesStr,
@@ -74,10 +76,16 @@ impl SipUri {
         self
     }
 
+    /// Compare using rules from RFC 3261 section 19.1.4, without DNS lookups.
+    ///
+    /// This relation is not transitive: extension parameters present in only
+    /// one URI are ignored. It must not be used to implement `Eq` or `Hash`.
+    /// Unsupported embedded headers are compared as case-sensitive text.
+    ///
+    /// Users and parameters are already percent-decoded by the parser; the
+    /// original spelling of reserved escapes in those components is not retained.
     pub fn compare(&self, other: &Self) -> bool {
-        self.sips == other.sips
-            && self.user_part == other.user_part
-            && self.host_port == other.host_port
+        comparison::compare(self, other)
     }
 }
 
@@ -118,18 +126,22 @@ impl Print for SipUri {
             (Some(UriContext::ReqUri), _) => write!(f, "{}", self.uri_params),
             (Some(UriContext::FromTo), _) => self
                 .uri_params
-                .filtered_print(|name| !matches!(name, "maddr" | "ttl" | "transport" | "lr"))
+                .filtered_print(|name| {
+                    !["maddr", "ttl", "transport", "lr"]
+                        .iter()
+                        .any(|excluded| name.eq_ignore_ascii_case(excluded))
+                })
                 .fmt(f),
             (Some(UriContext::Contact), &Some(&Method::REGISTER /* TODO: METHOD::REDIRECT */)) => {
                 self.uri_params
-                    .filtered_print(|name| !matches!(name, "lr"))
+                    .filtered_print(|name| !name.eq_ignore_ascii_case("lr"))
                     .fmt(f)?;
 
                 self.header_params.fmt(f)
             }
             (Some(UriContext::Contact | UriContext::Routing), _) => self
                 .uri_params
-                .filtered_print(|name| !matches!(name, "ttl"))
+                .filtered_print(|name| !name.eq_ignore_ascii_case("ttl"))
                 .fmt(f),
             _ => {
                 self.uri_params.fmt(f)?;

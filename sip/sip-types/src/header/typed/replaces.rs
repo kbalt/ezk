@@ -32,9 +32,13 @@ impl HeaderParse for Replaces {
             |(call_id, mut params)| -> anyhow::Result<Self> {
                 Ok(Self {
                     call_id: BytesStr::from_parse(src, call_id),
-                    from_tag: params.take("from-tag").context("missing from-tag")?,
-                    to_tag: params.take("to-tag").context("missing to-tag")?,
-                    early_only: params.get("early-only").is_some(),
+                    from_tag: params
+                        .take_ignore_ascii_case("from-tag")
+                        .context("missing from-tag")?,
+                    to_tag: params
+                        .take_ignore_ascii_case("to-tag")
+                        .context("missing to-tag")?,
+                    early_only: params.get_ignore_ascii_case("early-only").is_some(),
                 })
             },
         )(i)

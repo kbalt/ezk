@@ -263,14 +263,14 @@ impl Endpoint {
 
             if let Some(maddr) = via
                 .params
-                .get_val("maddr")
+                .get_val_ignore_ascii_case("maddr")
                 .and_then(|maddr| maddr.parse::<IpAddr>().ok())
             {
                 // TODO maddr default port guessing (currently defaulting to 5060)
                 SocketAddr::new(maddr, via.sent_by.port.unwrap_or(5060))
             } else if let Some(rport) = via
                 .params
-                .get_val("rport")
+                .get_val_ignore_ascii_case("rport")
                 .and_then(|rport| rport.parse::<u16>().ok())
             {
                 SocketAddr::new(request.tp_info.source.ip(), rport)
@@ -483,10 +483,11 @@ fn add_received_rport(via: &mut Via, source: SocketAddr) {
     let source_host: Host = source.ip().into();
 
     if source_host != via.sent_by.host {
-        via.params.push_or_edit("received", source.ip().to_string());
+        via.params
+            .push_or_edit_ignore_ascii_case("received", source.ip().to_string());
     }
 
-    if let Some(rport) = via.params.get_mut("rport") {
+    if let Some(rport) = via.params.get_mut_ignore_ascii_case("rport") {
         rport.value = Some(source.port().to_string().into());
     }
 }
@@ -659,5 +660,44 @@ impl EndpointBuilder {
         let _ = self.sender.send(endpoint.clone());
 
         endpoint
+    }
+}
+
+#[cfg(test)]
+mod parameter_case_tests {
+    use super::*;
+    use sip_types::uri::params::Param;
+
+    #[test]
+    fn updates_mixed_case_received_and_rport_without_duplicates() {
+        let mut headers = Headers::new();
+        headers.insert(
+            Name::VIA,
+            "SIP/2.0/UDP 192.0.2.1:5060;BrAnCh=z9hG4bK-AbC;ReCeIvEd=192.0.2.2;RPORT",
+        );
+        let mut via: Via = headers.get_named().unwrap();
+        let source = "198.51.100.1:12345".parse().unwrap();
+        add_received_rport(&mut via, source);
+        assert_eq!(
+            via.params.get_val_ignore_ascii_case("received").unwrap(),
+            "198.51.100.1"
+        );
+        assert_eq!(
+            via.params.get_val_ignore_ascii_case("rport").unwrap(),
+            "12345"
+        );
+        assert_eq!(
+            via.params.get_val_ignore_ascii_case("branch").unwrap(),
+            "z9hG4bK-AbC"
+        );
+        assert_eq!(
+            via.params.to_string(),
+            ";BrAnCh=z9hG4bK-AbC;ReCeIvEd=198.51.100.1;RPORT=12345"
+        );
+
+        via.params = Default::default();
+        via.params.push(Param::value("branch", "z9hG4bK-AbC"));
+        add_received_rport(&mut via, source);
+        assert!(via.params.get_ignore_ascii_case("rport").is_none());
     }
 }

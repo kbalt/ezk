@@ -120,7 +120,7 @@ impl DigestChallenge {
         let mut other = vec![];
 
         for param in params {
-            match param.name.as_ref() {
+            match param.name.to_ascii_lowercase().as_str() {
                 "realm" => realm = Some(param.value),
                 "domain" => domain = Some(param.value),
                 "nonce" => nonce = Some(param.value),
@@ -335,7 +335,7 @@ impl DigestResponse {
         let mut other = vec![];
 
         for param in params {
-            match param.name.as_ref() {
+            match param.name.to_ascii_lowercase().as_str() {
                 "username" => username = Some(param.value),
                 "username*" => username_non_ascii = Some(param.value),
                 "realm" => realm = Some(param.value),
@@ -643,6 +643,36 @@ mod test {
     use super::*;
     use crate::print::AppendCtx;
     use crate::{Headers, Name};
+
+    #[test]
+    fn digest_parameter_names_ignore_case_and_preserve_values() {
+        let input = BytesStr::from_static(
+            r#"Digest ReAlM="EXAMPLE.com", NONCE="AbC", Opaque="DeF", Stale=true, Algorithm=MD5, QOP="auth", UserHash=true"#,
+        );
+        let (_, auth) = AuthChallenge::parse(input.as_ref(), &input).unwrap();
+        let AuthChallenge::Digest(challenge) = auth else {
+            panic!("expected Digest")
+        };
+        assert_eq!(challenge.realm, "EXAMPLE.com");
+        assert_eq!(challenge.nonce, "AbC");
+        assert_eq!(challenge.opaque.as_deref(), Some("DeF"));
+        assert!(challenge.stale && challenge.userhash);
+        assert!(challenge.other.is_empty());
+        assert_eq!(challenge.qop, vec![QopOption::Auth]);
+
+        let input = BytesStr::from_static(
+            r#"Digest UserName="Alice", ReAlM="EXAMPLE.com", NONCE="AbC", URI="sip:bob@example.com", RESPONSE="DeF", Algorithm=MD5, QOP=auth, CNonce="GhI", NC=00000001, UserHash=true"#,
+        );
+        let (_, auth) = AuthResponse::parse(input.as_ref(), &input).unwrap();
+        let AuthResponse::Digest(response) = auth else {
+            panic!("expected Digest")
+        };
+        assert_eq!(response.realm, "EXAMPLE.com");
+        assert_eq!(response.nonce, "AbC");
+        assert_eq!(response.response, "DeF");
+        assert!(response.userhash);
+        assert!(response.other.is_empty());
+    }
 
     #[test]
     fn parse_simple_digest_challenge() {

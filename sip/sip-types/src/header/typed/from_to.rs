@@ -34,7 +34,7 @@ impl HeaderParse for FromTo {
             tuple((NameAddr::parse_no_params(src), Params::<CPS>::parse(src))),
             |(uri, mut params)| FromTo {
                 uri,
-                tag: params.take("tag"),
+                tag: params.take_ignore_ascii_case("tag"),
                 params,
             },
         )(i)
