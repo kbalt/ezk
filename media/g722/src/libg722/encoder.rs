@@ -185,7 +185,7 @@ impl Encoder {
 
             if self.eight_k {
                 // Just leave the high bits as zero
-                code = ((0xc0 | ilow) >> 8) - self.bits_per_sample;
+                code = (0xc0 | ilow) >> (8 - self.bits_per_sample);
             } else {
                 // Block 1H, SUBTRA
                 eh = saturate(xhigh - self.band[1].s);
@@ -229,6 +229,7 @@ impl Encoder {
                 self.out_buffer |= (code << self.out_bits) as u32;
                 self.out_bits += self.bits_per_sample;
                 if self.out_bits >= 8 {
+                    out.push((self.out_buffer & 0xff) as u8);
                     self.out_bits -= 8;
                     self.out_buffer >>= 8;
                 }
