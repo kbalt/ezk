@@ -26,6 +26,8 @@ pub(crate) struct DecodedMessage {
 #[derive(Default)]
 pub(crate) struct StreamingDecoder {
     head_progress: usize,
+    /// Content-Length found in the part of the head before `head_progress`
+    content_len: usize,
 }
 
 impl Decoder for StreamingDecoder {
@@ -57,12 +59,14 @@ impl Decoder for StreamingDecoder {
 
         let mut parser = PullParser::new(src, self.head_progress);
 
-        let mut content_len = 0;
+        // lines before `head_progress` are not parsed again, so resume with their result
+        let mut content_len = self.content_len;
 
         for line in &mut parser {
             let Ok(line) = line else {
                 // cannot parse complete message head yet
                 self.head_progress = parser.progress();
+                self.content_len = content_len;
                 return Ok(None);
             };
 
@@ -73,6 +77,9 @@ impl Decoder for StreamingDecoder {
             let Some(name) = split.next() else {
                 continue;
             };
+
+            // whitespace is allowed between the header name and colon
+            let name = name.trim_ascii_end();
 
             let content_length_possible_names = sip_types::Name::CONTENT_LENGTH
                 .as_parse_strs()
@@ -112,6 +119,7 @@ impl Decoder for StreamingDecoder {
 
         // reset state
         self.head_progress = 0;
+        self.content_len = 0;
 
         // reset parser
         parser = PullParser::new(&src_bytes, 0);
@@ -161,4 +169,61 @@ fn malformed() -> io::Error {
 
 fn message_too_large() -> io::Error {
     io::Error::other("receiving message is too large")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Item, StreamingDecoder};
+    use bytes::{Bytes, BytesMut};
+    use tokio_util::codec::Decoder;
+
+    /// Feed all chunks into a new decoder and return the bodies of the decoded messages
+    fn decode_bodies<'a>(chunks: impl IntoIterator<Item = &'a [u8]>) -> Vec<Bytes> {
+        let mut decoder = StreamingDecoder::default();
+        let mut buffer = BytesMut::new();
+        let mut bodies = vec![];
+
+        for chunk in chunks {
+            buffer.extend_from_slice(chunk);
+
+            while let Some(item) = decoder.decode(&mut buffer).unwrap() {
+                let Item::DecodedMessage(message) = item else {
+                    panic!("expected only messages");
+                };
+
+                bodies.push(message.body);
+            }
+        }
+
+        assert!(buffer.is_empty(), "unconsumed bytes: {buffer:?}");
+
+        bodies
+    }
+
+    #[test]
+    fn content_length_allows_whitespace_before_colon() {
+        for name in ["Content-Length ", "l\t", "l \t"] {
+            let message = format!("OPTIONS sip:bob@example.com SIP/2.0\r\n{name}: 4\r\n\r\nbody");
+
+            assert_eq!(decode_bodies([message.as_bytes()]), ["body"], "{name:?}");
+        }
+    }
+
+    #[test]
+    fn content_length_is_retained_when_head_is_fragmented() {
+        let mut decoder = StreamingDecoder::default();
+
+        // The read ends inside of a header following Content-Length
+        let mut buffer =
+            BytesMut::from("OPTIONS sip:bob@example.com SIP/2.0\r\nContent-Length: 4\r\nX-Te");
+        assert!(decoder.decode(&mut buffer).unwrap().is_none());
+
+        buffer.extend_from_slice(b"st: 1\r\n\r\nbody");
+        let Some(Item::DecodedMessage(message)) = decoder.decode(&mut buffer).unwrap() else {
+            panic!("expected a complete message");
+        };
+
+        assert_eq!(message.body, "body");
+        assert!(buffer.is_empty());
+    }
 }
