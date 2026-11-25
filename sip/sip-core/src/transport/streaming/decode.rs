@@ -74,6 +74,9 @@ impl Decoder for StreamingDecoder {
                 continue;
             };
 
+            // whitespace is allowed between the header name and colon
+            let name = name.trim_ascii_end();
+
             let content_length_possible_names = sip_types::Name::CONTENT_LENGTH
                 .as_parse_strs()
                 .unwrap_or_default();
@@ -161,4 +164,43 @@ fn malformed() -> io::Error {
 
 fn message_too_large() -> io::Error {
     io::Error::other("receiving message is too large")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Item, StreamingDecoder};
+    use bytes::{Bytes, BytesMut};
+    use tokio_util::codec::Decoder;
+
+    /// Feed all chunks into a new decoder and return the bodies of the decoded messages
+    fn decode_bodies<'a>(chunks: impl IntoIterator<Item = &'a [u8]>) -> Vec<Bytes> {
+        let mut decoder = StreamingDecoder::default();
+        let mut buffer = BytesMut::new();
+        let mut bodies = vec![];
+
+        for chunk in chunks {
+            buffer.extend_from_slice(chunk);
+
+            while let Some(item) = decoder.decode(&mut buffer).unwrap() {
+                let Item::DecodedMessage(message) = item else {
+                    panic!("expected only messages");
+                };
+
+                bodies.push(message.body);
+            }
+        }
+
+        assert!(buffer.is_empty(), "unconsumed bytes: {buffer:?}");
+
+        bodies
+    }
+
+    #[test]
+    fn content_length_allows_whitespace_before_colon() {
+        for name in ["Content-Length ", "l\t", "l \t"] {
+            let message = format!("OPTIONS sip:bob@example.com SIP/2.0\r\n{name}: 4\r\n\r\nbody");
+
+            assert_eq!(decode_bodies([message.as_bytes()]), ["body"], "{name:?}");
+        }
+    }
 }
