@@ -26,6 +26,8 @@ pub(crate) struct DecodedMessage {
 #[derive(Default)]
 pub(crate) struct StreamingDecoder {
     head_progress: usize,
+    /// Content-Length found in the part of the head before `head_progress`
+    content_len: usize,
 }
 
 impl Decoder for StreamingDecoder {
@@ -57,12 +59,14 @@ impl Decoder for StreamingDecoder {
 
         let mut parser = PullParser::new(src, self.head_progress);
 
-        let mut content_len = 0;
+        // lines before `head_progress` are not parsed again, so resume with their result
+        let mut content_len = self.content_len;
 
         for line in &mut parser {
             let Ok(line) = line else {
                 // cannot parse complete message head yet
                 self.head_progress = parser.progress();
+                self.content_len = content_len;
                 return Ok(None);
             };
 
@@ -115,6 +119,7 @@ impl Decoder for StreamingDecoder {
 
         // reset state
         self.head_progress = 0;
+        self.content_len = 0;
 
         // reset parser
         parser = PullParser::new(&src_bytes, 0);
@@ -202,5 +207,23 @@ mod tests {
 
             assert_eq!(decode_bodies([message.as_bytes()]), ["body"], "{name:?}");
         }
+    }
+
+    #[test]
+    fn content_length_is_retained_when_head_is_fragmented() {
+        let mut decoder = StreamingDecoder::default();
+
+        // The read ends inside of a header following Content-Length
+        let mut buffer =
+            BytesMut::from("OPTIONS sip:bob@example.com SIP/2.0\r\nContent-Length: 4\r\nX-Te");
+        assert!(decoder.decode(&mut buffer).unwrap().is_none());
+
+        buffer.extend_from_slice(b"st: 1\r\n\r\nbody");
+        let Some(Item::DecodedMessage(message)) = decoder.decode(&mut buffer).unwrap() else {
+            panic!("expected a complete message");
+        };
+
+        assert_eq!(message.body, "body");
+        assert!(buffer.is_empty());
     }
 }
